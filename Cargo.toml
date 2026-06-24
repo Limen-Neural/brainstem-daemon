@@ -4,7 +4,7 @@ version = "0.1.2"
 edition = "2024"
 description = "SNN Engine + Inference + Telemetry + AI (Tier 1 — headless)"
 authors = ["Raul Montoya Cardenas <montoya34raul@gmail.com>"]
-license = "GPL-3.0"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/Limen-Neural/brainstem-daemon"
 
 [dependencies]
