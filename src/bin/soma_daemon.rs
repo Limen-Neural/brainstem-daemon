@@ -25,7 +25,7 @@ fn default_config_path() -> PathBuf {
         .join("soma/daemon.toml")
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config_path = cli.config.unwrap_or_else(default_config_path);
