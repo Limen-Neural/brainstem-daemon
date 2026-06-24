@@ -34,7 +34,7 @@ pub struct DaemonConfig {
 
 impl DaemonConfig {
     /// Load daemon configuration from a TOML file.
-    pub fn load(path: &PathBuf) -> Result<Self> {
+    pub fn load(path: &std::path::Path) -> Result<Self> {
         let data = fs::read_to_string(path)
             .with_context(|| format!("failed to read config from {}", path.display()))?;
         let cfg: Self = toml::from_str(&data)
