@@ -29,10 +29,10 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config_path = cli.config.unwrap_or_else(default_config_path);
 
-    let cfg = DaemonConfig::load(&config_path).map_err(|e| {
+    let cfg = DaemonConfig::load(&config_path).unwrap_or_else(|e| {
         eprintln!("Failed to load config {}: {e}", config_path.display());
         std::process::exit(1);
-    })?;
+    });
 
     // `corpus-ipc` reads the ZMQ readout endpoint from this env var during
     // `ZmqBrainBackend::initialize`. Set it on the main thread before any

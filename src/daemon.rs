@@ -41,6 +41,15 @@ pub struct DaemonConfig {
 impl DaemonConfig {
     /// Load daemon configuration from a TOML file.
     pub fn load(path: &std::path::Path) -> Result<Self> {
+        if path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
+            anyhow::bail!(
+                "config path contains parent-dir components: {}",
+                path.display()
+            );
+        }
         let data = fs::read_to_string(path)
             .with_context(|| format!("failed to read config from {}", path.display()))?;
         let cfg: Self = toml::from_str(&data)
