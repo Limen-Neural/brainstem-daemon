@@ -194,14 +194,18 @@ fn decode_inputs(readout: &[f32], channels: usize, stimuli: &mut [f32]) -> Neuro
     }
 }
 
-fn publish_spikes(pub_socket: &zmq::Socket, spike_ids: &[usize], out: &mut Vec<SpikeEvent>) -> Result<()> {
+fn publish_spikes(
+    pub_socket: &zmq::Socket,
+    spike_ids: &[usize],
+    out: &mut Vec<SpikeEvent>,
+) -> Result<()> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
     let tick = now.as_millis() as u64;
 
     out.clear();
     for &idx in spike_ids {
-        let channel = u16::try_from(idx)
-            .map_err(|e| anyhow::anyhow!("spike id exceeds u16 range: {e}"))?;
+        let channel =
+            u16::try_from(idx).map_err(|e| anyhow::anyhow!("spike id exceeds u16 range: {e}"))?;
         out.push(SpikeEvent {
             channel,
             time: (tick & u32::MAX as u64) as u32,
@@ -213,11 +217,12 @@ fn publish_spikes(pub_socket: &zmq::Socket, spike_ids: &[usize], out: &mut Vec<S
         session_id: None,
         batch_id: tick,
         timestamp: now.as_nanos() as u64,
-        spikes: out.clone(),  // small clone of the batch vec; avoids realloc next tick
+        spikes: std::mem::take(out),
         metadata: None,
     });
     let payload = serde_json::to_vec(&msg)?;
     pub_socket.send(payload, 0)?;
+    // out is now empty; next tick will reuse capacity
     Ok(())
 }
 
