@@ -45,13 +45,20 @@ impl ServiceRegistry {
         }
     }
 
-    /// Build a registry from a list of service configs. Disabled services are
-    /// skipped. The last enabled entry wins if duplicate names are present.
+    /// Build a registry from a list of service configs.
+    ///
+    /// Entries are processed in order:
+    /// - If enabled, the service is registered (last enabled wins for duplicates).
+    /// - If disabled, any prior registration for that name is removed.
+    ///
+    /// This allows a later `enabled: false` to revoke an earlier `enabled: true`.
     pub fn from_configs(configs: Vec<ServiceConfig>) -> Self {
         let mut services = HashMap::with_capacity(configs.len());
         for cfg in configs {
             if cfg.enabled {
                 services.insert(cfg.name.clone(), cfg);
+            } else {
+                services.remove(&cfg.name);
             }
         }
         Self { services }
@@ -133,5 +140,19 @@ mod tests {
         let registry = ServiceRegistry::from_configs(configs);
         assert_eq!(registry.len(), 1);
         assert!(registry.get("telemetry").unwrap().enabled);
+    }
+
+    #[test]
+    fn duplicate_enabled_then_disabled_is_removed() {
+        let configs = vec![
+            ServiceConfig::named("telemetry"),
+            ServiceConfig {
+                name: "telemetry".to_string(),
+                enabled: false,
+            },
+        ];
+        let registry = ServiceRegistry::from_configs(configs);
+        assert!(!registry.contains("telemetry"));
+        assert_eq!(registry.len(), 0);
     }
 }
