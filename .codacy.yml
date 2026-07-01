@@ -1,0 +1,7 @@
+---
+# Exclude generated / lock files from Codacy analysis
+# (Cargo.lock is committed for reproducible builds + CI caching,
+# but has high line count and is not hand-maintained source.)
+exclude_paths:
+  - "Cargo.lock"
+  - "target/**"
