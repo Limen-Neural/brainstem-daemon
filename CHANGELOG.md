@@ -22,13 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.2] - 2026-04-22
 
-### Changed
-
 - Migrated daemon to `corpus-ipc` and `neuromod` v0.4.0.
 
 ## [0.1.1] - 2026-04-08
-
-### Added
 
 - Initial `soma-daemon` binary with TOML configuration, ZeroMQ PUB/SUB, and
   `neuromod::SpikingNetwork` integration.
