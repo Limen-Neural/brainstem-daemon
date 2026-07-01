@@ -41,8 +41,9 @@ pub struct DaemonConfig {
 impl DaemonConfig {
     /// Load daemon configuration from a TOML file.
     pub fn load(path: &std::path::Path) -> Result<Self> {
-        // Security: reject absolute paths that traverse outside (e.g. /etc/../foo).
-        // Relative parent paths are allowed (common when running from subdirs).
+        // Reject absolute paths containing parent-dir components (e.g. /etc/../foo)
+        // to avoid surprising traversals. Relative .. components are allowed
+        // (resolved against the process CWD at load time).
         if path.is_absolute()
             && path
                 .components()
@@ -118,12 +119,16 @@ impl BrainstemDaemon {
         // Pre-allocate spike buffer to avoid allocation in the 1 kHz hot path.
         let mut spike_buf: Vec<SpikeEvent> = Vec::with_capacity(128);
 
+        // Create the ctrl-c future once outside the loop to avoid re-registering
+        // the signal handler on every tick (addresses overhead in timing-sensitive loop).
+        let mut ctrl_c = std::pin::pin!(signal::ctrl_c());
+
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
                     run_tick(&mut ingress, &mut network, &pub_socket, &mut stimuli, cfg.channels, &mut spike_buf);
                 }
-                _ = signal::ctrl_c() => {
+                _ = &mut ctrl_c => {
                     info!("Termination signal received, shutting down");
                     break;
                 }
@@ -137,8 +142,14 @@ impl BrainstemDaemon {
 fn init_runtime(cfg: &DaemonConfig) -> Result<(SpikingNetwork, ZmqBrainBackend, zmq::Socket)> {
     let network = SpikingNetwork::with_dimensions(cfg.lif_count, cfg.izh_count, cfg.channels);
     let mut ingress = ZmqBrainBackend::new();
-    // `CORPUS_IPC_READOUT_ENV` must be set by the caller (binary main before runtime,
-    // or library user) before initialize so corpus-ipc knows the SUB endpoint.
+    // Explicit preflight: CORPUS_IPC_READOUT_ENV must be set by the caller (binary main
+    // before runtime, or library user) before initialize. Fail fast with actionable message.
+    if std::env::var(CORPUS_IPC_READOUT_ENV).is_err() {
+        anyhow::bail!(
+            "{} env var not set; must be set before init (e.g. tcp://127.0.0.1:<port>)",
+            CORPUS_IPC_READOUT_ENV
+        );
+    }
     ingress.initialize(Some(&cfg.model_path.to_string_lossy()))?;
 
     let zmq_context = zmq::Context::new();
@@ -203,15 +214,7 @@ fn decode_inputs(readout: &[f32], channels: usize, stimuli: &mut [f32]) -> Neuro
     }
 }
 
-fn publish_spikes(
-    pub_socket: &zmq::Socket,
-    spike_ids: &[usize],
-    out: &mut Vec<SpikeEvent>,
-) -> Result<()> {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
-    let tick = now.as_millis() as u64;
-
-    out.clear();
+fn append_spikes(out: &mut Vec<SpikeEvent>, spike_ids: &[usize], tick: u64) -> usize {
     let mut dropped = 0usize;
     for &idx in spike_ids {
         match u16::try_from(idx) {
@@ -231,22 +234,24 @@ fn publish_spikes(
             }
         }
     }
+    dropped
+}
 
+fn log_dropped_spikes(dropped: usize) {
     if dropped > 0 {
         warn!(
             "dropped {} spikes with out-of-range IDs this tick (network may be larger than u16)",
             dropped
         );
     }
+}
 
-    if out.is_empty() && !spike_ids.is_empty() {
-        // nothing valid to publish; avoid sending an empty batch
-        return Ok(());
-    }
-
-    // Hand the current buffer to the message while leaving `out` with matching capacity.
-    // This preserves the pre-allocation across ticks (avoids repeated heap growth at 1 kHz).
-    let spikes = std::mem::replace(out, Vec::with_capacity(out.capacity()));
+fn send_spike_batch(
+    pub_socket: &zmq::Socket,
+    spikes: Vec<SpikeEvent>,
+    tick: u64,
+    now: std::time::Duration,
+) -> Result<()> {
     let msg = SpineMessage::Spikes(SpikeBatch {
         session_id: None,
         batch_id: tick,
@@ -256,6 +261,32 @@ fn publish_spikes(
     });
     let payload = serde_json::to_vec(&msg)?;
     pub_socket.send(payload, 0)?;
+    Ok(())
+}
+
+fn publish_spikes(
+    pub_socket: &zmq::Socket,
+    spike_ids: &[usize],
+    out: &mut Vec<SpikeEvent>,
+) -> Result<()> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
+    let tick = now.as_millis() as u64;
+
+    out.clear();
+    let dropped = append_spikes(out, spike_ids, tick);
+    log_dropped_spikes(dropped);
+
+    if out.is_empty() && !spike_ids.is_empty() {
+        // nothing valid to publish; avoid sending an empty batch
+        return Ok(());
+    }
+
+    // Hand the current buffer (with its data) to the message. Replace `out` with a new
+    // Vec that has the same capacity so the *next* allocation can reuse that capacity
+    // without growth. At 1 kHz this keeps allocator pressure low even though we hand
+    // ownership of a Vec to the message each tick (the sent Vec is dropped after publish).
+    let spikes = std::mem::replace(out, Vec::with_capacity(out.capacity()));
+    send_spike_batch(pub_socket, spikes, tick, now)?;
     // `out` is now empty but retains the pre-allocated capacity for the next tick.
     Ok(())
 }
