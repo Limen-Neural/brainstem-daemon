@@ -82,6 +82,15 @@ impl BrainstemDaemon {
     /// or `run()`. The binary wrapper sets it on the main thread before any
     /// runtime is created. Library users are responsible for the same.
     pub fn new(mut config: DaemonConfig) -> Self {
+        if config.lif_count + config.izh_count > u16::MAX as usize {
+            // Fail early at construction rather than dropping spike batches at runtime
+            // for networks larger than u16 can address in the spike channel field.
+            panic!(
+                "lif_count + izh_count ({} + {}) exceeds u16::MAX; spike channel ids would not fit",
+                config.lif_count, config.izh_count
+            );
+        }
+
         let services = std::mem::take(&mut config.services);
         let registry = ServiceRegistry::from_configs(services);
         Self { config, registry }
@@ -203,14 +212,36 @@ fn publish_spikes(
     let tick = now.as_millis() as u64;
 
     out.clear();
+    let mut dropped = 0usize;
     for &idx in spike_ids {
-        let channel =
-            u16::try_from(idx).map_err(|e| anyhow::anyhow!("spike id exceeds u16 range: {e}"))?;
-        out.push(SpikeEvent {
-            channel,
-            time: (tick & u32::MAX as u64) as u32,
-            strength: 1.0,
-        });
+        match u16::try_from(idx) {
+            Ok(channel) => {
+                out.push(SpikeEvent {
+                    channel,
+                    time: (tick & (u32::MAX as u64)) as u32,
+                    strength: 1.0,
+                });
+            }
+            Err(e) => {
+                dropped += 1;
+                warn!(
+                    "spike id exceeds u16 range ({}), dropping spike: {}",
+                    idx, e
+                );
+            }
+        }
+    }
+
+    if dropped > 0 {
+        warn!(
+            "dropped {} spikes with out-of-range IDs this tick (network may be larger than u16)",
+            dropped
+        );
+    }
+
+    if out.is_empty() && !spike_ids.is_empty() {
+        // nothing valid to publish; avoid sending an empty batch
+        return Ok(());
     }
 
     // Hand the current buffer to the message while leaving `out` with matching capacity.
