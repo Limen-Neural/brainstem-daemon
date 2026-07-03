@@ -56,6 +56,17 @@ name = "critic-ipc"
 enabled = true
 ```
 
+**Backends (temporary)**
+
+`corpus-ipc` / ZeroMQ is currently an **optional** feature (`corpus-ipc`). When the feature is disabled (the default during this temporary decoupling phase), an in-memory stub backend is used instead.
+
+Only the following settings are specific to the ZMQ backend:
+- `spine_sub_port`
+- `spine_pub_port`
+- `SPIKENAUT_ZMQ_READOUT_IPC` (or `CORPUS_IPC_ZMQ_READOUT_IPC`)
+
+When using the stub backend these have no effect.
+
 ---
 
 ## Running (foreground)

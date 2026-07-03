@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-// Copyright 2024 Raul Montoya Cardenas
+// Copyright 2026 Raul Montoya Cardenas
 
 //! Config-driven service registry for the brainstem daemon.
 

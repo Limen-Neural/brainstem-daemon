@@ -1,11 +1,18 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-// Copyright 2024 Raul Montoya Cardenas
+// Copyright 2026 Raul Montoya Cardenas
 
 //! Headless binary entry point for the brainstem daemon.
 
 use std::path::PathBuf;
 
-use brainstem_daemon::daemon::{BrainstemDaemon, CORPUS_IPC_READOUT_ENV, DaemonConfig};
+use brainstem_daemon::backend::BackendPair;
+use brainstem_daemon::daemon::{BrainstemDaemon, DaemonConfig};
+
+#[cfg(feature = "corpus-ipc")]
+use brainstem_daemon::daemon::CORPUS_IPC_READOUT_ENV;
+
+#[cfg(feature = "corpus-ipc")]
+use brainstem_daemon::StimulusSource;
 use clap::Parser;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -34,13 +41,15 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     })?;
 
-    // `corpus-ipc` reads the ZMQ readout endpoint from this env var during
-    // `ZmqBrainBackend::initialize`. Set it on the main thread before any
-    // async runtime / worker threads are spawned.
-    // SAFETY: no other threads exist at this point in `main`.
-    let readout_endpoint = format!("tcp://127.0.0.1:{}", cfg.spine_sub_port);
-    unsafe {
-        std::env::set_var(CORPUS_IPC_READOUT_ENV, &readout_endpoint);
+    // Only set the ZMQ env var when the corpus-ipc feature is enabled.
+    // The ZMQ source will bridge SPIKENAUT_* to CORPUS_IPC_ZMQ_* for compat.
+    #[cfg(feature = "corpus-ipc")]
+    {
+        let readout_endpoint = format!("tcp://127.0.0.1:{}", cfg.spine_sub_port);
+        // SAFETY: no other threads exist at this point in `main`.
+        unsafe {
+            std::env::set_var(CORPUS_IPC_READOUT_ENV, &readout_endpoint);
+        }
     }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -58,6 +67,44 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
 
     info!("Loaded config from {}", config_path.display());
 
-    let daemon = BrainstemDaemon::new(cfg);
+    // Choose backend explicitly so we can log the mode.
+    #[cfg(feature = "corpus-ipc")]
+    let pair = {
+        // Build a real ZMQ pair (binary is responsible for the SUB endpoint via env).
+        // We still need to create the PUB side here because the default `new()` path
+        // is intentionally conservative.
+        let mut source = brainstem_daemon::backend::ZmqStimulusSource::new();
+
+        // Pass the model path through (was dropped before).
+        let model_path = cfg.model_path.to_string_lossy();
+        source
+            .initialize(Some(&model_path))
+            .map_err(|e| anyhow::anyhow!("failed to initialize ZMQ stimulus source: {e}"))?;
+
+        let zmq_context = zmq::Context::new();
+        let pub_socket = zmq_context
+            .socket(zmq::PUB)
+            .map_err(|e| anyhow::anyhow!("failed to create ZMQ PUB socket: {e}"))?;
+        pub_socket
+            .bind(&format!("tcp://*:{}", cfg.spine_pub_port))
+            .map_err(|e| {
+                anyhow::anyhow!("failed to bind ZMQ PUB on {}: {e}", cfg.spine_pub_port)
+            })?;
+
+        info!("📡 Using ZMQ corpus-ipc backend (spine ports active)");
+
+        BackendPair {
+            source: Box::new(source),
+            sink: Box::new(brainstem_daemon::backend::ZmqSpikeSink::new(pub_socket)),
+        }
+    };
+
+    #[cfg(not(feature = "corpus-ipc"))]
+    let pair = {
+        info!("🔌 Using stub backend (corpus-ipc disabled)");
+        BackendPair::stub()
+    };
+
+    let daemon = BrainstemDaemon::with_backend(cfg, pair);
     daemon.run().await
 }
