@@ -41,14 +41,16 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     })?;
 
-    // Only set the ZMQ env var when the corpus-ipc feature is enabled.
-    // The ZMQ source will bridge SPIKENAUT_* to CORPUS_IPC_ZMQ_* for compat.
+    // Set the readout endpoint env var(s) when corpus-ipc feature is enabled.
+    // Binary controls the endpoint; we set both the documented SPIKENAUT name
+    // and the CORPUS_IPC_ZMQ name that the pinned corpus-ipc backend reads.
     #[cfg(feature = "corpus-ipc")]
     {
         let readout_endpoint = format!("tcp://127.0.0.1:{}", cfg.spine_sub_port);
         // SAFETY: no other threads exist at this point in `main`.
         unsafe {
             std::env::set_var(CORPUS_IPC_READOUT_ENV, &readout_endpoint);
+            std::env::set_var("CORPUS_IPC_ZMQ_READOUT_IPC", &readout_endpoint);
         }
     }
 
@@ -73,12 +75,12 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
         // Build a real ZMQ pair (binary is responsible for the SUB endpoint via env).
         // We still need to create the PUB side here because the default `new()` path
         // is intentionally conservative.
-        let mut source = brainstem_daemon::backend::ZmqStimulusSource::new();
+        let mut source = brainstem_daemon::backend::ZmqStimulusSource::with_channels(cfg.channels);
 
         // Pass the model path through (was dropped before).
         let model_path = cfg.model_path.to_string_lossy();
         source
-            .initialize(Some(&model_path))
+            .initialize(Some(model_path.as_ref()))
             .map_err(|e| anyhow::anyhow!("failed to initialize ZMQ stimulus source: {e}"))?;
 
         let zmq_context = zmq::Context::new();

@@ -71,10 +71,11 @@ pub struct BrainstemDaemon {
 }
 
 impl BrainstemDaemon {
-    /// Build a daemon from configuration using the default backend for the current feature set.
+    /// Build a daemon from configuration using the default in-memory stub backend.
     ///
-    /// - With `corpus-ipc` feature: uses ZMQ source/sink (requires the env var for the SUB endpoint).
-    /// - Without the feature: uses an in-memory stub backend (good for core testing).
+    /// The stub backend is always used here regardless of the `corpus-ipc` feature.
+    /// The real ZMQ source/sink is constructed explicitly by the binary and injected
+    /// via [`BrainstemDaemon::with_backend`].
     pub fn new(config: DaemonConfig) -> Self {
         Self::with_backend(config, init_runtime_default())
     }
@@ -140,6 +141,14 @@ impl BrainstemDaemon {
             }
         }
 
+        // Best-effort lifecycle cleanup for pluggable backends.
+        if let Err(e) = backend.sink.flush() {
+            warn!("Failed to flush spike sink on shutdown: {e}");
+        }
+        if let Err(e) = backend.source.shutdown() {
+            warn!("Failed to shut down stimulus source: {e}");
+        }
+
         Ok(())
     }
 }
@@ -165,8 +174,13 @@ fn run_tick(
     let packet = match source.next_ingress() {
         Ok(Some(p)) => p,
         Ok(None) => {
-            // No new data this tick; skip stepping (or caller can zero stimuli if desired).
-            return;
+            // Per StimulusSource contract: None means skip ingress this tick but still
+            // advance the network with zeroed stimuli (maintains tick cadence).
+            stimuli.fill(0.0);
+            IngressPacket {
+                stimuli: Vec::new(),
+                modulators: None,
+            }
         }
         Err(e) => {
             warn!("Failed to receive from stimulus source: {e}");
@@ -186,7 +200,7 @@ fn run_tick(
         }
     };
 
-    // Convert to local events with timing
+    // Single timestamp for both per-spike time and batch metadata (keeps them consistent).
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -237,16 +251,17 @@ fn decode_inputs(packet: &IngressPacket, stimuli: &mut [f32]) -> NeuroModulators
         stimuli[upto..].fill(0.0);
     }
 
-    if let Some(ref mods) = packet.modulators
-        && mods.len() >= 4
-    {
-        return NeuroModulators {
-            dopamine: mods[0],
-            cortisol: mods[1],
-            acetylcholine: mods[2],
-            tempo: mods[3],
-            aux_dopamine: 0.0,
-        };
+    match packet.modulators.as_ref() {
+        Some(mods) if mods.len() >= 4 => {
+            return NeuroModulators {
+                dopamine: mods[0],
+                cortisol: mods[1],
+                acetylcholine: mods[2],
+                tempo: mods[3],
+                aux_dopamine: 0.0,
+            };
+        }
+        _ => {}
     }
 
     // No modulators provided (or short) → defaults.
@@ -364,7 +379,6 @@ mod tests {
         );
 
         // Sink should have received one (possibly empty) batch
-        let emitted = sink.emitted.lock().unwrap();
-        assert_eq!(emitted.len(), 1);
+        assert_eq!(sink.emitted.len(), 1);
     }
 }

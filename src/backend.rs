@@ -34,7 +34,10 @@ pub struct SpikeEvent {
 }
 
 /// Produces ingress data (stimuli + optional modulators) for each tick.
-pub trait StimulusSource: Send + Sync {
+///
+/// Bounds are `Send` (the daemon uses exclusive `&mut self` access on a
+/// current-thread runtime; `Sync` is not required for safety).
+pub trait StimulusSource: Send {
     /// Return the next ingress packet, or `None` to skip this tick (use zeroed stimuli).
     fn next_ingress(&mut self) -> Result<Option<IngressPacket>>;
 
@@ -49,7 +52,10 @@ pub trait StimulusSource: Send + Sync {
 }
 
 /// Accepts emitted spikes for publication / downstream consumption.
-pub trait SpikeSink: Send + Sync {
+///
+/// Bounds are `Send` (the daemon uses exclusive `&mut self` access on a
+/// current-thread runtime; `Sync` is not required for safety).
+pub trait SpikeSink: Send {
     /// Emit a batch of spikes from the current network step.
     fn emit(&mut self, spikes: &[SpikeEvent]) -> Result<()>;
 
@@ -63,8 +69,8 @@ pub trait SpikeSink: Send + Sync {
 ///
 /// This is the main injection point for custom or test backends.
 pub struct BackendPair {
-    pub source: Box<dyn StimulusSource + Send + Sync>,
-    pub sink: Box<dyn SpikeSink + Send + Sync>,
+    pub source: Box<dyn StimulusSource + Send>,
+    pub sink: Box<dyn SpikeSink + Send>,
 }
 
 impl BackendPair {
@@ -112,14 +118,14 @@ impl SpikeSink for NoopSpikeSink {
 /// Collecting sink for tests. Collects every emitted batch.
 #[cfg(test)]
 pub struct CollectingSpikeSink {
-    pub emitted: std::sync::Mutex<Vec<Vec<SpikeEvent>>>,
+    pub emitted: Vec<Vec<SpikeEvent>>,
 }
 
 #[cfg(test)]
 impl CollectingSpikeSink {
     pub fn new() -> Self {
         Self {
-            emitted: std::sync::Mutex::new(Vec::new()),
+            emitted: Vec::new(),
         }
     }
 }
@@ -134,7 +140,7 @@ impl Default for CollectingSpikeSink {
 #[cfg(test)]
 impl SpikeSink for CollectingSpikeSink {
     fn emit(&mut self, spikes: &[SpikeEvent]) -> Result<()> {
-        self.emitted.lock().unwrap().push(spikes.to_vec());
+        self.emitted.push(spikes.to_vec());
         Ok(())
     }
 }
@@ -152,12 +158,9 @@ mod zmq_impl {
     use corpus_ipc::{SpikeBatch, SpikeEvent as CorpusSpikeEvent, SpineMessage, ZmqBrainBackend};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    /// Environment variable name used by the ZMQ backend (corpus-ipc integration contract).
-    /// The binary is responsible for setting this before the runtime when the feature is active.
-    pub(crate) const CORPUS_IPC_READOUT_ENV: &str = "SPIKENAUT_ZMQ_READOUT_IPC";
-
     pub struct ZmqStimulusSource {
         inner: ZmqBrainBackend,
+        channels: usize,
     }
 
     impl Default for ZmqStimulusSource {
@@ -170,6 +173,16 @@ mod zmq_impl {
         pub fn new() -> Self {
             Self {
                 inner: ZmqBrainBackend::new(),
+                channels: 0,
+            }
+        }
+
+        /// Construct with known channel count so next_ingress can split
+        /// stimulus prefix from appended neuromodulator tail (4 floats).
+        pub fn with_channels(ch: usize) -> Self {
+            Self {
+                inner: ZmqBrainBackend::new(),
+                channels: ch,
             }
         }
     }
@@ -177,74 +190,88 @@ mod zmq_impl {
     impl StimulusSource for ZmqStimulusSource {
         fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
             let readout = self.inner.process_signals(&[])?;
-            Ok(Some(IngressPacket {
-                stimuli: readout,
-                modulators: None,
-            }))
+            let ch = self.channels;
+            if ch > 0 && readout.len() > ch {
+                let stimuli = readout[..ch].to_vec();
+                let modulators = if readout.len() >= ch + 4 {
+                    Some(readout[ch..ch + 4].to_vec())
+                } else {
+                    None
+                };
+                Ok(Some(IngressPacket {
+                    stimuli,
+                    modulators,
+                }))
+            } else {
+                Ok(Some(IngressPacket {
+                    stimuli: readout,
+                    modulators: None,
+                }))
+            }
         }
 
         fn initialize(&mut self, model_path: Option<&str>) -> Result<()> {
-            // Compat bridge: if SPIKENAUT name is set (what our binary uses),
-            // and the CORPUS_IPC_ZMQ one is not, bridge it so the inner backend works.
-            if let Ok(val) = std::env::var(CORPUS_IPC_READOUT_ENV)
-                && std::env::var("CORPUS_IPC_ZMQ_READOUT_IPC").is_err()
-            {
-                // SAFETY: set only on main thread before runtime (binary) or per documented contract.
-                unsafe {
-                    std::env::set_var("CORPUS_IPC_ZMQ_READOUT_IPC", &val);
-                }
-            }
             self.inner.initialize(model_path)?;
             Ok(())
         }
     }
 
     // ZMQ sockets are not thread-safe by default (raw pointer inside).
-    // We use the same pattern as corpus-ipc: exclusive ownership + unsafe Send+Sync.
-    // This is safe because the daemon runs on a dedicated current_thread runtime
-    // and the socket is not shared across threads.
+    // We impl Send only (exclusive &mut use on current_thread runtime).
+    // Do not impl Sync; ZeroMQ sockets are not thread-safe.
     struct SafeSocket {
         socket: ::zmq::Socket,
     }
     unsafe impl Send for SafeSocket {}
-    unsafe impl Sync for SafeSocket {}
 
     pub struct ZmqSpikeSink {
-        socket: SafeSocket,
+        socket: std::sync::Mutex<SafeSocket>,
+        /// Reusable buffer to convert to corpus-ipc event type without allocating every tick.
+        corpus_buf: Vec<CorpusSpikeEvent>,
     }
 
     impl ZmqSpikeSink {
         pub fn new(socket: ::zmq::Socket) -> Self {
             Self {
-                socket: SafeSocket { socket },
+                socket: std::sync::Mutex::new(SafeSocket { socket }),
+                corpus_buf: Vec::new(),
             }
         }
     }
 
     impl SpikeSink for ZmqSpikeSink {
         fn emit(&mut self, spikes: &[SpikeEvent]) -> Result<()> {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
-            let tick = now.as_millis() as u64;
+            // Derive batch metadata from the spike times (which were stamped in run_tick)
+            // so there is a single time source for event times and batch metadata.
+            let (batch_id, timestamp) = if let Some(first) = spikes.first() {
+                let t = first.time as u64;
+                (t, t * 1_000_000)
+            } else {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
+                (now.as_millis() as u64, now.as_millis() as u64 * 1_000_000)
+            };
 
-            let corpus_spikes: Vec<CorpusSpikeEvent> = spikes
-                .iter()
-                .map(|e| CorpusSpikeEvent {
+            // Reuse buffer capacity across ticks (capacity-preserving handoff pattern).
+            self.corpus_buf.clear();
+            self.corpus_buf
+                .extend(spikes.iter().map(|e| CorpusSpikeEvent {
                     channel: e.channel,
                     time: e.time,
                     strength: e.strength,
-                })
-                .collect();
+                }));
+            let cap = self.corpus_buf.capacity();
+            let corpus_spikes = std::mem::replace(&mut self.corpus_buf, Vec::with_capacity(cap));
 
             let msg = SpineMessage::Spikes(SpikeBatch {
                 session_id: None,
-                batch_id: tick,
-                timestamp: now.as_nanos() as u64,
+                batch_id,
+                timestamp,
                 spikes: corpus_spikes,
                 metadata: None,
             });
 
             let payload = serde_json::to_vec(&msg)?;
-            self.socket.socket.send(payload, 0)?;
+            self.socket.lock().unwrap().socket.send(payload, 0)?;
             Ok(())
         }
     }

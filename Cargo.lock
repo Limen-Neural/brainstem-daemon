@@ -252,7 +252,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 [[package]]
 name = "corpus-ipc"
 version = "0.1.0"
-source = "git+https://github.com/Limen-Neural/corpus-ipc#78220a6413c20f202252016afbf5981b7350dfd0"
+source = "git+https://github.com/Limen-Neural/corpus-ipc?rev=78220a6413c20f202252016afbf5981b7350dfd0#78220a6413c20f202252016afbf5981b7350dfd0"
 dependencies = [
  "axum",
  "serde",
