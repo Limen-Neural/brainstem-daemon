@@ -241,15 +241,11 @@ mod zmq_impl {
 
     impl SpikeSink for ZmqSpikeSink {
         fn emit(&mut self, spikes: &[SpikeEvent]) -> Result<()> {
-            // Derive batch metadata from the spike times (which were stamped in run_tick)
-            // so there is a single time source for event times and batch metadata.
-            let (batch_id, timestamp) = if let Some(first) = spikes.first() {
-                let t = first.time as u64;
-                (t, t * 1_000_000)
-            } else {
-                let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
-                (now.as_millis() as u64, now.as_millis() as u64 * 1_000_000)
-            };
+            // Derive batch metadata from full-width wall-clock source for both empty and
+            // non-empty batches. SpikeEvent.time contains truncated epoch milliseconds that
+            // can wrap, so we use SystemTime for consistent batch_id/timestamp generation.
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
+            let (batch_id, timestamp) = (now.as_millis() as u64, now.as_millis() as u64 * 1_000_000);
 
             // Reuse buffer capacity across ticks (capacity-preserving handoff pattern).
             self.corpus_buf.clear();
@@ -271,7 +267,11 @@ mod zmq_impl {
             });
 
             let payload = serde_json::to_vec(&msg)?;
-            self.socket.lock().unwrap().socket.send(payload, 0)?;
+            self.socket
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Failed to lock socket: {}", e))?
+                .socket
+                .send(payload, 0)?;
             Ok(())
         }
     }
