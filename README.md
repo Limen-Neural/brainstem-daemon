@@ -81,6 +81,27 @@ let daemon = BrainstemDaemon::with_backend(cfg, BackendPair::stub());
 > **Note (temporary):** `neuromod` is still a hard dependency for PR A.
 > It will be made optional in a subsequent PR (see tracking issues #15-19).
 
+### Docker (optional)
+
+A `Dockerfile` is provided for reproducible Linux builds.
+
+```bash
+# Core build (no libzmq / stub backend only)
+docker build --target core -t brainstem-daemon:core .
+
+# Full build (with corpus-ipc + zmq)
+docker build --target full -t brainstem-daemon:full .
+```
+
+Inside the container you can run the usual checks:
+```bash
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo check --no-default-features
+cargo check --features corpus-ipc
+cargo test --all-features
+```
+
 ---
 
 ## Running (foreground)

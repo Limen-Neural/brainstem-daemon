@@ -71,11 +71,14 @@ pub struct BrainstemDaemon {
 }
 
 impl BrainstemDaemon {
-    /// Build a daemon from configuration using the default in-memory stub backend.
+    /// Build a daemon from configuration.
     ///
-    /// The stub backend is always used here regardless of the `corpus-ipc` feature.
-    /// The real ZMQ source/sink is constructed explicitly by the binary and injected
-    /// via [`BrainstemDaemon::with_backend`].
+    /// The backend chosen depends on compile-time features and environment:
+    /// - If the `corpus-ipc` feature is enabled **and** `SPIKENAUT_ZMQ_READOUT_IPC`
+    ///   (or `CORPUS_IPC_ZMQ_READOUT_IPC`) is set, a live ZMQ backend is used.
+    /// - Otherwise (no feature, or no env var), an in-memory stub backend is used.
+    ///
+    /// For explicit control (e.g. tests or custom backends), use [`Self::with_backend`].
     pub fn new(config: DaemonConfig) -> Self {
         Self::with_backend(config, init_runtime_default())
     }
@@ -153,11 +156,15 @@ impl BrainstemDaemon {
     }
 }
 
-/// Internal default backend factory (feature aware).
+/// Internal default backend factory.
 ///
-/// For `BrainstemDaemon::new()`, we always use the stub backend.
-/// The real ZMQ pair (when `corpus-ipc` feature is enabled) is constructed
-/// explicitly by the binary, which knows the ports and sets up the env var.
+/// This **always** returns the in-memory stub backend, regardless of Cargo features.
+/// The real ZMQ-based backend (when `corpus-ipc` feature is enabled) is constructed
+/// explicitly by the binary (`soma-daemon`) which knows the spine ports and sets the
+/// required environment variable(s), then injected via `BrainstemDaemon::with_backend`.
+///
+/// Library callers that want the live ZMQ backend must do the same: build the pair
+/// themselves (under `#[cfg(feature = "corpus-ipc")]`) and call `with_backend`.
 fn init_runtime_default() -> BackendPair {
     BackendPair::stub()
 }

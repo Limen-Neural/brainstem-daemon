@@ -177,8 +177,12 @@ mod zmq_impl {
             }
         }
 
-        /// Construct with known channel count so next_ingress can split
+        /// Construct with known channel count so `next_ingress` can split
         /// stimulus prefix from appended neuromodulator tail (4 floats).
+        ///
+        /// The default `new()` uses `channels=0`, which means the entire readout
+        /// is passed as stimuli and no modulators are extracted. Library users
+        /// who want automatic modulator extraction must use `with_channels(cfg.channels)`.
         pub fn with_channels(ch: usize) -> Self {
             Self {
                 inner: ZmqBrainBackend::new(),
