@@ -169,6 +169,10 @@ impl BrainstemDaemon {
 ///
 /// Library callers that want the live ZMQ backend must do the same: build the pair
 /// themselves (under `#[cfg(feature = "corpus-ipc")]`) and call `with_backend`.
+///
+/// NOTE: Intentionally always stub for PR A (decoupling). Codacy "MEDIUM RISK" is
+/// acknowledged; the contract is documented and the binary is the only path that
+/// wires a real backend. This is the intended temporary state.
 fn init_runtime_default() -> BackendPair {
     BackendPair::stub()
 }
@@ -240,8 +244,8 @@ fn run_tick(
         );
     }
 
-    if spike_buf.is_empty() && !spike_ids.is_empty() {
-        // nothing valid to publish
+    if spike_buf.is_empty() {
+        // No spikes this tick (or all dropped); skip emitting empty batch.
         return;
     }
 

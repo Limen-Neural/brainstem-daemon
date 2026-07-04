@@ -229,7 +229,7 @@ mod zmq_impl {
     unsafe impl Send for SafeSocket {}
 
     pub struct ZmqSpikeSink {
-        socket: std::sync::Mutex<SafeSocket>,
+        socket: SafeSocket,
         /// Reusable buffer to convert to corpus-ipc event type without allocating every tick.
         corpus_buf: Vec<CorpusSpikeEvent>,
     }
@@ -237,7 +237,7 @@ mod zmq_impl {
     impl ZmqSpikeSink {
         pub fn new(socket: ::zmq::Socket) -> Self {
             Self {
-                socket: std::sync::Mutex::new(SafeSocket { socket }),
+                socket: SafeSocket { socket },
                 corpus_buf: Vec::new(),
             }
         }
@@ -271,11 +271,7 @@ mod zmq_impl {
             });
 
             let payload = serde_json::to_vec(&msg)?;
-            let guard = self
-                .socket
-                .lock()
-                .map_err(|_| anyhow::anyhow!("ZMQ socket mutex poisoned"))?;
-            guard.socket.send(payload, 0)?;
+            self.socket.socket.send(payload, 0)?;
             Ok(())
         }
     }
