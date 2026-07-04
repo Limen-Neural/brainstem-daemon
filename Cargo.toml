@@ -10,7 +10,7 @@ repository = "https://github.com/Limen-Neural/brainstem-daemon"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-corpus-ipc = { git = "https://github.com/Limen-Neural/corpus-ipc", features = ["zmq"] }
+corpus-ipc = { git = "https://github.com/Limen-Neural/corpus-ipc", rev = "78220a6413c20f202252016afbf5981b7350dfd0", features = ["zmq"], optional = true }
 neuromod = "0.4.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -19,7 +19,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tokio = { version = "1", features = ["full"] }
 dirs = "5"
-zmq = "0.10"
+zmq = { version = "0.10", optional = true }
+
+[features]
+default = []
+corpus-ipc = ["dep:corpus-ipc", "dep:zmq"]
 
 [[bin]]
 name = "soma-daemon"

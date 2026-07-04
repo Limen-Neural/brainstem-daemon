@@ -56,6 +56,57 @@ name = "critic-ipc"
 enabled = true
 ```
 
+### Backends (temporary)
+
+`corpus-ipc` / ZeroMQ is currently an **optional** feature (`corpus-ipc`). When the feature is disabled (the default during this temporary decoupling phase), an in-memory stub backend is used instead.
+
+Only the following settings are specific to the ZMQ backend:
+
+- `spine_sub_port`
+- `spine_pub_port`
+- `SPIKENAUT_ZMQ_READOUT_IPC` (or `CORPUS_IPC_ZMQ_READOUT_IPC`)
+
+When using the stub backend these have no effect.
+
+The stub backend is always safe to use for core library builds/tests and simulation runs.
+Example of constructing a daemon with the stub backend (feature-independent):
+
+```rust
+use brainstem_daemon::{BrainstemDaemon, DaemonConfig, BackendPair};
+
+let cfg: DaemonConfig = /* ... */;
+let daemon = BrainstemDaemon::with_backend(cfg, BackendPair::stub());
+```
+
+> **Note (temporary):** `neuromod` is still a hard dependency for PR A.
+> It will be made optional in a subsequent PR (see tracking issues #15-19).
+> `corpus-ipc`/`zmq` are intentionally off-by-default during the decoupling phase
+> (core builds and tests do not require libzmq).
+>
+> `neuromod` will be made optional later (see #15-19). This is tracked separately
+> from the `corpus-ipc` temporary split.
+
+### Docker (optional)
+
+A `Dockerfile` is provided for reproducible Linux builds.
+
+```bash
+# Core build (no libzmq / stub backend only)
+docker build --target core -t brainstem-daemon:core .
+
+# Full build (with corpus-ipc + zmq)
+docker build --target full -t brainstem-daemon:full .
+```
+
+Inside the container you can run the usual checks:
+```bash
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo check --no-default-features
+cargo check --features corpus-ipc
+cargo test --all-features
+```
+
 ---
 
 ## Running (foreground)
