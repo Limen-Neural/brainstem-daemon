@@ -57,7 +57,12 @@ pub trait StimulusSource: Send {
 /// current-thread runtime; `Sync` is not required for safety).
 pub trait SpikeSink: Send {
     /// Emit a batch of spikes from the current network step.
-    fn emit(&mut self, spikes: &[SpikeEvent]) -> Result<()>;
+    ///
+    /// `batch_time` is the tick-level wall-clock duration since `UNIX_EPOCH`
+    /// that was used to stamp each `SpikeEvent.time` in this batch.  Sinks
+    /// that emit batch metadata (e.g. ZMQ `batch_id` / `timestamp`) must use
+    /// this value so both fields stay aligned with per-spike times.
+    fn emit(&mut self, spikes: &[SpikeEvent], batch_time: std::time::Duration) -> Result<()>;
 
     /// Optional flush for buffered sinks.
     fn flush(&mut self) -> Result<()> {
@@ -110,7 +115,7 @@ impl StimulusSource for StubStimulusSource {
 pub struct NoopSpikeSink;
 
 impl SpikeSink for NoopSpikeSink {
-    fn emit(&mut self, _spikes: &[SpikeEvent]) -> Result<()> {
+    fn emit(&mut self, _spikes: &[SpikeEvent], _batch_time: std::time::Duration) -> Result<()> {
         Ok(())
     }
 }
@@ -139,7 +144,7 @@ impl Default for CollectingSpikeSink {
 
 #[cfg(test)]
 impl SpikeSink for CollectingSpikeSink {
-    fn emit(&mut self, spikes: &[SpikeEvent]) -> Result<()> {
+    fn emit(&mut self, spikes: &[SpikeEvent], _batch_time: std::time::Duration) -> Result<()> {
         self.emitted.push(spikes.to_vec());
         Ok(())
     }
@@ -156,7 +161,6 @@ mod zmq_impl {
     // into scope for ZmqBrainBackend.
     use corpus_ipc::NeuralBackend as BackendConnector;
     use corpus_ipc::{SpikeBatch, SpikeEvent as CorpusSpikeEvent, SpineMessage, ZmqBrainBackend};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     pub struct ZmqStimulusSource {
         inner: ZmqBrainBackend,
@@ -244,12 +248,11 @@ mod zmq_impl {
     }
 
     impl SpikeSink for ZmqSpikeSink {
-        fn emit(&mut self, spikes: &[SpikeEvent]) -> Result<()> {
-            // Full-width wall-clock for batch metadata (matches original wire protocol precision).
-            // SpikeEvent.time only holds truncated lower 32 bits of epoch ms; do not use it here.
-            let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
-            let batch_id = now.as_millis() as u64;
-            let timestamp = now.as_nanos() as u64;
+        fn emit(&mut self, spikes: &[SpikeEvent], batch_time: std::time::Duration) -> Result<()> {
+            // Use the tick-level timestamp passed by run_tick so batch metadata
+            // stays aligned with the SpikeEvent.time values in this batch.
+            let batch_id = batch_time.as_millis() as u64;
+            let timestamp = batch_time.as_nanos() as u64;
 
             // Reuse buffer capacity across ticks (capacity-preserving handoff pattern).
             self.corpus_buf.clear();

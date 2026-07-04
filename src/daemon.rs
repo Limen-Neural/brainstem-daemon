@@ -254,7 +254,7 @@ fn run_tick(
 
     // Emit the batch (may be empty vec when no neurons fired this tick).
     // This preserves original behavior and satisfies CollectingSpikeSink tests.
-    if let Err(e) = sink.emit(spike_buf) {
+    if let Err(e) = sink.emit(spike_buf, now) {
         warn!("Failed to emit spikes: {e}");
     }
 }
