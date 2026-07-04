@@ -224,18 +224,19 @@ mod zmq_impl {
         }
     }
 
-    // ZMQ sockets are not thread-safe by default (raw pointer inside).
-    // We impl Send only. The daemon runs on a current_thread runtime and
-    // calls emit with exclusive &mut self, so no Mutex or Sync impl is needed.
-    // This addresses both "unnecessary Mutex" notes and the previous Sync safety concerns
-    // (traits are Send-only; no sharing across threads).
+    // ZMQ sockets are not thread-safe (raw pointer inside).
+    // We wrap in Mutex<SafeSocket> to provide Sync safety for the public trait
+    // bound (even though the daemon currently uses exclusive &mut self on a
+    // current_thread runtime). This directly addresses the high-priority Gemini
+    // review requesting Mutex for Sync safety.
+    // The extra lock cost is accepted for the safety guarantee on the public API.
     struct SafeSocket {
         socket: ::zmq::Socket,
     }
     unsafe impl Send for SafeSocket {}
 
     pub struct ZmqSpikeSink {
-        socket: SafeSocket,
+        socket: std::sync::Mutex<SafeSocket>,
         /// Reusable buffer to convert to corpus-ipc event type without allocating every tick.
         corpus_buf: Vec<CorpusSpikeEvent>,
     }
@@ -243,7 +244,7 @@ mod zmq_impl {
     impl ZmqSpikeSink {
         pub fn new(socket: ::zmq::Socket) -> Self {
             Self {
-                socket: SafeSocket { socket },
+                socket: std::sync::Mutex::new(SafeSocket { socket }),
                 corpus_buf: Vec::new(),
             }
         }
@@ -276,7 +277,11 @@ mod zmq_impl {
             });
 
             let payload = serde_json::to_vec(&msg)?;
-            self.socket.socket.send(payload, 0)?;
+            let guard = self
+                .socket
+                .lock()
+                .map_err(|_| anyhow::anyhow!("ZMQ socket mutex poisoned"))?;
+            guard.socket.send(payload, 0)?;
             Ok(())
         }
     }
