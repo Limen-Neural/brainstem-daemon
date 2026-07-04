@@ -44,10 +44,14 @@ RUN cargo check --all-features && \
 
 # Default target builds the full image
 FROM full AS final
-# Run as non-root for security scanners (CodeRabbit/CodeAnt).
-# We still need to compile as root in previous stages; drop here.
+# Run as non-root for security scanners (CodeRabbit/CodeAnt/Cursor).
+# Previous stages compile as root and leave /app/target root-owned.
+# Create the target directory (if missing) and chown the workspace + cargo
+# home so the non-root user can run the binary or run cargo commands that
+# write under target/ without permission errors.
 RUN useradd -m -u 10001 appuser 2>/dev/null || true && \
-    chown -R appuser:appuser /app
+    mkdir -p /app/target && \
+    chown -R appuser:appuser /app /app/target /usr/local/cargo 2>/dev/null || true
 USER appuser
 WORKDIR /app
 CMD ["cargo", "run", "--bin", "soma-daemon", "--features", "corpus-ipc", "--", "--help"]
