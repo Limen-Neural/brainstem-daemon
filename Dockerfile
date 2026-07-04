@@ -44,7 +44,7 @@ RUN cargo check --all-features && \
 FROM full AS final
 # Run as non-root for security scanners (CodeRabbit/CodeAnt).
 # We still need to compile as root in previous stages; drop here.
-RUN useradd -m -u 10001 appuser
+RUN useradd -m -u 10001 appuser 2>/dev/null || true
 USER appuser
 WORKDIR /app
 CMD ["cargo", "run", "--bin", "soma-daemon", "--features", "corpus-ipc", "--", "--help"]
