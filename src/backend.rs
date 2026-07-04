@@ -271,7 +271,7 @@ mod zmq_impl {
             });
 
             let payload = serde_json::to_vec(&msg)?;
-            let mut guard = self
+            let guard = self
                 .socket
                 .lock()
                 .map_err(|_| anyhow::anyhow!("ZMQ socket mutex poisoned"))?;
