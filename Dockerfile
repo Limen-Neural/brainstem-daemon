@@ -11,7 +11,9 @@ FROM rust:1.80-bookworm AS base
 WORKDIR /app
 # Common system deps for the full feature set (libzmq). Core-only builds do not need this.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libzmq3-dev pkg-config ca-certificates \
+    libzmq3-dev=4.3.4-1 \
+    pkg-config=0.29.2-1 \
+    ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy manifests first for better layer caching
