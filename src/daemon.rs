@@ -73,16 +73,16 @@ pub struct BrainstemDaemon {
 impl BrainstemDaemon {
     /// Build a daemon from configuration using the **stub** backend.
     ///
-    /// This constructor **always** returns a daemon wired to the in-memory stub
-    /// backend (`BackendPair::stub()`), regardless of whether the `corpus-ipc`
-    /// Cargo feature is enabled.
+    /// **This always uses the in-memory stub backend**, even if the `corpus-ipc`
+    /// feature is enabled at compile time.
     ///
-    /// The real ZMQ-based backend is constructed explicitly by the binary
-    /// (see `src/bin/soma_daemon.rs`) which knows the spine ports, sets the
-    /// required env var(s), and injects the pair via [`Self::with_backend`].
+    /// The live ZMQ backend (when the feature is on) is only constructed by the
+    /// binary (`src/bin/soma_daemon.rs`), which knows the ports and sets the
+    /// required environment variables, then passed via [`Self::with_backend`].
     ///
-    /// Library users or tests that need a live backend should build the pair
-    /// themselves (under the feature gate) and call `with_backend`.
+    /// This is intentional for the temporary decoupling (PR A / issues #10-14).
+    /// Library users wanting the real backend must construct the pair themselves
+    /// under the feature gate and call `with_backend`.
     pub fn new(config: DaemonConfig) -> Self {
         Self::with_backend(config, init_runtime_default())
     }

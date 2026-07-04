@@ -80,7 +80,11 @@ let daemon = BrainstemDaemon::with_backend(cfg, BackendPair::stub());
 
 > **Note (temporary):** `neuromod` is still a hard dependency for PR A.
 > It will be made optional in a subsequent PR (see tracking issues #15-19).
-> `corpus-ipc`/`zmq` are intentionally off-by-default during the decoupling phase.
+> `corpus-ipc`/`zmq` are intentionally off-by-default during the decoupling phase
+> (core builds and tests do not require libzmq).
+>
+> `neuromod` will be made optional later (see #15-19). This is tracked separately
+> from the `corpus-ipc` temporary split.
 
 ### Docker (optional)
 
