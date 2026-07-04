@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `## Role and boundary matrix` documentation in `README.md`.
 - Local `StimulusSource` / `SpikeSink` traits + `IngressPacket` / `SpikeEvent` (owned by this crate).
 - `BackendPair` + `BackendPair::stub()` for pluggable I/O.
-- In-crate stub backend (`StubStimulusSource`, `NoopSpikeSink`, `CollectingSpikeSink` for tests).
+- In-crate stub backend (`StubStimulusSource`, `NoopSpikeSink`, `CollectingSpikeSink` under `#[cfg(test)]` for our own tests).
 - `BrainstemDaemon::with_backend(cfg, pair)` constructor for tests and custom backends.
 - Test coverage for the non-`corpus-ipc` (stub) path that runs under `--no-default-features`.
 

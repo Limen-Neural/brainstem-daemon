@@ -176,7 +176,7 @@ fn run_tick(
         Ok(None) => {
             // Per StimulusSource contract: None means skip ingress this tick but still
             // advance the network with zeroed stimuli (maintains tick cadence).
-            stimuli.fill(0.0);
+            // decode_inputs will zero-fill the stimuli buffer based on the empty readout.
             IngressPacket {
                 stimuli: Vec::new(),
                 modulators: None,

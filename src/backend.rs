@@ -225,7 +225,7 @@ mod zmq_impl {
     unsafe impl Send for SafeSocket {}
 
     pub struct ZmqSpikeSink {
-        socket: std::sync::Mutex<SafeSocket>,
+        socket: SafeSocket,
         /// Reusable buffer to convert to corpus-ipc event type without allocating every tick.
         corpus_buf: Vec<CorpusSpikeEvent>,
     }
@@ -233,7 +233,7 @@ mod zmq_impl {
     impl ZmqSpikeSink {
         pub fn new(socket: ::zmq::Socket) -> Self {
             Self {
-                socket: std::sync::Mutex::new(SafeSocket { socket }),
+                socket: SafeSocket { socket },
                 corpus_buf: Vec::new(),
             }
         }
@@ -241,11 +241,11 @@ mod zmq_impl {
 
     impl SpikeSink for ZmqSpikeSink {
         fn emit(&mut self, spikes: &[SpikeEvent]) -> Result<()> {
-            // Derive batch metadata from full-width wall-clock source for both empty and
-            // non-empty batches. SpikeEvent.time contains truncated epoch milliseconds that
-            // can wrap, so we use SystemTime for consistent batch_id/timestamp generation.
+            // Full-width wall-clock for batch metadata (matches original wire protocol precision).
+            // SpikeEvent.time only holds truncated lower 32 bits of epoch ms; do not use it here.
             let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
-            let (batch_id, timestamp) = (now.as_millis() as u64, now.as_millis() as u64 * 1_000_000);
+            let batch_id = now.as_millis() as u64;
+            let timestamp = now.as_nanos() as u64;
 
             // Reuse buffer capacity across ticks (capacity-preserving handoff pattern).
             self.corpus_buf.clear();
@@ -267,11 +267,7 @@ mod zmq_impl {
             });
 
             let payload = serde_json::to_vec(&msg)?;
-            self.socket
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Failed to lock socket: {}", e))?
-                .socket
-                .send(payload, 0)?;
+            self.socket.socket.send(payload, 0)?;
             Ok(())
         }
     }
