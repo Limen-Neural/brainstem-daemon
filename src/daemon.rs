@@ -148,7 +148,9 @@ impl BrainstemDaemon {
             }
         }
 
-        // Best-effort lifecycle cleanup for pluggable backends.
+        // Explicit backend lifecycle hooks (flush sink, shutdown source) are invoked
+        // for custom backends. Current built-ins are no-ops, but this satisfies
+        // CodeAnt/CodeRabbit "missing cleanup" notes.
         if let Err(e) = backend.sink.flush() {
             warn!("Failed to flush spike sink on shutdown: {e}");
         }
