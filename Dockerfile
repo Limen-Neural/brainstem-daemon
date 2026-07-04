@@ -50,8 +50,11 @@ FROM full AS final
 # switch to non-root. The CMD runs the pre-built binary directly (no cargo
 # at runtime), so there is no write to target/ from the final image.
 RUN useradd -m -u 10001 appuser 2>/dev/null || true
-RUN cargo build --release --features corpus-ipc && \
-    chown -R appuser:appuser /app/target /usr/local/cargo 2>/dev/null || true
+RUN cargo build --release --features corpus-ipc
+# Best-effort chown so the non-root user can access the binary if needed;
+# do not fail the build if chown is a no-op or restricted by the fs.
+# Use ; true (not && ... || true) to avoid shell idiom warnings from scanners.
+RUN chown -R appuser:appuser /app/target /usr/local/cargo 2>/dev/null; true
 USER appuser
 WORKDIR /app
 CMD ["/app/target/release/soma-daemon", "--help"]
