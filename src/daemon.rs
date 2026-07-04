@@ -244,11 +244,14 @@ fn run_tick(
         );
     }
 
-    if spike_buf.is_empty() {
-        // No spikes this tick (or all dropped); skip emitting empty batch.
+    if spike_buf.is_empty() && !spike_ids.is_empty() {
+        // Had spikes from network but all IDs were out of u16 range (dropped).
+        // Nothing valid to publish; skip to avoid empty batch for dropped case.
         return;
     }
 
+    // Emit the batch (may be empty vec when no neurons fired this tick).
+    // This preserves original behavior and satisfies CollectingSpikeSink tests.
     if let Err(e) = sink.emit(spike_buf) {
         warn!("Failed to emit spikes: {e}");
     }
