@@ -21,4 +21,10 @@ ship_memory.json
 
 # Environment
 .env
+
+# AI/IDE tool directories
 .mimocode/
+.codex/
+.cursor/
+.claude/
+.kilo/
