@@ -78,11 +78,15 @@ impl BrainstemDaemon {
     ///
     /// The live ZMQ backend (when the feature is on) is only constructed by the
     /// binary (`src/bin/soma_daemon.rs`), which knows the ports and sets the
-    /// required environment variables, then passed via [`Self::with_backend`].
+    /// required environment variables, then passed via [`Self::with_backend`]
+    /// or [`Self::try_with_backend`].
     ///
     /// This is intentional for the temporary decoupling (PR A / issues #10-14).
     /// Library users wanting the real backend must construct the pair themselves
-    /// under the feature gate and call `with_backend`.
+    /// under the feature gate and call [`Self::with_backend`] or
+    /// [`Self::try_with_backend`]. Prefer the fallible constructors
+    /// ([`Self::try_new`], [`Self::try_with_backend`]) for user-provided
+    /// configuration to get a clear validation error instead of a panic.
     pub fn new(config: DaemonConfig) -> Self {
         Self::with_backend(config, init_runtime_default())
     }
