@@ -21,3 +21,4 @@ ship_memory.json
 
 # Environment
 .env
+.mimocode/

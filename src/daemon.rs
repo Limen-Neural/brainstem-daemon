@@ -101,7 +101,7 @@ impl BrainstemDaemon {
     /// return a clear validation error instead of aborting construction.
     pub fn with_backend(config: DaemonConfig, backend: BackendPair) -> Self {
         Self::try_with_backend(config, backend)
-            .expect("lif_count + izh_count must not exceed u16::MAX")
+            .unwrap_or_else(|err| panic!("failed to build daemon: {err}"))
     }
 
     /// Fallibly build a daemon with an explicit backend pair (for tests and custom backends).
@@ -443,6 +443,24 @@ mod tests {
 
         assert!(
             message.contains("lif_count + izh_count") && message.contains("exceeds u16::MAX"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn daemon_rejects_neuron_count_usize_overflow() {
+        let mut cfg = sample_config();
+        cfg.lif_count = usize::MAX;
+        cfg.izh_count = 1;
+
+        let err = match BrainstemDaemon::try_with_backend(cfg, BackendPair::stub()) {
+            Ok(_) => panic!("expected usize overflow to fail"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+
+        assert!(
+            message.contains("overflows usize"),
             "unexpected error: {message}"
         );
     }

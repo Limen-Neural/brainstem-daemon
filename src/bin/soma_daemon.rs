@@ -11,6 +11,7 @@ use brainstem_daemon::daemon::{BrainstemDaemon, DaemonConfig};
 #[cfg(feature = "corpus-ipc")]
 use brainstem_daemon::daemon::CORPUS_IPC_READOUT_ENV;
 
+use anyhow::Context;
 #[cfg(feature = "corpus-ipc")]
 use brainstem_daemon::StimulusSource;
 use clap::Parser;
@@ -107,11 +108,7 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
         BackendPair::stub()
     };
 
-    let daemon = BrainstemDaemon::try_with_backend(cfg, pair).map_err(|e| {
-        anyhow::anyhow!(
-            "invalid daemon configuration: {e}; reduce lif_count and/or izh_count so their sum is at most {}",
-            u16::MAX
-        )
-    })?;
+    let daemon = BrainstemDaemon::try_with_backend(cfg, pair)
+        .context("invalid daemon configuration: reduce lif_count and/or izh_count")?;
     daemon.run().await
 }
