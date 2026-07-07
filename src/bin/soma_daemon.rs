@@ -107,6 +107,11 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
         BackendPair::stub()
     };
 
-    let daemon = BrainstemDaemon::with_backend(cfg, pair);
+    let daemon = BrainstemDaemon::try_with_backend(cfg, pair).map_err(|e| {
+        anyhow::anyhow!(
+            "invalid daemon configuration: {e}; reduce lif_count and/or izh_count so their sum is at most {}",
+            u16::MAX
+        )
+    })?;
     daemon.run().await
 }
