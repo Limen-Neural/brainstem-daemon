@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use neuromod::{NeuroModulators, SpikingNetwork};
 use serde::Deserialize;
 use tokio::signal;
@@ -78,31 +78,47 @@ impl BrainstemDaemon {
     ///
     /// The live ZMQ backend (when the feature is on) is only constructed by the
     /// binary (`src/bin/soma_daemon.rs`), which knows the ports and sets the
-    /// required environment variables, then passed via [`Self::with_backend`].
+    /// required environment variables, then passed via [`Self::with_backend`]
+    /// or [`Self::try_with_backend`].
     ///
     /// This is intentional for the temporary decoupling (PR A / issues #10-14).
     /// Library users wanting the real backend must construct the pair themselves
-    /// under the feature gate and call `with_backend`.
+    /// under the feature gate and call [`Self::with_backend`] or
+    /// [`Self::try_with_backend`]. Prefer the fallible constructors
+    /// ([`Self::try_new`], [`Self::try_with_backend`]) for user-provided
+    /// configuration to get a clear validation error instead of a panic.
     pub fn new(config: DaemonConfig) -> Self {
         Self::with_backend(config, init_runtime_default())
     }
 
+    /// Fallibly build a daemon from configuration using the **stub** backend.
+    pub fn try_new(config: DaemonConfig) -> Result<Self> {
+        Self::try_with_backend(config, init_runtime_default())
+    }
+
     /// Build a daemon with an explicit backend pair (for tests and custom backends).
-    pub fn with_backend(mut config: DaemonConfig, backend: BackendPair) -> Self {
-        if config.lif_count + config.izh_count > u16::MAX as usize {
-            panic!(
-                "lif_count + izh_count ({} + {}) exceeds u16::MAX; spike channel ids would not fit",
-                config.lif_count, config.izh_count
-            );
-        }
+    ///
+    /// # Panics
+    ///
+    /// Panics if `lif_count + izh_count` exceeds [`u16::MAX`]. Prefer
+    /// [`Self::try_with_backend`] for user-provided configuration so callers can
+    /// return a clear validation error instead of aborting construction.
+    pub fn with_backend(config: DaemonConfig, backend: BackendPair) -> Self {
+        Self::try_with_backend(config, backend)
+            .unwrap_or_else(|err| panic!("failed to build daemon: {err}"))
+    }
+
+    /// Fallibly build a daemon with an explicit backend pair (for tests and custom backends).
+    pub fn try_with_backend(mut config: DaemonConfig, backend: BackendPair) -> Result<Self> {
+        validate_neuron_count(&config)?;
 
         let services = std::mem::take(&mut config.services);
         let registry = ServiceRegistry::from_configs(services);
-        Self {
+        Ok(Self {
             config,
             registry,
             backend,
-        }
+        })
     }
 
     /// Return a reference to the config-driven service registry.
@@ -177,6 +193,30 @@ impl BrainstemDaemon {
 /// wires a real backend. This is the intended temporary state.
 fn init_runtime_default() -> BackendPair {
     BackendPair::stub()
+}
+
+fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
+    let total = config
+        .lif_count
+        .checked_add(config.izh_count)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "lif_count + izh_count ({} + {}) overflows usize",
+                config.lif_count,
+                config.izh_count
+            )
+        })?;
+
+    if total > u16::MAX as usize {
+        bail!(
+            "lif_count + izh_count ({} + {}) exceeds u16::MAX ({})",
+            config.lif_count,
+            config.izh_count,
+            u16::MAX
+        );
+    }
+
+    Ok(())
 }
 
 // Trait-based tick loop (works with or without corpus-ipc feature)
@@ -380,6 +420,53 @@ mod tests {
         let mods = decode_inputs(&packet, &mut stimuli);
         assert_eq!(stimuli, vec![0.1, 0.2, 0.0, 0.0]);
         assert_eq!(mods, NeuroModulators::default());
+    }
+
+    #[test]
+    fn daemon_allows_u16_max_total_neurons() {
+        let mut cfg = sample_config();
+        cfg.lif_count = u16::MAX as usize;
+        cfg.izh_count = 0;
+
+        let daemon = BrainstemDaemon::try_with_backend(cfg, BackendPair::stub());
+
+        assert!(daemon.is_ok());
+    }
+
+    #[test]
+    fn daemon_rejects_total_neurons_above_u16_max() {
+        let mut cfg = sample_config();
+        cfg.lif_count = u16::MAX as usize;
+        cfg.izh_count = 1;
+
+        let err = match BrainstemDaemon::try_with_backend(cfg, BackendPair::stub()) {
+            Ok(_) => panic!("expected invalid neuron count to fail"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+
+        assert!(
+            message.contains("lif_count + izh_count") && message.contains("exceeds u16::MAX"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn daemon_rejects_neuron_count_usize_overflow() {
+        let mut cfg = sample_config();
+        cfg.lif_count = usize::MAX;
+        cfg.izh_count = 1;
+
+        let err = match BrainstemDaemon::try_with_backend(cfg, BackendPair::stub()) {
+            Ok(_) => panic!("expected usize overflow to fail"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+
+        assert!(
+            message.contains("overflows usize"),
+            "unexpected error: {message}"
+        );
     }
 
     #[test]
