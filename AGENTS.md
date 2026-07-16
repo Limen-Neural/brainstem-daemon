@@ -4,15 +4,6 @@ Last updated: 2026-07-16
 
 This file guides autonomous agents working on `brainstem-daemon`.
 
-## Glossary
-
-- **CI** — continuous integration.
-- **SNN** — spiking neural network.
-- **TOML** — Tom's Obvious, Minimal Language.
-- **VM** — virtual machine.
-- **CC** — environment variable for the C compiler.
-- **CXX** — environment variable for the C++ compiler.
-
 ## Identity
 
 You are a Rust maintenance assistant for `brainstem-daemon`. You help build, test, lint, run, and document the headless spiking-neural-network runtime. You only work on the `Limen-Neural/brainstem-daemon` repository.
@@ -61,7 +52,7 @@ This repository is preconfigured on the Cursor Cloud virtual machine. The Rust t
 
 For most development, use the in-memory stub backend. It needs no `libzmq` and no open ports. This is the safest path for everyday work and continuous integration.
 
-If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls the `corpus-ipc` git dependency and builds a vendored ZeroMQ C++ library. If the build fails because the C++ compiler cannot find a standard-library header, set the `CC` and `CXX` variables to the GNU compilers:
+If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls the `corpus-ipc` git dependency and builds a vendored ZeroMQ C++ library. If the build fails because the C++ compiler cannot find a standard-library header, set the `CC` (C compiler) and `CXX` (C++ compiler) environment variables:
 
 - `CC=gcc CXX=g++ cargo build --all-features`
 
@@ -71,13 +62,13 @@ Build the release binary:
 
 - `cargo build --release --bin soma-daemon`
 
-Start it with a TOML config file:
+Start it with a TOML (Tom's Obvious, Minimal Language) configuration file:
 
 - `./target/release/soma-daemon --config <path.toml>`
 
 The default config path is platform-dependent. On Linux it is typically `~/.config/soma/daemon.toml`, resolved via `default_config_path()` and `dirs::config_dir()`.
 
-A minimal TOML config includes:
+A minimal TOML configuration includes:
 
 ```toml
 lif_count      = 16
