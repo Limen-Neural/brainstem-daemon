@@ -29,8 +29,8 @@ Common commands for this project:
 If a `--all-features` build fails because the C++ compiler cannot find a standard-library header, set the C Compiler (CC) and C++ Compiler (CXX) variables first:
 
 - `CC=gcc CXX=g++ cargo build --all-features`
-
-Apply the same `CC=gcc CXX=g++` prefix to `cargo test --all-features` and `cargo clippy --all-targets --all-features -- -D warnings` as needed.
+- `CC=gcc CXX=g++ cargo test --all-features`
+- `CC=gcc CXX=g++ cargo clippy --all-targets --all-features -- -D warnings`
 
 ## Cursor Cloud setup
 
