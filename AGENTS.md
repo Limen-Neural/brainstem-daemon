@@ -26,39 +26,21 @@ Common commands for this project:
 - `cargo fmt --check` — verify formatting.
 - `cargo build --release --bin soma-daemon` — build the release binary.
 
+If a `--all-features` build fails because the C++ compiler cannot find a standard-library header, set the C Compiler (CC) and C++ Compiler (CXX) variables first:
+
+- `CC=gcc CXX=g++ cargo build --all-features`
+
+Apply the same `CC=gcc CXX=g++` prefix to `cargo test --all-features` and `cargo clippy --all-targets --all-features -- -D warnings` as needed.
+
 ## Cursor Cloud setup
 
 This repository is preconfigured on the Cursor Cloud virtual machine. The Rust toolchain (stable, edition-2024 capable) is already installed. At startup the environment runs `cargo fetch`.
-
-### Build commands
-
-- Build the default stub backend:
-
-  `cargo build`
-
-- Run all tests:
-
-  `cargo test --all-features`
-
-- Run clippy:
-
-  `cargo clippy --all-targets --all-features -- -D warnings`
-
-- Check formatting:
-
-  `cargo fmt --check`
 
 ### Backend features
 
 For most development, use the in-memory stub backend. It needs no `libzmq` and no open ports. This is the safest path for everyday work and continuous integration.
 
 If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls the `corpus-ipc` git dependency. It also builds a vendored ZeroMQ C++ library.
-
-If the build fails because the C++ compiler cannot find a standard-library header, set the C Compiler (CC) and C++ Compiler (CXX) environment variables to `gcc` and `g++`:
-
-```bash
-CC=gcc CXX=g++ cargo build --all-features
-```
 
 ### Running the daemon
 
