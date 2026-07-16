@@ -52,9 +52,13 @@ This repository is preconfigured on the Cursor Cloud virtual machine. The Rust t
 
 For most development, use the in-memory stub backend. It needs no `libzmq` and no open ports. This is the safest path for everyday work and continuous integration.
 
-If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls the `corpus-ipc` git dependency and builds a vendored ZeroMQ C++ library. If the build fails because the C++ compiler cannot find a standard-library header, set the `CC` (C compiler) and `CXX` (C++ compiler) environment variables:
+If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls the `corpus-ipc` git dependency. It also builds a vendored ZeroMQ C++ library.
 
-- `CC=gcc CXX=g++ cargo build --all-features`
+If the build fails because the C++ compiler cannot find a standard-library header, set the C and C++ compiler environment variables to `gcc` and `g++`:
+
+```bash
+CC=gcc CXX=g++ cargo build --all-features
+```
 
 ### Running the daemon
 
