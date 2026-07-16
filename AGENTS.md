@@ -54,7 +54,7 @@ For most development, use the in-memory stub backend. It needs no `libzmq` and n
 
 If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls the `corpus-ipc` git dependency. It also builds a vendored ZeroMQ C++ library.
 
-If the build fails because the C++ compiler cannot find a standard-library header, set the C and C++ compiler environment variables to `gcc` and `g++`:
+If the build fails because the C++ compiler cannot find a standard-library header, set the C Compiler (CC) and C++ Compiler (CXX) environment variables to `gcc` and `g++`:
 
 ```bash
 CC=gcc CXX=g++ cargo build --all-features
