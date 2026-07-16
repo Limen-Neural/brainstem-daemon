@@ -1,0 +1,22 @@
+# https://docs.devin.ai/onboard-devin/environment-yaml
+initialize: |
+  sudo apt-get update
+  sudo apt-get install -y libzmq3-dev
+  rustup toolchain install stable
+  rustup default stable
+  rustup component add rustfmt clippy
+maintenance: |
+  cargo fetch
+knowledge:
+  - name: lint
+    contents: |
+      cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings
+  - name: test
+    contents: |
+      cargo test --all-features
+  - name: build
+    contents: |
+      cargo build --release --bin soma-daemon
+  - name: notes
+    contents: |
+      Default build uses the in-memory stub backend. Use --all-features for ZeroMQ.
