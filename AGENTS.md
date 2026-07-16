@@ -1,6 +1,17 @@
 # AGENTS.md
 
-This file guides AI agents working on `brainstem-daemon`.
+Last updated: 2026-07-16
+
+This file guides autonomous agents working on `brainstem-daemon`.
+
+## Glossary
+
+- **CI** — continuous integration.
+- **SNN** — spiking neural network.
+- **TOML** — Tom's Obvious, Minimal Language.
+- **VM** — virtual machine.
+- **CC** — environment variable for the C compiler.
+- **CXX** — environment variable for the C++ compiler.
 
 ## Identity
 
@@ -26,7 +37,7 @@ Common commands for this project:
 
 ## Cursor Cloud setup
 
-This repository is preconfigured on the Cursor Cloud virtual machine (VM). The Rust toolchain (stable, edition-2024 capable) is already installed. At startup the environment runs `cargo fetch`.
+This repository is preconfigured on the Cursor Cloud virtual machine. The Rust toolchain (stable, edition-2024 capable) is already installed. At startup the environment runs `cargo fetch`.
 
 ### Build commands
 
@@ -48,9 +59,9 @@ This repository is preconfigured on the Cursor Cloud virtual machine (VM). The R
 
 ### Backend features
 
-For most development, use the in-memory stub backend. It needs no `libzmq` and no open ports. This is the safest path for everyday work and CI.
+For most development, use the in-memory stub backend. It needs no `libzmq` and no open ports. This is the safest path for everyday work and continuous integration.
 
-If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls the `corpus-ipc` git dependency and builds a vendored ZeroMQ C++ library. If the build fails because the C++ compiler cannot find a standard-library header, force the GNU compiler:
+If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls the `corpus-ipc` git dependency and builds a vendored ZeroMQ C++ library. If the build fails because the C++ compiler cannot find a standard-library header, set the `CC` and `CXX` variables to the GNU compilers:
 
 - `CC=gcc CXX=g++ cargo build --all-features`
 
@@ -60,7 +71,7 @@ Build the release binary:
 
 - `cargo build --release --bin soma-daemon`
 
-Start it with a TOML (Tom's Obvious, Minimal Language) config file:
+Start it with a TOML config file:
 
 - `./target/release/soma-daemon --config <path.toml>`
 
@@ -79,4 +90,4 @@ spine_pub_port = 5556
 model_path     = "~/models/soma16.mem"
 ```
 
-The `model_path` is not used by the stub backend. With the stub backend, `soma-daemon` runs a headless SNN tick loop and logs `🔌 Using stub backend`.
+The `model_path` is not used by the stub backend. With the stub backend, `soma-daemon` runs a headless spiking-neural-network tick loop and logs `🔌 Using stub backend`.
