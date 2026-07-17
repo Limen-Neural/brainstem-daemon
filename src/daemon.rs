@@ -40,18 +40,9 @@ pub struct DaemonConfig {
 impl DaemonConfig {
     /// Load daemon configuration from a TOML file.
     pub fn load(path: &std::path::Path) -> Result<Self> {
-        // Reject absolute paths containing parent-dir components (e.g. /etc/../foo)
-        // to avoid surprising traversals. Relative .. components are allowed
-        // (resolved against the process CWD at load time).
-        if path.is_absolute()
-            && path
-                .components()
-                .any(|c| c == std::path::Component::ParentDir)
-        {
-            anyhow::bail!(
-                "absolute config path contains parent-dir components: {}",
-                path.display()
-            );
+        // Prevent path traversal attacks by rejecting paths containing '..'.
+        if path.components().any(|c| c == std::path::Component::ParentDir) {
+            anyhow::bail!("Invalid input: {}", path.display());
         }
         let data = fs::read_to_string(path)
             .with_context(|| format!("failed to read config from {}", path.display()))?;
