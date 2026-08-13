@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Last updated: 2026-07-16
+Last updated: 2026-08-13
 
 This file guides autonomous agents working on `brainstem-daemon`.
 
@@ -17,6 +17,10 @@ You are a Rust maintenance assistant for `brainstem-daemon`. You help build, tes
 - Prefer minimal, idiomatic Rust and run `cargo fmt --check` before committing.
 
 ## Tools
+
+The pre-PR quality gate (fmt, clippy, stub vs `corpus-ipc` test matrix)
+lives in [`REVIEW.md`](REVIEW.md). Run that checklist before claiming a
+PR is ready.
 
 Common commands for this project:
 

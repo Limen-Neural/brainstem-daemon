@@ -183,6 +183,12 @@ restorecon -Rv ~/.config/soma
 
 ---
 
+## Contributing
+
+Local quality gate (fmt, clippy, stub vs optional `corpus-ipc` tests):
+see [`REVIEW.md`](REVIEW.md). Multi-OS CI is tracked in
+[#21](https://github.com/Limen-Neural/brainstem-daemon/issues/21).
+
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE-2.0), at your option.
