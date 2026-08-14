@@ -22,13 +22,19 @@ The pre-PR quality gate (fmt, clippy, stub vs `corpus-ipc` test matrix)
 lives in [`REVIEW.md`](REVIEW.md). Run that checklist before claiming a
 PR is ready.
 
-Common commands for this project:
+Default (stub) commands — no `libzmq` required:
 
-- `cargo build` — compile the default stub backend.
-- `cargo test --all-features` — run all tests, including the optional `corpus-ipc` feature.
-- `cargo clippy --all-targets --all-features -- -D warnings` — lint the project.
 - `cargo fmt --check` — verify formatting.
+- `cargo build` — compile the default stub backend.
+- `cargo clippy --all-targets -- -D warnings` — lint the stub path.
+- `cargo test` — run stub-backend tests.
 - `cargo build --release --bin soma-daemon` — build the release binary.
+
+Optional `corpus-ipc` / `--all-features` commands need the system ZeroMQ
+dev package (`libzmq3-dev` on Debian/Ubuntu). They are not vendored:
+
+- `cargo test --all-features`
+- `cargo clippy --all-targets --all-features -- -D warnings`
 
 If a `--all-features` build fails because the C++ compiler cannot find a standard-library header, set the C Compiler (CC) and C++ Compiler (CXX) variables first:
 
@@ -44,7 +50,7 @@ This repository is preconfigured on the Cursor Cloud virtual machine. The Rust t
 
 For most development, use the in-memory stub backend. It needs no `libzmq` and no open ports. This is the safest path for everyday work and continuous integration.
 
-If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls the `corpus-ipc` git dependency. It also builds a vendored ZeroMQ C++ library.
+If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls the `corpus-ipc` git dependency and links the system `libzmq` library (install `libzmq3-dev` on Debian/Ubuntu). It does not vendor ZeroMQ.
 
 ### Running the daemon
 
