@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-High-performance spiking neural-network runtime written in Rust.
+Headless spiking neural-network runtime written in Rust.
 
 > **Note**  
 > Training / weight-optimization lives in the separate `plasticity-lab` project; `brainstem-daemon` is *inference-only*.
@@ -10,8 +10,8 @@ High-performance spiking neural-network runtime written in Rust.
 ---
 
 ## Features
-- Modular `neuromod::SpikingNetwork` core (CPU; SIMD ready)
-- High-frequency networking over **ZeroMQ PUB/SUB** via `corpus-ipc`
+- Modular `neuromod::SpikingNetwork` core (CPU)
+- Optional **ZeroMQ PUB/SUB** networking via `corpus-ipc`
 - Headless **`soma-daemon`** binary for background execution
 
 ---
@@ -22,6 +22,24 @@ High-performance spiking neural-network runtime written in Rust.
 cargo build --release --bin soma-daemon
 ```
 The binary will be located at `target/release/soma-daemon`.
+
+### Cargo profiles
+
+This crate sets the four built-in Cargo profiles in `Cargo.toml`:
+
+| Profile | Command | Intent |
+|---|---|---|
+| `dev` | `cargo build` / `cargo run` | Fast compile, full debug info, overflow checks |
+| `release` | `cargo build --release` | Optimized binary, thin LTO, debuginfo stripped |
+| `test` | `cargo test` | Debuggable tests with overflow checks |
+| `bench` | `cargo bench` | Same optimization level as release |
+
+```bash
+cargo build                  # profile.dev
+cargo build --release        # profile.release
+cargo test                   # profile.test
+cargo bench                  # profile.bench (when benches exist)
+```
 
 ---
 
