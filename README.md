@@ -17,6 +17,9 @@ Headless spiking neural-network runtime written in Rust.
 ---
 
 ## Building
+
+Requires **Rust 1.97.1 only** (`rust-toolchain.toml`). Do not use other toolchains.
+
 ```bash
 # Release build (includes soma-daemon)
 cargo build --release --bin soma-daemon

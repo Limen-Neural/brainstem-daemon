@@ -2,6 +2,7 @@
 name = "brainstem-daemon"
 version = "0.1.2"
 edition = "2024"
+rust-version = "1.97.1"
 description = "SNN Engine + Inference + Telemetry + AI (Tier 1 — headless)"
 authors = ["Raul Montoya Cardenas <montoya34raul@gmail.com>"]
 license = "MIT OR Apache-2.0"
