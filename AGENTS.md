@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Last updated: 2026-08-13
+Last updated: 2026-08-14
 
 This file guides autonomous agents working on `brainstem-daemon`.
 
@@ -44,7 +44,7 @@ If a `--all-features` build fails because the C++ compiler cannot find a standar
 
 ## Cursor Cloud setup
 
-This repository is preconfigured on the Cursor Cloud virtual machine. The Rust toolchain (stable, edition-2024 capable) is already installed. At startup the environment runs `cargo fetch`.
+This repository is preconfigured on the Cursor Cloud virtual machine. The Rust toolchain is pinned to **1.97.1 only** via `rust-toolchain.toml`. At startup the environment runs `cargo fetch`.
 
 ### Backend features
 

@@ -2,6 +2,7 @@
 name = "brainstem-daemon"
 version = "0.1.2"
 edition = "2024"
+rust-version = "1.97.1"
 description = "SNN Engine + Inference + Telemetry + AI (Tier 1 — headless)"
 authors = ["Raul Montoya Cardenas <montoya34raul@gmail.com>"]
 license = "MIT OR Apache-2.0"
@@ -28,3 +29,32 @@ corpus-ipc = ["dep:corpus-ipc", "dep:zmq"]
 [[bin]]
 name = "soma-daemon"
 path = "src/bin/soma_daemon.rs"
+
+# Built-in Cargo profiles (dev / release / test / bench).
+# Keep settings conservative — no maximum-optimization knobs that over-promise.
+# See README.md "Cargo profiles" for how each is used.
+
+[profile.dev]
+# Fast compile + full debug info for local development (`cargo build` / `cargo run`).
+opt-level = 0
+debug = true
+overflow-checks = true
+
+[profile.release]
+# Optimized binary for running `soma-daemon` (`cargo build --release`).
+opt-level = 3
+lto = "thin"
+strip = "debuginfo"
+debug = false
+
+[profile.test]
+# Used by `cargo test`. Prefer debuggability and arithmetic safety over speed.
+opt-level = 0
+debug = true
+overflow-checks = true
+
+[profile.bench]
+# Used by `cargo bench`. Match release optimization so timings reflect release builds.
+opt-level = 3
+lto = "thin"
+debug = false
