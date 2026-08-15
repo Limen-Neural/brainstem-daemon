@@ -10,6 +10,7 @@ Headless spiking neural-network runtime written in Rust.
 ---
 
 ## Features
+
 - Modular `neuromod::SpikingNetwork` core (CPU)
 - Optional **ZeroMQ PUB/SUB** networking via `corpus-ipc`
 - Headless **`soma-daemon`** binary for background execution
