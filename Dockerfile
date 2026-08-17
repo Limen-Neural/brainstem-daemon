@@ -7,7 +7,7 @@
 # CI and contributors can validate:
 #   cargo fmt --check, clippy, build, test inside the image.
 
-FROM rust:1.85-bookworm AS base
+FROM rust:1.97.1-bookworm AS base
 WORKDIR /app
 # Common system deps for the full feature set (libzmq). Core-only builds do not need this.
 # pkgconf provides /usr/bin/pkg-config on Debian bookworm.

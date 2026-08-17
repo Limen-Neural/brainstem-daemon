@@ -2,8 +2,8 @@
 initialize: |
   sudo apt-get update
   sudo apt-get install -y libzmq3-dev
-  rustup toolchain install stable
-  rustup default stable
+  rustup toolchain install 1.97.1
+  rustup default 1.97.1
   rustup component add rustfmt clippy
 maintenance: |
   cargo fetch
