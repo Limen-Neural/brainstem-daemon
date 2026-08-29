@@ -28,7 +28,7 @@ Default (stub) commands — no `libzmq` required:
 - `cargo build` — compile the default stub backend.
 - `cargo clippy --all-targets -- -D warnings` — lint the stub path.
 - `cargo test` — run stub-backend tests.
-- `cargo build --release --bin soma-daemon` — build the release binary.
+- `cargo build --release --bin brainstem-daemon` — build the release binary.
 
 Optional `corpus-ipc` / `--all-features` commands need the system ZeroMQ
 dev package (`libzmq3-dev` on Debian/Ubuntu). They are not vendored:
@@ -56,11 +56,11 @@ If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pul
 
 Build the release binary:
 
-- `cargo build --release --bin soma-daemon`
+- `cargo build --release --bin brainstem-daemon`
 
 Start it with a TOML (Tom's Obvious, Minimal Language) configuration file:
 
-- `./target/release/soma-daemon --config <path.toml>`
+- `./target/release/brainstem-daemon --config <path.toml>`
 
 The default config path is platform-dependent. On Linux it is typically `~/.config/soma/daemon.toml`, resolved via `default_config_path()` and `dirs::config_dir()`.
 
@@ -77,4 +77,4 @@ spine_pub_port = 5556
 model_path     = "~/models/soma16.mem"
 ```
 
-The `model_path` is not used by the stub backend. With the stub backend, `soma-daemon` runs a headless spiking-neural-network tick loop and logs `🔌 Using stub backend`.
+The `model_path` is not used by the stub backend. With the stub backend, `brainstem-daemon` runs a headless spiking-neural-network tick loop and logs `🔌 Using stub backend`.
