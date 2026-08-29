@@ -29,20 +29,23 @@ The binary will be located at `target/release/soma-daemon`.
 
 ### Cargo profiles
 
-This crate sets the four built-in Cargo profiles in `Cargo.toml`:
+This crate sets the following Cargo profiles in `Cargo.toml`, aligned with the
+`neuromod` profile pattern:
 
 | Profile | Command | Intent |
 |---|---|---|
 | `dev` | `cargo build` / `cargo run` | Fast compile, full debug info, overflow checks |
 | `release` | `cargo build --release` | Optimized binary, thin LTO, debuginfo stripped |
+| `release-with-debug` | `cargo build --profile release-with-debug` | Release optimizations with debug symbols kept, for `perf` / flamegraphs / `tracing` on the 1 kHz tick loop |
 | `test` | `cargo test` | Debuggable tests with overflow checks |
 | `bench` | `cargo bench` | Same optimization level as release |
 
 ```bash
-cargo build                  # profile.dev
-cargo build --release        # profile.release
-cargo test                   # profile.test
-cargo bench                  # profile.bench (when benches exist)
+cargo build                              # profile.dev
+cargo build --release                    # profile.release
+cargo build --profile release-with-debug # profile.release-with-debug
+cargo test                               # profile.test
+cargo bench                              # profile.bench (when benches exist)
 ```
 
 ---
