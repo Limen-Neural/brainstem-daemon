@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY Cargo.toml Cargo.lock ./
 # Create a dummy main to cache dependencies
 RUN mkdir -p src/bin && \
-    echo 'fn main(){}' > src/bin/soma_daemon.rs && \
+    echo 'fn main(){}' > src/bin/brainstem_daemon.rs && \
     echo 'pub fn _dummy(){}' > src/lib.rs && \
     cargo fetch
 
@@ -57,4 +57,4 @@ RUN cargo build --release --features corpus-ipc
 RUN chown -R appuser:appuser /app/target /usr/local/cargo 2>/dev/null; true
 USER appuser
 WORKDIR /app
-CMD ["/app/target/release/soma-daemon", "--help"]
+CMD ["/app/target/release/brainstem-daemon", "--help"]

@@ -184,8 +184,14 @@ impl BrainstemDaemon {
 async fn shutdown_signal() {
     use tokio::signal::unix::SignalKind;
 
-    let mut sigterm =
-        signal::unix::signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+    let mut sigterm = match signal::unix::signal(SignalKind::terminate()) {
+        Ok(sigterm) => sigterm,
+        Err(e) => {
+            warn!("Failed to install SIGTERM handler: {e}; only SIGINT will trigger shutdown");
+            let _ = signal::ctrl_c().await;
+            return;
+        }
+    };
 
     tokio::select! {
         _ = signal::ctrl_c() => {}
@@ -514,10 +520,15 @@ mod tests {
         assert_eq!(sink.emitted.len(), 1);
     }
 
-    // Sends real SIGTERM to this test process; only meaningful on Unix, where
-    // `shutdown_signal` installs a SIGTERM handler.
+    // Sends a real SIGTERM to this test process, so it's `#[ignore]`d by default:
+    // `cargo test` runs the whole crate's tests in parallel threads of one process,
+    // and a process-wide SIGTERM delivered before the handler below finishes
+    // registering would fall through to the OS default disposition and kill the
+    // entire test binary, taking sibling tests down with it. Run explicitly and in
+    // isolation to verify: `cargo test --lib -- --ignored --test-threads=1 shutdown_signal_returns_on_sigterm`.
     #[cfg(unix)]
     #[tokio::test]
+    #[ignore = "sends a real SIGTERM to the whole test process; run in isolation, see comment above"]
     async fn shutdown_signal_returns_on_sigterm() {
         let handle = tokio::spawn(shutdown_signal());
 

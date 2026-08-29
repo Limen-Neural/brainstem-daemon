@@ -25,6 +25,7 @@ Requires **Rust 1.97.1 only** (`rust-toolchain.toml`). Do not use other toolchai
 # Release build (includes brainstem-daemon)
 cargo build --release --bin brainstem-daemon
 ```
+
 The binary will be located at `target/release/brainstem-daemon`.
 
 ### Cargo profiles
@@ -141,12 +142,14 @@ target/release/brainstem-daemon            # uses default config
 brainstem-daemon --config /path/to/custom.toml
 ```
 
-Stop it gracefully with `Ctrl-C` (SIGINT) or `kill` (SIGTERM, the default systemd stop signal) — either signal breaks the tick loop, flushes the backend, and exits `0`.
+Stop it gracefully with `Ctrl-C` (SIGINT) on all platforms. On Unix, `kill` (SIGTERM, the default systemd stop signal) also breaks the tick loop, flushes the backend, and exits `0`.
 
 ---
 
 ## Systemd User Service (Fedora 43)
+
 1. Copy unit file:
+
    ```ini
    # ~/.config/systemd/user/brainstem-daemon.service
    [Unit]
