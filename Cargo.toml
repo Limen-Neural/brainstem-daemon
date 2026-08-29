@@ -30,8 +30,9 @@ corpus-ipc = ["dep:corpus-ipc", "dep:zmq"]
 name = "soma-daemon"
 path = "src/bin/soma_daemon.rs"
 
-# Built-in Cargo profiles (dev / release / test / bench).
-# Keep settings conservative — no maximum-optimization knobs that over-promise.
+# Cargo profiles (dev / release / release-with-debug / test / bench).
+# Keep settings conservative — no maximum-optimization knobs that over-promise
+# for a headless inference daemon. Aligned with the `neuromod` profile pattern.
 # See README.md "Cargo profiles" for how each is used.
 
 [profile.dev]
@@ -47,6 +48,14 @@ lto = "thin"
 strip = "debuginfo"
 debug = false
 
+[profile.release-with-debug]
+# Release optimization with debug symbols kept, for `perf` / flamegraphs /
+# `tracing` on the 1 kHz tick loop without paying for a full debug build.
+# Use with `cargo build --profile release-with-debug`.
+inherits = "release"
+debug = true
+strip = false
+
 [profile.test]
 # Used by `cargo test`. Prefer debuggability and arithmetic safety over speed.
 opt-level = 0
@@ -55,6 +64,4 @@ overflow-checks = true
 
 [profile.bench]
 # Used by `cargo bench`. Match release optimization so timings reflect release builds.
-opt-level = 3
-lto = "thin"
-debug = false
+inherits = "release"
