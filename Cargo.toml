@@ -63,5 +63,8 @@ debug = true
 overflow-checks = true
 
 [profile.bench]
-# Used by `cargo bench`. Match release optimization so timings reflect release builds.
+# Used by `cargo bench`. Match release optimization so timings reflect release
+# builds, but keep debug symbols so benchmarks stay profileable (e.g. with
+# flamegraphs), unlike the stripped `release` binary.
 inherits = "release"
+strip = false
