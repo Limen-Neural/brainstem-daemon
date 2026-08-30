@@ -16,7 +16,7 @@ knowledge:
       cargo test --all-features
   - name: build
     contents: |
-      cargo build --release --bin soma-daemon
+      cargo build --release --bin brainstem-daemon
   - name: notes
     contents: |
       Default build uses the in-memory stub backend. Use --all-features for ZeroMQ.

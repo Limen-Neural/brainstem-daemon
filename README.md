@@ -13,7 +13,7 @@ Headless spiking neural-network runtime written in Rust.
 
 - Modular `neuromod::SpikingNetwork` core (CPU)
 - Optional **ZeroMQ PUB/SUB** networking via `corpus-ipc`
-- Headless **`soma-daemon`** binary for background execution
+- Headless **`brainstem-daemon`** binary for background execution
 
 ---
 
@@ -22,10 +22,11 @@ Headless spiking neural-network runtime written in Rust.
 Requires **Rust 1.97.1 only** (`rust-toolchain.toml`). Do not use other toolchains.
 
 ```bash
-# Release build (includes soma-daemon)
-cargo build --release --bin soma-daemon
+# Release build (includes brainstem-daemon)
+cargo build --release --bin brainstem-daemon
 ```
-The binary will be located at `target/release/soma-daemon`.
+
+The binary will be located at `target/release/brainstem-daemon`.
 
 ### Cargo profiles
 
@@ -51,7 +52,7 @@ cargo bench                              # profile.bench (when benches exist)
 ---
 
 ## Configuration
-`soma-daemon` expects a **TOML** file; default path: `~/.config/soma/daemon.toml` (override with `--config`).
+`brainstem-daemon` expects a **TOML** file; default path: `~/.config/soma/daemon.toml` (override with `--config`).
 
 ```toml
 # ~/.config/soma/daemon.toml
@@ -136,23 +137,27 @@ cargo test --all-features
 
 ## Running (foreground)
 ```bash
-target/release/soma-daemon            # uses default config
+target/release/brainstem-daemon            # uses default config
 # or
-soma-daemon --config /path/to/custom.toml
+brainstem-daemon --config /path/to/custom.toml
 ```
+
+Stop it gracefully with `Ctrl-C` (SIGINT) on all platforms. On Unix, `kill` (SIGTERM, the default systemd stop signal) also breaks the tick loop, flushes the backend, and exits `0`.
 
 ---
 
 ## Systemd User Service (Fedora 43)
+
 1. Copy unit file:
+
    ```ini
-   # ~/.config/systemd/user/soma-daemon.service
+   # ~/.config/systemd/user/brainstem-daemon.service
    [Unit]
    Description=Soma Spiking Network Daemon
    After=network.target
 
    [Service]
-   ExecStart=%h/.cargo/bin/soma-daemon --config %h/.config/soma/daemon.toml
+   ExecStart=%h/.cargo/bin/brainstem-daemon --config %h/.config/soma/daemon.toml
    Restart=on-failure
    Environment=RUST_LOG=info
 
@@ -162,7 +167,7 @@ soma-daemon --config /path/to/custom.toml
 2. Enable & start:
    ```bash
    systemctl --user daemon-reload
-   systemctl --user enable --now soma-daemon
+   systemctl --user enable --now brainstem-daemon
    ```
 
 ### SELinux

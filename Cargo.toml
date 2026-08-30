@@ -27,8 +27,8 @@ default = []
 corpus-ipc = ["dep:corpus-ipc", "dep:zmq"]
 
 [[bin]]
-name = "soma-daemon"
-path = "src/bin/soma_daemon.rs"
+name = "brainstem-daemon"
+path = "src/bin/brainstem_daemon.rs"
 
 # Cargo profiles (dev / release / release-with-debug / test / bench).
 # Keep settings conservative — no maximum-optimization knobs that over-promise
@@ -42,7 +42,7 @@ debug = true
 overflow-checks = true
 
 [profile.release]
-# Optimized binary for running `soma-daemon` (`cargo build --release`).
+# Optimized binary for running `brainstem-daemon` (`cargo build --release`).
 opt-level = 3
 lto = "thin"
 strip = "debuginfo"

@@ -18,12 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In-crate stub backend (`StubStimulusSource`, `NoopSpikeSink`, `CollectingSpikeSink` under `#[cfg(test)]` for our own tests; not re-exported for downstream test use).
 - `BrainstemDaemon::with_backend(cfg, pair)` constructor for tests and custom backends.
 - Test coverage for the non-`corpus-ipc` (stub) path that runs under `--no-default-features`.
+- Graceful `SIGTERM` handling alongside the existing `SIGINT` (Ctrl-C): the tick loop now
+  breaks, flushes the backend, and exits `0` on either signal.
 
 ### Changed
 
 - Relicense from GPL-3.0 to dual MIT/Apache-2.0.
 - Add SPDX license identifiers to all source files.
 - Refactor `soma-daemon` binary into a thin wrapper over `BrainstemDaemon`.
+- Renamed the legacy `soma-daemon` binary to `brainstem-daemon` (matches the crate/repo name).
 - Made `corpus-ipc` + `zmq` **optional** behind the `corpus-ipc` Cargo feature (temporarily off by default).
 - `BrainstemDaemon` now drives the tick loop via the local traits instead of hard-coding `ZmqBrainBackend`.
 - Binary now logs the active backend mode (`🔌 stub` / `📡 ZMQ corpus-ipc`).

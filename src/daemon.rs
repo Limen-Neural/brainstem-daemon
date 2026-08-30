@@ -77,7 +77,7 @@ impl BrainstemDaemon {
     /// feature is enabled at compile time.
     ///
     /// The live ZMQ backend (when the feature is on) is only constructed by the
-    /// binary (`src/bin/soma_daemon.rs`), which knows the ports and sets the
+    /// binary (`src/bin/brainstem_daemon.rs`), which knows the ports and sets the
     /// required environment variables, then passed via [`Self::with_backend`]
     /// or [`Self::try_with_backend`].
     ///
@@ -144,7 +144,7 @@ impl BrainstemDaemon {
         let mut stimuli = vec![0.0; cfg.channels];
         let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
 
-        let mut ctrl_c = std::pin::pin!(signal::ctrl_c());
+        let mut shutdown = std::pin::pin!(shutdown_signal());
 
         loop {
             tokio::select! {
@@ -157,7 +157,7 @@ impl BrainstemDaemon {
                         &mut spike_buf,
                     );
                 }
-                _ = &mut ctrl_c => {
+                _ = &mut shutdown => {
                     info!("Termination signal received, shutting down");
                     break;
                 }
@@ -178,11 +178,39 @@ impl BrainstemDaemon {
     }
 }
 
+/// Wait for a termination request: `SIGINT` (Ctrl-C) on every platform, plus
+/// `SIGTERM` (the default `systemctl stop` / `kill` signal) on Unix.
+#[cfg(unix)]
+async fn shutdown_signal() {
+    use tokio::signal::unix::SignalKind;
+
+    let mut sigterm = match signal::unix::signal(SignalKind::terminate()) {
+        Ok(sigterm) => sigterm,
+        Err(e) => {
+            warn!("Failed to install SIGTERM handler: {e}; only SIGINT will trigger shutdown");
+            let _ = signal::ctrl_c().await;
+            return;
+        }
+    };
+
+    tokio::select! {
+        _ = signal::ctrl_c() => {}
+        _ = sigterm.recv() => {}
+    }
+}
+
+/// Wait for a termination request. Windows has no `SIGTERM`; `Ctrl-C` is the
+/// only graceful-shutdown signal available there.
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    let _ = signal::ctrl_c().await;
+}
+
 /// Internal default backend factory.
 ///
 /// This **always** returns the in-memory stub backend, regardless of Cargo features.
 /// The real ZMQ-based backend (when `corpus-ipc` feature is enabled) is constructed
-/// explicitly by the binary (`soma-daemon`) which knows the spine ports and sets the
+/// explicitly by the binary (`brainstem-daemon`) which knows the spine ports and sets the
 /// required environment variable(s), then injected via `BrainstemDaemon::with_backend`.
 ///
 /// Library callers that want the live ZMQ backend must do the same: build the pair
@@ -490,5 +518,33 @@ mod tests {
 
         // Sink should have received one (possibly empty) batch
         assert_eq!(sink.emitted.len(), 1);
+    }
+
+    // Sends a real SIGTERM to this test process, so it's `#[ignore]`d by default:
+    // `cargo test` runs the whole crate's tests in parallel threads of one process,
+    // and a process-wide SIGTERM delivered before the handler below finishes
+    // registering would fall through to the OS default disposition and kill the
+    // entire test binary, taking sibling tests down with it. Run explicitly and in
+    // isolation to verify: `cargo test --lib -- --ignored --test-threads=1 shutdown_signal_returns_on_sigterm`.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "sends a real SIGTERM to the whole test process; run in isolation, see comment above"]
+    async fn shutdown_signal_returns_on_sigterm() {
+        let handle = tokio::spawn(shutdown_signal());
+
+        // Give the signal handler a moment to register before raising it.
+        time::sleep(Duration::from_millis(50)).await;
+
+        let pid = std::process::id();
+        let status = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .expect("failed to invoke `kill`");
+        assert!(status.success(), "`kill -TERM` failed: {status:?}");
+
+        time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("shutdown_signal did not return after SIGTERM")
+            .expect("shutdown_signal task panicked");
     }
 }
