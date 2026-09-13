@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `decode_inputs` now accepts `&IngressPacket` (with explicit `None` modulator fallback).
 - All direct `corpus_ipc` / `zmq` usage is now feature-gated (except the compatibility `CORPUS_IPC_READOUT_ENV` const).
 
+### Removed
+
+- Qodana Cloud workflow (`.github/workflows/qodana_code_quality.yml`) and
+  `qodana.yaml`; local Qodana notes in `REVIEW.md`. Qodana Cloud membership
+  expired.
+
 ### Fixed / Cleaned
 
 - Removed unconditional dependency on `corpus-ipc` git crate and system `libzmq` for core builds and tests.

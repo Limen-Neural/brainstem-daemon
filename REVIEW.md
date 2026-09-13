@@ -49,14 +49,6 @@ cargo test --all-features
 If a `--all-features` build fails because the C++ compiler cannot find a
 standard-library header, set `CC=gcc CXX=g++` first (see `AGENTS.md`).
 
-## Qodana (optional local)
-
-CI twin: `.github/workflows/qodana_code_quality.yml` (`qodana.yaml`).
-
-```bash
-qodana scan --project-dir . --linter qodana-rust --print-problems --save-report
-```
-
 ## Diff hygiene
 
 ```bash
