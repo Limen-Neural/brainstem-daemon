@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use anyhow::{Result, bail};
 
 use super::durable::{DurableState, DurableStore, FAKE_CHECKPOINT_ID, InflightRecord};
-use super::{Boundary, FaultPoint, Health, RestartOutcome, SequencedIngress, expected_outcome};
+use super::{Boundary, FaultPoint, Health, RestartOutcome, SequencedIngress};
 
 /// Hard cap on ticks per harness instance. Replaces wall-clock timeouts.
 pub const MAX_STEPS: u32 = 64;
@@ -278,6 +278,8 @@ impl RuntimeHarness {
             None => return Ok(TickResult::NoIngress),
         };
         if packet.seq <= self.durable.committed_ingress_seq {
+            // High-water mark: sources must emit strictly increasing sequences.
+            // Restart reconstructs the source; upstream is at-least-once.
             self.skipped_replays += 1;
             return Ok(TickResult::SkippedReplay);
         }
@@ -298,6 +300,7 @@ impl RuntimeHarness {
     fn validate_checkpoint(&mut self) -> Result<()> {
         self.fail_point(FaultPoint::Before(Boundary::CheckpointValidation))?;
         if self.injector.take(FaultPoint::MalformedCheckpoint) {
+            self.store = DurableStore::malformed(b"{injected-malformed-checkpoint");
             self.reject_checkpoint();
             bail!("malformed checkpoint");
         }
@@ -454,16 +457,40 @@ impl RuntimeHarness {
     }
 
     fn apply_fault(&mut self, point: FaultPoint) {
-        let expected = expected_outcome(point);
-        self.health = expected.terminal_health;
+        self.health = injected_terminal_health(point);
         if matches!(
-            expected.terminal_health,
+            self.health,
             Health::Faulted
                 | Health::Degraded
                 | Health::IncompleteShutdown
                 | Health::CheckpointInvalid
         ) {
             self.live = false;
+        }
+    }
+}
+
+/// Terminal health assigned by the harness. Kept independent of
+/// [`super::expected_outcome`] so the matrix test can detect drift.
+fn injected_terminal_health(point: FaultPoint) -> Health {
+    match point {
+        FaultPoint::Before(Boundary::Initialize)
+        | FaultPoint::After(Boundary::Initialize)
+        | FaultPoint::Before(Boundary::CheckpointValidation)
+        | FaultPoint::After(Boundary::CheckpointValidation)
+        | FaultPoint::Before(Boundary::TickExecute)
+        | FaultPoint::After(Boundary::TickExecute)
+        | FaultPoint::After(Boundary::MetricPublish)
+        | FaultPoint::After(Boundary::Shutdown)
+        | FaultPoint::CoreStepError => Health::Faulted,
+        FaultPoint::MalformedCheckpoint => Health::CheckpointInvalid,
+        FaultPoint::Before(Boundary::Ingress)
+        | FaultPoint::After(Boundary::Ingress)
+        | FaultPoint::ClosedChannel
+        | FaultPoint::Before(Boundary::MetricPublish)
+        | FaultPoint::BackpressureTimeout => Health::Degraded,
+        FaultPoint::Before(Boundary::Shutdown) | FaultPoint::InterruptedShutdown => {
+            Health::IncompleteShutdown
         }
     }
 }
@@ -569,5 +596,22 @@ mod tests {
         assert_eq!(h.health(), crate::runtime::Health::CheckpointInvalid);
         assert!(!h.live_loop_entered());
         assert_eq!(h.restart_outcome(), Some(RestartOutcome::RejectedInvalid));
+    }
+
+    #[test]
+    fn armed_malformed_checkpoint_poisons_empty_store_for_restart() {
+        let mut first = RuntimeHarness::builder(0)
+            .fault(crate::runtime::FaultPoint::MalformedCheckpoint)
+            .build();
+        assert!(first.boot().is_err());
+        assert_eq!(first.health(), crate::runtime::Health::CheckpointInvalid);
+        let store = first.into_store();
+        let mut restarted = RuntimeHarness::builder(0).store(store).build();
+        assert!(restarted.boot().is_err());
+        assert_eq!(
+            restarted.restart_outcome(),
+            Some(RestartOutcome::RejectedInvalid)
+        );
+        assert!(!restarted.live_loop_entered());
     }
 }

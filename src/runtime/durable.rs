@@ -103,9 +103,9 @@ impl DurableState {
                 self.committed_tick_seq
             );
         }
-        if inf.session_id == 0 || inf.session_id > self.last_session_id {
+        if inf.session_id != self.last_session_id {
             bail!(
-                "inflight session {} is out of range for last_session_id {}",
+                "inflight session {} must equal last_session_id {}",
                 inf.session_id,
                 self.last_session_id
             );
@@ -237,5 +237,22 @@ mod tests {
         });
         let err = state.validate().unwrap_err().to_string();
         assert!(err.contains("overflow"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn stale_inflight_session_is_rejected() {
+        let mut state = DurableState::fresh();
+        state.last_session_id = 2;
+        state.committed_tick_seq = 3;
+        state.inflight = Some(InflightRecord {
+            session_id: 1,
+            tick_seq: 4,
+            ingress_seq: 1,
+        });
+        let err = state.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("must equal last_session_id"),
+            "unexpected error: {err}"
+        );
     }
 }
