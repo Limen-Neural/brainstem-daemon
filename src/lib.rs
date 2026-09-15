@@ -17,5 +17,5 @@ pub use checkpoint::{ModelProvenance, restore_network};
 pub use daemon::RuntimeMode;
 pub use ingress::{
     BoundedIngress, ClassMetrics, DrainedTick, EnqueueOutcome, IngressConfig, IngressMetrics,
-    MessageClass, OverflowPolicy,
+    MAX_QUEUE_CAPACITY, MessageClass, OverflowPolicy,
 };

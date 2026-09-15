@@ -125,6 +125,7 @@ control_policy      = "block_timeout"
 telemetry_capacity  = 128
 telemetry_policy    = "drop_oldest"
 block_timeout_ms    = 5
+max_payload_len     = 4096
 ```
 
 ### Backends (temporary)
@@ -229,7 +230,7 @@ Every in-process channel that can feed the tick loop goes through `BoundedIngres
 | `sensory` | `StimulusSource` stimuli | 64 | `drop_oldest` | Latest frames matter; losses are counted |
 | `telemetry` | reserved bulk class | 128 | `drop_oldest` | Isolated so it cannot fill the control queue |
 
-`coalesce` always stores at most one occupant. `block_timeout` waits up to `block_timeout_ms` (default 5). The tick loop uses `try_enqueue` when admitting a backend packet so the 1 kHz cadence never waits on itself.
+`coalesce` always stores at most one occupant. `block_timeout` waits up to `block_timeout_ms` (default 5) against a **single deadline** (spurious wakes do not restart the timer). Queue capacity is capped at `MAX_QUEUE_CAPACITY` (16384). Each packet's `stimuli` and `modulators` vectors are capped by `max_payload_len` (default 4096). The tick loop uses `try_enqueue` when admitting a backend packet so the 1 kHz cadence never waits on itself. Empty backend placeholders (`Ok(None)` or empty stimuli) are not enqueued, so they cannot evict in-process sensory.
 
 Each lost or coalesced event increments exactly one of `rejected`, `dropped`, or `coalesced`. Snapshots also record `accepted`, `depth`, `high_water_mark`, `producer_waits`, and `producer_wait_ns` with a `class` label only. `BoundedIngress::shutdown()` unblocks waiters and refuses further enqueue.
 
