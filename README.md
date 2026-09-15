@@ -1,5 +1,6 @@
 # Brainstem Daemon
 
+[![CI](https://github.com/Limen-Neural/brainstem-daemon/actions/workflows/ci.yml/badge.svg)](https://github.com/Limen-Neural/brainstem-daemon/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 Headless spiking neural-network runtime written in Rust.
@@ -252,8 +253,8 @@ restorecon -Rv ~/.config/soma
 ## Contributing
 
 Local quality gate (fmt, clippy, stub vs optional `corpus-ipc` tests):
-see [`REVIEW.md`](REVIEW.md). Multi-OS CI is tracked in
-[#21](https://github.com/Limen-Neural/brainstem-daemon/issues/21).
+see [`REVIEW.md`](REVIEW.md). GitHub Actions OS matrix and ZeroMQ skips:
+[`docs/ci.md`](docs/ci.md).
 
 ## License
 

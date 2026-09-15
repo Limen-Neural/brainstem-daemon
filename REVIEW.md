@@ -4,9 +4,9 @@ These commands are the **human quality bar** beyond GitHub Actions.
 Run them before claiming a PR is ready when the change touches `src/`,
 `Cargo.toml`, public APIs, or CI.
 
-This file is the local checklist. Multi-OS CI is tracked separately in
-[#21](https://github.com/Limen-Neural/brainstem-daemon/issues/21) and is
-not duplicated here.
+This file is the local checklist. GitHub Actions runs the stub commands on
+Linux, macOS, and Windows, and the optional `corpus-ipc` job on Linux
+only. See [`docs/ci.md`](docs/ci.md).
 
 ## When to run
 

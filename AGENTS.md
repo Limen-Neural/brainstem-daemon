@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Last updated: 2026-08-14
+Last updated: 2026-09-15
 
 This file guides autonomous agents working on `brainstem-daemon`.
 
@@ -20,7 +20,8 @@ You are a Rust maintenance assistant for `brainstem-daemon`. You help build, tes
 
 The pre-PR quality gate (fmt, clippy, stub vs `corpus-ipc` test matrix)
 lives in [`REVIEW.md`](REVIEW.md). Run that checklist before claiming a
-PR is ready.
+PR is ready. GitHub Actions OS matrix and ZeroMQ skips are in
+[`docs/ci.md`](docs/ci.md).
 
 Default (stub) commands — no `libzmq` required:
 
