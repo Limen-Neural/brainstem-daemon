@@ -1,0 +1,108 @@
+# Independent cross-platform signal (outside GitHub Actions).
+# Stub (default features) must pass on Linux, macOS, and Windows without libzmq.
+# Optional corpus-ipc / ZeroMQ runs on Linux and macOS after installing system
+# libzmq. Windows skips that job: Microsoft-hosted Windows images do not ship
+# libzmq, and installing it would couple the portable stub matrix to optional
+# native deps. rustfmt is OS-independent and runs on Ubuntu only.
+# See docs/ci.md.
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  CARGO_TERM_COLOR: always
+  CARGO_HOME: $(Pipeline.Workspace)/.cargo
+
+jobs:
+  - job: rustfmt
+    displayName: rustfmt
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+      - checkout: self
+      - template: .azure-pipelines/install-rust.yml
+        parameters:
+          cacheKind: rustfmt
+          cacheTarget: false
+      - script: cargo fmt --check
+        displayName: cargo fmt --check
+
+  - job: stub
+    displayName: stub
+    strategy:
+      matrix:
+        Linux:
+          imageName: ubuntu-latest
+        macOS:
+          imageName: macOS-latest
+        Windows:
+          imageName: windows-latest
+    pool:
+      vmImage: $(imageName)
+    steps:
+      - checkout: self
+      - template: .azure-pipelines/install-rust.yml
+        parameters:
+          cacheKind: stub
+      - script: cargo clippy --locked --all-targets -- -D warnings
+        displayName: cargo clippy (default features)
+      - script: cargo build --locked
+        displayName: cargo build (default features)
+      - script: cargo test --locked
+        displayName: cargo test (default features)
+
+  - job: corpus_ipc
+    displayName: corpus-ipc
+    strategy:
+      matrix:
+        Linux:
+          imageName: ubuntu-latest
+          zmqInstall: apt
+          cc: gcc
+          cxx: g++
+        macOS:
+          imageName: macOS-latest
+          zmqInstall: brew
+          cc: clang
+          cxx: clang++
+    pool:
+      vmImage: $(imageName)
+    steps:
+      - checkout: self
+      - bash: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libzmq3-dev pkg-config g++
+        displayName: Install libzmq (Ubuntu)
+        condition: eq(variables['zmqInstall'], 'apt')
+      - bash: |
+          set -euo pipefail
+          brew install zeromq pkg-config
+          echo "##vso[task.setvariable variable=PKG_CONFIG_PATH]$(brew --prefix zeromq)/lib/pkgconfig"
+        displayName: Install libzmq (macOS)
+        condition: eq(variables['zmqInstall'], 'brew')
+      - template: .azure-pipelines/install-rust.yml
+        parameters:
+          cacheKind: corpus-ipc
+      - script: cargo clippy --locked --all-targets --all-features -- -D warnings
+        displayName: cargo clippy (all-features)
+        env:
+          CC: $(cc)
+          CXX: $(cxx)
+      - script: cargo build --locked --all-features
+        displayName: cargo build (all-features)
+        env:
+          CC: $(cc)
+          CXX: $(cxx)
+      - script: cargo test --locked --all-features
+        displayName: cargo test (all-features)
+        env:
+          CC: $(cc)
+          CXX: $(cxx)

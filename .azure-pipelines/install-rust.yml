@@ -1,0 +1,42 @@
+# Shared rustup + Cargo cache for Azure Pipelines jobs.
+# cacheKind must distinguish stub vs corpus-ipc so restore-keys cannot
+# prefix-match the other feature's target/ artifacts.
+parameters:
+  - name: cacheKind
+    type: string
+  - name: cacheTarget
+    type: boolean
+    default: true
+
+steps:
+  - task: Cache@2
+    displayName: Cache cargo home
+    inputs:
+      key: '"cargo-home" | "$(Agent.OS)" | "${{ parameters.cacheKind }}" | $(Build.SourcesDirectory)/Cargo.lock | $(Build.SourcesDirectory)/rust-toolchain.toml'
+      restoreKeys: |
+        "cargo-home" | "$(Agent.OS)" | "${{ parameters.cacheKind }}"
+      path: $(CARGO_HOME)
+
+  - ${{ if eq(parameters.cacheTarget, true) }}:
+      - task: Cache@2
+        displayName: Cache cargo target
+        inputs:
+          key: '"cargo-target" | "$(Agent.OS)" | "${{ parameters.cacheKind }}" | $(Build.SourcesDirectory)/Cargo.lock | $(Build.SourcesDirectory)/rust-toolchain.toml'
+          restoreKeys: |
+            "cargo-target" | "$(Agent.OS)" | "${{ parameters.cacheKind }}"
+          path: $(Build.SourcesDirectory)/target
+
+  - bash: |
+      set -euo pipefail
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal --no-modify-path
+      echo "##vso[task.prependpath]${CARGO_HOME}/bin"
+    displayName: Install rustup (Unix)
+    condition: ne(variables['Agent.OS'], 'Windows_NT')
+
+  - powershell: |
+      $ErrorActionPreference = 'Stop'
+      Invoke-WebRequest -Uri https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe -OutFile "$env:AGENT_TEMPDIRECTORY\rustup-init.exe"
+      & "$env:AGENT_TEMPDIRECTORY\rustup-init.exe" -y --default-toolchain none --profile minimal --no-modify-path
+      Write-Host "##vso[task.prependpath]$env:CARGO_HOME\bin"
+    displayName: Install rustup (Windows)
+    condition: eq(variables['Agent.OS'], 'Windows_NT')

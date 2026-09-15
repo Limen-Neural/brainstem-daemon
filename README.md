@@ -253,8 +253,8 @@ restorecon -Rv ~/.config/soma
 ## Contributing
 
 Local quality gate (fmt, clippy, stub vs optional `corpus-ipc` tests):
-see [`REVIEW.md`](REVIEW.md). GitHub Actions OS matrix and ZeroMQ skips:
-[`docs/ci.md`](docs/ci.md).
+see [`REVIEW.md`](REVIEW.md). GitHub Actions and Azure Pipelines OS matrix
+and ZeroMQ skips: [`docs/ci.md`](docs/ci.md).
 
 ## License
 

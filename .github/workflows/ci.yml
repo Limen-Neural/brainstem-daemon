@@ -13,9 +13,12 @@ env:
   CARGO_TERM_COLOR: always
 
 # Stub (default features) must pass on Linux, macOS, and Windows without libzmq.
-# Optional corpus-ipc / ZeroMQ is Linux-only: GitHub-hosted macOS and Windows
-# runners do not install libzmq, so those OSes skip the feature job.
-# rustfmt is OS-independent and runs on Ubuntu only. See docs/ci.md.
+# Optional corpus-ipc / ZeroMQ runs on Linux and macOS after installing system
+# libzmq. Windows skips that job: GitHub-hosted Windows images do not ship
+# libzmq, and installing it would couple the portable stub matrix to optional
+# native deps. rustfmt is OS-independent and runs on Ubuntu only.
+# Azure Pipelines (azure-pipelines.yml) is the independent OS matrix.
+# See docs/ci.md.
 
 jobs:
   fmt:
@@ -75,17 +78,34 @@ jobs:
         run: cargo test --locked
 
   corpus-ipc:
-    name: corpus-ipc (ubuntu)
-    runs-on: ubuntu-latest
+    name: corpus-ipc (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cc: gcc
+            cxx: g++
+          - os: macos-latest
+            cc: clang
+            cxx: clang++
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
 
-      - name: Install libzmq
+      - name: Install libzmq (Ubuntu)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libzmq3-dev
+
+      - name: Install libzmq (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install zeromq pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix zeromq)/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # 1.97.1
@@ -107,18 +127,18 @@ jobs:
 
       - name: Run clippy (all-features)
         env:
-          CC: gcc
-          CXX: g++
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Build (all-features)
         env:
-          CC: gcc
-          CXX: g++
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
         run: cargo build --locked --all-features
 
       - name: Test (all-features)
         env:
-          CC: gcc
-          CXX: g++
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
         run: cargo test --locked --all-features
