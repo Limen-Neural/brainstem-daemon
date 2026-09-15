@@ -4,9 +4,9 @@ These commands are the **human quality bar** beyond GitHub Actions.
 Run them before claiming a PR is ready when the change touches `src/`,
 `Cargo.toml`, public APIs, or CI.
 
-This file is the local checklist. GitHub Actions runs the stub commands on
-Linux, macOS, and Windows, and the optional `corpus-ipc` job on Linux
-only. See [`docs/ci.md`](docs/ci.md).
+This file is the local checklist. GitHub Actions and Azure Pipelines run
+the stub commands on Linux, macOS, and Windows, and the optional
+`corpus-ipc` job on Linux and macOS. See [`docs/ci.md`](docs/ci.md).
 
 ## When to run
 
@@ -42,6 +42,8 @@ cargo test --locked
 ```bash
 # Debian/Ubuntu
 sudo apt-get install -y libzmq3-dev
+# macOS
+# brew install zeromq pkg-config
 
 cargo clippy --locked --all-targets --features corpus-ipc -- -D warnings
 cargo test --locked --features corpus-ipc

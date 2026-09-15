@@ -20,8 +20,8 @@ You are a Rust maintenance assistant for `brainstem-daemon`. You help build, tes
 
 The pre-PR quality gate (fmt, clippy, stub vs `corpus-ipc` test matrix)
 lives in [`REVIEW.md`](REVIEW.md). Run that checklist before claiming a
-PR is ready. GitHub Actions OS matrix and ZeroMQ skips are in
-[`docs/ci.md`](docs/ci.md).
+PR is ready. GitHub Actions / Azure Pipelines OS matrix and ZeroMQ skips
+are in [`docs/ci.md`](docs/ci.md).
 
 Default (stub) commands — no `libzmq` required:
 
@@ -32,7 +32,8 @@ Default (stub) commands — no `libzmq` required:
 - `cargo build --release --bin brainstem-daemon` — build the release binary.
 
 Optional `corpus-ipc` / `--all-features` commands need the system ZeroMQ
-dev package (`libzmq3-dev` on Debian/Ubuntu). They are not vendored:
+dev package (`libzmq3-dev` on Debian/Ubuntu; Homebrew `zeromq` on macOS).
+They are not vendored:
 
 - `cargo test --locked --all-features`
 - `cargo clippy --locked --all-targets --all-features -- -D warnings`

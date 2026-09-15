@@ -10,8 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - GitHub Actions CI matrix: stub build/test/clippy on Linux, macOS, and
-  Windows; rustfmt and optional `corpus-ipc` / libzmq jobs on Linux only
-  (`docs/ci.md`).
+  Windows; rustfmt on Linux; optional `corpus-ipc` / libzmq jobs on Linux
+  and macOS (`docs/ci.md`).
+- Azure Pipelines (`azure-pipelines.yml`): independent Linux / macOS /
+  Windows stub matrix plus `corpus-ipc` on Linux and macOS, matching the
+  GitHub Actions command set (`docs/ci.md`).
 - Stub vs `corpus-ipc` backend feature truth table in `README.md`: which Cargo flags wire which backend, which TOML keys apply, and which env vars are no-ops under stub. Documents that `model_path` is passed literally (no `~` expansion) but currently ignored by pinned `ZmqBrainBackend`, that `CORPUS_IPC_ZMQ_READOUT_IPC` is binary-set compatibility only, and that `log_level` is binary tracing-init only.
 - GitHub Actions CI workflow for formatting, clippy, build, and test validation.
 - Config-driven `ServiceRegistry` and `BrainstemDaemon` in the library.
