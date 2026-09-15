@@ -39,13 +39,14 @@ waiting on the tick loop's backend or `SpikingNetwork::step`.
 | `running` | queue fill ≥ `overload_high` | `degraded` | true | true | Reason `overload`. |
 | `degraded` (overload) | fill ≤ `overload_low` | `running` (if no other reasons) | true | true | Hysteresis: mid-band does not recover. |
 | `running` / `degraded` | `BeginDrain` | `draining` | true | false | SIGTERM/SIGINT. Does not return to ready. |
-| any non-fatal | `Fatal` / init or checkpoint failure | `fatal` | true | false | Subsequent validate/tick/drain cannot restore ready. |
+| any started non-fatal | `Fatal` / init or checkpoint failure | `fatal` | true | false | Subsequent validate/tick/drain cannot restore ready. Unstarted init/checkpoint failures stay ignored. |
 
 After `BeginDrain`, `BrainstemDaemon::run` stops the control listener. External
 `/readyz` probes may get connection refused rather than `503`. In-process
 `HealthHandle::snapshot()` still reports `phase: draining`. There is no probe
-grace period. If all 32 in-flight control slots are busy, a new connection gets
-a bounded `503` (`busy`) instead of a silent drop.
+grace period. If all 32 in-flight control slots are busy, or a snapshot read
+would block on an in-flight `apply`, the connection gets a bounded `503`
+(`busy`) instead of waiting or dropping.
 
 Recoverable reasons (`stale_input`, `overload`) are independent: clearing one
 leaves the other. `capacity == 0` means “no queue instrumented” (LIM-1216) and

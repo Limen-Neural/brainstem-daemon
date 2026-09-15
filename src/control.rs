@@ -115,8 +115,7 @@ fn spawn_served_conn(stream: TcpStream, permit: OwnedSemaphorePermit, health: He
 fn spawn_busy_conn(stream: TcpStream) {
     tokio::spawn(async move {
         let mut stream = stream;
-        let response = http_response(503, "text/plain; charset=utf-8", b"busy\n");
-        if let Err(e) = write_http_response(&mut stream, &response).await {
+        if let Err(e) = write_http_response(&mut stream, &busy_http()).await {
             warn!("control busy reply failed: {e}");
         }
     });
@@ -124,8 +123,18 @@ fn spawn_busy_conn(stream: TcpStream) {
 
 async fn handle_connection(mut stream: TcpStream, health: &HealthHandle) -> Result<()> {
     let req = read_http_request(&mut stream).await?;
-    let response = render_http(&req, &health.snapshot());
-    write_http_response(&mut stream, &response).await
+    write_http_response(&mut stream, &control_response(&req, health)).await
+}
+
+fn control_response(req: &str, health: &HealthHandle) -> Vec<u8> {
+    match health.try_snapshot() {
+        Some(snapshot) => render_http(req, &snapshot),
+        None => busy_http(),
+    }
+}
+
+fn busy_http() -> Vec<u8> {
+    http_response(503, "text/plain; charset=utf-8", b"busy\n")
 }
 
 async fn read_http_request(stream: &mut TcpStream) -> Result<String> {
@@ -366,6 +375,16 @@ mod tests {
         assert!(raw.contains("HTTP/1.1 503"), "{raw}");
         assert!(raw.contains("busy"), "{raw}");
         assert_eq!(slots.available_permits(), 0);
+    }
+
+    #[test]
+    fn control_response_is_503_when_snapshot_would_block() {
+        let health = HealthHandle::started(HealthLimits::default());
+        let _guard = health.lock_write_for_test();
+        let raw =
+            String::from_utf8(control_response("GET /livez HTTP/1.1\r\n\r\n", &health)).unwrap();
+        assert!(raw.starts_with("HTTP/1.1 503"));
+        assert!(raw.contains("busy"));
     }
 
     async fn http_get(addr: SocketAddr, path: &str) -> String {
