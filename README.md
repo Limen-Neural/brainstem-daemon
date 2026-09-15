@@ -84,13 +84,27 @@ enabled = true
 [[services]]
 name = "critic-ipc"
 enabled = true
+
+# Bounded ingress (optional; defaults shown). Each class has its own
+# capacity and overflow policy so bulk telemetry cannot starve control.
+[ingress]
+sensory_capacity    = 64
+sensory_policy      = "drop_oldest"
+reward_capacity     = 8
+reward_policy       = "coalesce"
+control_capacity    = 16
+control_policy      = "block_timeout"
+telemetry_capacity  = 128
+telemetry_policy    = "drop_oldest"
+block_timeout_ms    = 5
+max_payload_len     = 4096
 ```
 
 ### Backends (temporary)
 
 Default Cargo features are empty (`default = []` in `Cargo.toml`). That path uses the in-memory **stub** backend (`StubStimulusSource` + `NoopSpikeSink`) and does **not** need `libzmq`. The optional `corpus-ipc` feature (same as `--all-features` today) pulls the `corpus-ipc` git dependency and links system ZeroMQ (`libzmq3-dev` on Debian/Ubuntu). It does not vendor ZeroMQ.
 
-`DaemonConfig` deserialization is **not** feature-gated: `spine_sub_port`, `spine_pub_port`, and `model_path` are still required in TOML even on the stub path (`services` is the only optional field, defaulting to empty). Effect at runtime depends on which backend is **wired**.
+`DaemonConfig` deserialization is **not** feature-gated: `spine_sub_port`, `spine_pub_port`, and `model_path` are still required in TOML even on the stub path (`services` defaults to empty; `ingress` defaults to the bounded-queue table below). Effect at runtime depends on which backend is **wired**.
 
 #### Feature truth table
 
@@ -112,6 +126,7 @@ Library users who want live ZMQ must build that pair themselves under `#[cfg(fea
 | `tick_rate_hz` | used | used |
 | `log_level` | binary tracing init only; unused by `::new()` / `run` | binary tracing init only; unused by `::new()` / `run` |
 | `services` | used (`ServiceRegistry`) | used |
+| `ingress` | used (bounded class queues in the tick loop) | used (same queues wrap backend packets before the network step) |
 | `spine_sub_port` | parsed, **no-op** | sets `SPIKENAUT_ZMQ_READOUT_IPC` to `tcp://127.0.0.1:<port>` (also sets unused `CORPUS_IPC_ZMQ_READOUT_IPC` for compatibility) |
 | `spine_pub_port` | parsed, **no-op** | binds ZMQ PUB `tcp://*:<port>` |
 | `model_path` | parsed, **no-op** (`StubStimulusSource::initialize` ignores it) | passed literally to `initialize` (no `~` expansion); pinned `ZmqBrainBackend` currently ignores `_model_path` |
@@ -128,6 +143,21 @@ Library users who want live ZMQ must build that pair themselves under `#[cfg(fea
 - `CORPUS_IPC_ZMQ_READOUT_IPC` (the binary still sets this alongside `SPIKENAUT_ZMQ_READOUT_IPC` for compatibility; pinned `corpus-ipc` does not read it)
 
 Under stub those TOML keys are still parsed. The env vars are unset by the default binary. Nothing in this crate reads them without the `corpus-ipc` feature.
+
+### Bounded ingress
+
+Every in-process channel that can feed the tick loop goes through `BoundedIngress` (one queue per message class). OS `SIGINT`/`SIGTERM` stay out-of-band in `tokio::select!` so shutdown cannot sit behind bulk traffic.
+
+| Class | Feeds the tick from | Default capacity | Overflow | Why |
+|---|---|---|---|---|
+| `control` | in-band control/safety envelopes | 16 | `block_timeout` (then reject) | Producer sees backpressure; not silently dropped |
+| `reward` | `IngressPacket.modulators` | 8 (depth 0..=1) | `coalesce` | Neuromodulators are a snapshot; keep latest |
+| `sensory` | `StimulusSource` stimuli | 64 | `drop_oldest` | Latest frames matter; losses are counted |
+| `telemetry` | reserved bulk class | 128 | `drop_oldest` | Isolated so it cannot fill the control queue |
+
+`coalesce` always stores at most one occupant. `block_timeout` waits up to `block_timeout_ms` (default 5) against a **single deadline** (spurious wakes do not restart the timer). Queue capacity is capped at `MAX_QUEUE_CAPACITY` (16384). Each packet's `stimuli` and `modulators` vectors are capped by `max_payload_len` (default 4096). The tick loop uses `try_enqueue` when admitting a backend packet so the 1 kHz cadence never waits on itself. Empty backend placeholders (`Ok(None)` or empty stimuli) are not enqueued, so they cannot evict in-process sensory.
+
+Each lost or coalesced event increments exactly one of `rejected`, `dropped`, or `coalesced`. Snapshots also record `accepted`, `depth`, `high_water_mark`, `producer_waits`, and `producer_wait_ns` with a `class` label only. `BoundedIngress::shutdown()` unblocks waiters and refuses further enqueue.
 
 The stub backend is always safe for core library builds, tests, and simulation. Example (feature-independent):
 
