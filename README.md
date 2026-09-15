@@ -22,11 +22,14 @@ Headless spiking neural-network runtime written in Rust.
 Requires **Rust 1.97.1 only** (`rust-toolchain.toml`). Do not use other toolchains.
 
 ```bash
-# Release build (includes brainstem-daemon)
+# Release build, default stub backend (no libzmq)
 cargo build --release --bin brainstem-daemon
+
+# Optional ZeroMQ / corpus-ipc backend (needs system libzmq)
+cargo build --release --bin brainstem-daemon --features corpus-ipc
 ```
 
-The binary will be located at `target/release/brainstem-daemon`.
+The binary will be located at `target/release/brainstem-daemon`. Feature flag vs backend vs which config keys apply is in [Backends (temporary)](#backends-temporary).
 
 ### Cargo profiles
 
@@ -67,7 +70,7 @@ model_path     = "~/models/soma16.mem" # weights/thresholds
 tick_rate_hz   = 1000      # loop frequency
 log_level      = "info"    # error|warn|info|debug|trace
 
-# ZMQ
+# ZMQ (still required in TOML; no-ops under the default stub backend)
 spine_sub_port = 5555      # stimuli in
 spine_pub_port = 5556      # spikes out
 
@@ -84,18 +87,42 @@ enabled = true
 
 ### Backends (temporary)
 
-`corpus-ipc` / ZeroMQ is currently an **optional** feature (`corpus-ipc`). When the feature is disabled (the default during this temporary decoupling phase), an in-memory stub backend is used instead.
+Default Cargo features are empty (`default = []` in `Cargo.toml`). That path uses the in-memory **stub** backend (`StubStimulusSource` + `NoopSpikeSink`) and does **not** need `libzmq`. The optional `corpus-ipc` feature (same as `--all-features` today) pulls the `corpus-ipc` git dependency and links system ZeroMQ (`libzmq3-dev` on Debian/Ubuntu). It does not vendor ZeroMQ.
 
-Only the following settings are specific to the ZMQ backend:
+`DaemonConfig` deserialization is **not** feature-gated: `spine_sub_port`, `spine_pub_port`, and `model_path` are still required in TOML even on the stub path (`services` is the only optional field, defaulting to empty). Effect at runtime depends on which backend is **wired**.
+
+#### Feature truth table
+
+| Cargo flags | Wired backend | `libzmq` | Binary (`brainstem-daemon`) | Library `BrainstemDaemon::new()` / `try_new()` |
+|---|---|---|---|---|
+| default / `--no-default-features` | stub | not required | no sockets; logs `🔌 Using stub backend` | stub |
+| `--features corpus-ipc` | ZMQ / `corpus-ipc` | required | SUB via env, PUB on `spine_pub_port`; logs `📡 Using ZMQ corpus-ipc backend` | **still stub** |
+| `--all-features` | same as `corpus-ipc` | required | same as `--features corpus-ipc` | **still stub** |
+
+Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`. Those always inject `BackendPair::stub()`. Only `src/bin/brainstem_daemon.rs` constructs `ZmqStimulusSource` + `ZmqSpikeSink` when `corpus-ipc` is on. Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`.
+
+#### Config keys and env vars
+
+| Setting | Stub (default binary / `::new()`) | `corpus-ipc` binary |
+|---|---|---|
+| `lif_count`, `izh_count`, `channels` | used (network dimensions) | used |
+| `tick_rate_hz`, `log_level` | used | used |
+| `services` | used (`ServiceRegistry`) | used |
+| `spine_sub_port` | parsed, **no-op** | sets readout env vars to `tcp://127.0.0.1:<port>` |
+| `spine_pub_port` | parsed, **no-op** | binds ZMQ PUB `tcp://*:<port>` |
+| `model_path` | parsed, **no-op** (`StubStimulusSource::initialize` ignores it) | passed to `ZmqStimulusSource::initialize` |
+
+**Settings that only take effect with `corpus-ipc`** (the `brainstem-daemon` binary built `--features corpus-ipc`):
 
 - `spine_sub_port`
 - `spine_pub_port`
-- `SPIKENAUT_ZMQ_READOUT_IPC` (or `CORPUS_IPC_ZMQ_READOUT_IPC`)
+- `model_path`
+- `SPIKENAUT_ZMQ_READOUT_IPC` (const `CORPUS_IPC_READOUT_ENV` in code)
+- `CORPUS_IPC_ZMQ_READOUT_IPC` (what the pinned `corpus-ipc` backend reads)
 
-When using the stub backend these have no effect.
+Under stub those TOML keys are still parsed, and the two env vars are **no-ops**: the default binary never sets them, and nothing in this crate reads them without the feature.
 
-The stub backend is always safe to use for core library builds/tests and simulation runs.
-Example of constructing a daemon with the stub backend (feature-independent):
+The stub backend is always safe for core library builds, tests, and simulation. Example (feature-independent):
 
 ```rust
 use brainstem_daemon::{BrainstemDaemon, DaemonConfig, BackendPair};
@@ -171,6 +198,9 @@ Stop it gracefully with `Ctrl-C` (SIGINT) on all platforms. On Unix, `kill` (SIG
    ```
 
 ### SELinux
+
+Needed only when the binary is built with `--features corpus-ipc` (ports `spine_sub_port` / `spine_pub_port`). The default stub backend opens no sockets.
+
 ```bash
 sudo semanage port -a -t user_tcp_port_t -p tcp 5555
 sudo semanage port -a -t user_tcp_port_t -p tcp 5556
@@ -186,24 +216,24 @@ restorecon -Rv ~/.config/soma
 
 | Concern | Owned by `brainstem-daemon` | Not owned |
 |---|---|---|
-| Purpose | Run `neuromod::SpikingNetwork` in a headless loop; ingest stimuli via `corpus-ipc`; publish spikes via ZeroMQ | Training/weight optimization; hardware I/O; business logic (trading/mining) |
+| Purpose | Run `neuromod::SpikingNetwork` in a headless loop; ingest stimuli and publish spikes via a pluggable `BackendPair` (stub by default; `corpus-ipc` / ZeroMQ when that feature is enabled) | Training/weight optimization; hardware I/O; business logic (trading/mining) |
 | Configuration | Load `DaemonConfig` from TOML; maintain a config-driven `ServiceRegistry` | Hardcoded service names; upstream `soma-engine` service names |
-| Networking | ZeroMQ PUB/SUB; `tokio` async runtime | Direct exchange adapters; market-data feeds |
-| Dependencies | `corpus-ipc`, `neuromod`, `tokio`, `zmq`, `serde`, `tracing`, `clap` | Exchange/Mining-specific adapters; GPU drivers; weight-training frameworks |
+| Networking | Optional ZeroMQ PUB/SUB when built with `--features corpus-ipc`; `tokio` async runtime. Default stub opens no sockets | Direct exchange adapters; market-data feeds |
+| Dependencies | `neuromod`, `tokio`, `serde`, `tracing`, `clap`; optional `corpus-ipc` + `zmq` behind the `corpus-ipc` feature (off by default) | Exchange/Mining-specific adapters; GPU drivers; weight-training frameworks |
 
 ### Relationship to other projects
 
 - **`neuromod`** — core spiking-network library consumed by the daemon. The daemon configures dimensions and drives `SpikingNetwork::step` on every tick.
-- **`limbic-critic`** — expected to send neuromodulator / critic signals over the `corpus-ipc` ingress channel. The daemon applies them but does not generate them.
-- **`silicon-bridge`** — consumes the daemon's outbound spike stream (ZeroMQ PUB) for downstream tasks. The daemon does not know what silicon-bridge does with the spikes.
+- **`limbic-critic`** — expected to send neuromodulator / critic signals over the `corpus-ipc` ingress channel when that feature is enabled. The daemon applies them but does not generate them. The default stub path does not open an ingress socket.
+- **`silicon-bridge`** — consumes the daemon's outbound spike stream (ZeroMQ PUB) when the `corpus-ipc` feature is enabled. The daemon does not know what silicon-bridge does with the spikes. The default stub sink is a no-op.
 - **`Spikenaut-Hardware`** — physical hardware coordination is out of scope; the daemon publishes logical spike events only.
 - **`plasticity-lab`** — weight training and plasticity experiments live here, not in the daemon.
 
 ### Allowed dependencies
 
-- `corpus-ipc` (with `zmq` feature)
+- `corpus-ipc` (optional Cargo feature `corpus-ipc`, off by default; pulls `zmq`)
 - `neuromod`
-- `tokio`, `zmq`, `serde`, `toml`, `tracing`, `clap`, `anyhow`, `dirs`
+- `tokio`, `serde`, `toml`, `tracing`, `clap`, `anyhow`, `dirs`
 
 ### Forbidden dependencies / domains
 

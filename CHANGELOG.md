@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Stub vs `corpus-ipc` backend feature truth table in `README.md`: which Cargo flags wire which backend, which TOML keys apply, and which env vars are no-ops under stub.
 - GitHub Actions CI workflow for formatting, clippy, build, and test validation.
 - Config-driven `ServiceRegistry` and `BrainstemDaemon` in the library.
 - `DaemonConfig.services` field for registering named, enabled services.

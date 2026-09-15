@@ -52,6 +52,8 @@ For most development, use the in-memory stub backend. It needs no `libzmq` and n
 
 If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls the `corpus-ipc` git dependency and links the system `libzmq` library (install `libzmq3-dev` on Debian/Ubuntu). It does not vendor ZeroMQ.
 
+The README [Backends (temporary)](README.md#backends-temporary) section is the user-facing truth table: Cargo flags → backend → which config keys and env vars apply. `BrainstemDaemon::new()` always uses the stub even when the feature is enabled; only the `brainstem-daemon` binary wires ZMQ.
+
 ### Running the daemon
 
 Build the release binary:
