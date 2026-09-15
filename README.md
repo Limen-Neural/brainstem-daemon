@@ -20,7 +20,7 @@ Headless spiking neural-network runtime written in Rust.
 
 ## Building
 
-Requires **Rust 1.97.1 only** (`rust-toolchain.toml`). Do not use other toolchains.
+Requires **Rust 1.98.1 only** (`rust-toolchain.toml`). Do not use other toolchains.
 
 ```bash
 # Release build, default stub backend (no libzmq)
@@ -102,7 +102,19 @@ Default Cargo features are empty (`default = []` in `Cargo.toml`). That path use
 
 Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`. Those always inject `BackendPair::stub()`. Only `src/bin/brainstem_daemon.rs` constructs `ZmqStimulusSource` + `ZmqSpikeSink` when `corpus-ipc` is on.
 
-Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. Call `StimulusSource::initialize(...)` on the source first (as the binary does). Neither constructor nor `run` calls `initialize`; skipping it makes ingress fail with `ZmqBrainBackend not initialized`.
+Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. Call `StimulusSource::initialize(...)` on the source first (as the binary does). Neither constructor nor `run` calls `initialize`; skipping it makes ingress fail with `ZMQ stimulus source not initialized`.
+
+### Integration smoke (Thalamic → corpus-ipc → Brainstem)
+
+`tests/thalamic_brainstem_smoke.rs` is a CPU-only cross-contract harness (no GPU). It runs when the `corpus-ipc` feature is enabled:
+
+```bash
+cargo test --locked --features corpus-ipc --test thalamic_brainstem_smoke
+```
+
+The Thalamic fixture (`tests/fixtures/thalamic_producer.rs`) produces `IpcMessage::Stimuli(StimulusBatch)` from simulated telemetry. It does not import `neuromod` or own a `SpikingNetwork`. Brainstem loads an explicit JSON checkpoint (`write_nonblank_checkpoint`) before ticking, preserves `valid_mask` across the wire, and rejects incompatible schema/JSON loudly. A separate assertion keeps the fixture's safety flag healthy when Brainstem/transport is absent.
+
+The default stub `cargo test` path does not compile this harness (`required-features = ["corpus-ipc"]`).
 
 #### Config keys and env vars
 
@@ -112,20 +124,17 @@ Library users who want live ZMQ must build that pair themselves under `#[cfg(fea
 | `tick_rate_hz` | used | used |
 | `log_level` | binary tracing init only; unused by `::new()` / `run` | binary tracing init only; unused by `::new()` / `run` |
 | `services` | used (`ServiceRegistry`) | used |
-| `spine_sub_port` | parsed, **no-op** | sets `SPIKENAUT_ZMQ_READOUT_IPC` to `tcp://127.0.0.1:<port>` (also sets unused `CORPUS_IPC_ZMQ_READOUT_IPC` for compatibility) |
+| `spine_sub_port` | parsed, **no-op** | sets `SPIKENAUT_ZMQ_READOUT_IPC` and `CORPUS_IPC_ZMQ_READOUT_IPC` to `tcp://127.0.0.1:<port>` |
 | `spine_pub_port` | parsed, **no-op** | binds ZMQ PUB `tcp://*:<port>` |
-| `model_path` | parsed, **no-op** (`StubStimulusSource::initialize` ignores it) | passed literally to `initialize` (no `~` expansion); pinned `ZmqBrainBackend` currently ignores `_model_path` |
+| `model_path` | parsed; if the file exists it is loaded as a JSON checkpoint, otherwise a blank `with_dimensions` network is used | same checkpoint load; ZMQ source `initialize` only connects the SUB socket |
 
 **Settings that only take effect with `corpus-ipc`** (the `brainstem-daemon` binary built `--features corpus-ipc`):
 
-- `spine_sub_port` (drives `SPIKENAUT_ZMQ_READOUT_IPC`)
+- `spine_sub_port` (drives `SPIKENAUT_ZMQ_READOUT_IPC` and `CORPUS_IPC_ZMQ_READOUT_IPC`)
 - `spine_pub_port`
-- `SPIKENAUT_ZMQ_READOUT_IPC` (const `CORPUS_IPC_READOUT_ENV`; this is what pinned `ZmqBrainBackend::initialize` reads)
+- `SPIKENAUT_ZMQ_READOUT_IPC` / `CORPUS_IPC_ZMQ_READOUT_IPC` (JSON `IpcMessage` SUB endpoint)
 
-**Passed through / set, but currently unused by the pinned dep:**
-
-- `model_path` (literal filesystem path; `~` is not expanded; passed to `initialize`, which names the argument `_model_path` and does not consume it)
-- `CORPUS_IPC_ZMQ_READOUT_IPC` (the binary still sets this alongside `SPIKENAUT_ZMQ_READOUT_IPC` for compatibility; pinned `corpus-ipc` does not read it)
+The ZMQ source subscribes to **JSON** `corpus_ipc::IpcMessage` frames (`Stimuli` / `Neuromodulators`). It does not use the legacy binary readout packet.
 
 Under stub those TOML keys are still parsed. The env vars are unset by the default binary. Nothing in this crate reads them without the `corpus-ipc` feature.
 

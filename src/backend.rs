@@ -23,6 +23,13 @@ pub struct IngressPacket {
     /// Optional raw modulator values (e.g. [dopamine, cortisol, acetylcholine, tempo, ...]).
     /// When `None`, the caller should use defaults (see `decode_inputs`).
     pub modulators: Option<Vec<f32>>,
+    /// Per-channel validity mask copied from a typed `StimulusBatch` when present.
+    /// `false` means the corresponding stimulus is a placeholder, not a real zero.
+    pub valid_mask: Option<Vec<bool>>,
+    /// Optional typed batch id from `corpus-ipc` stimulus ingress.
+    pub batch_id: Option<u64>,
+    /// Optional stimulus timestamp in nanoseconds from `corpus-ipc`.
+    pub timestamp_ns: Option<u64>,
 }
 
 /// Local spike event type (independent of any external crate).
@@ -103,6 +110,9 @@ impl StimulusSource for StubStimulusSource {
         Ok(Some(IngressPacket {
             stimuli: Vec::new(),
             modulators: None,
+            valid_mask: None,
+            batch_id: None,
+            timestamp_ns: None,
         }))
     }
 
@@ -120,14 +130,14 @@ impl SpikeSink for NoopSpikeSink {
     }
 }
 
-/// Collecting sink for tests. Collects every emitted batch.
-#[cfg(test)]
+/// Collecting sink for tests and the integration smoke harness.
+#[derive(Default)]
 pub struct CollectingSpikeSink {
     pub emitted: Vec<Vec<SpikeEvent>>,
 }
 
-#[cfg(test)]
 impl CollectingSpikeSink {
+    /// Create an empty collector.
     pub fn new() -> Self {
         Self {
             emitted: Vec::new(),
@@ -135,14 +145,6 @@ impl CollectingSpikeSink {
     }
 }
 
-#[cfg(test)]
-impl Default for CollectingSpikeSink {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
 impl SpikeSink for CollectingSpikeSink {
     fn emit(&mut self, spikes: &[SpikeEvent], _batch_time: std::time::Duration) -> Result<()> {
         self.emitted.push(spikes.to_vec());
@@ -156,15 +158,19 @@ impl SpikeSink for CollectingSpikeSink {
 #[cfg(feature = "corpus-ipc")]
 mod zmq_impl {
     use super::*;
-    // In the current pinned corpus-ipc revision, the main trait is exported as
-    // `NeuralBackend` (deprecated alias). Importing it brings the trait methods
-    // into scope for ZmqBrainBackend.
-    use corpus_ipc::NeuralBackend as BackendConnector;
-    use corpus_ipc::{SpikeBatch, SpikeEvent as CorpusSpikeEvent, SpineMessage, ZmqBrainBackend};
+    use crate::ingress::{IngressPolicy, accept_ipc_json};
+    use corpus_ipc::{IpcMessage, SpikeBatch, SpikeEvent as CorpusSpikeEvent};
+
+    /// Env var read by this source for the SUB endpoint. The binary also sets
+    /// the historical `SPIKENAUT_ZMQ_READOUT_IPC` alias.
+    pub const CORPUS_IPC_ZMQ_READOUT_ENV: &str = "CORPUS_IPC_ZMQ_READOUT_IPC";
+    const LEGACY_READOUT_ENV: &str = "SPIKENAUT_ZMQ_READOUT_IPC";
 
     pub struct ZmqStimulusSource {
-        inner: ZmqBrainBackend,
+        socket: Option<SafeSocket>,
         channels: usize,
+        last_modulators: Option<Vec<f32>>,
+        max_age: std::time::Duration,
     }
 
     impl Default for ZmqStimulusSource {
@@ -175,52 +181,86 @@ mod zmq_impl {
 
     impl ZmqStimulusSource {
         pub fn new() -> Self {
+            Self::with_channels(0)
+        }
+
+        /// Construct with the configured ingress width used for width checks.
+        pub fn with_channels(ch: usize) -> Self {
             Self {
-                inner: ZmqBrainBackend::new(),
-                channels: 0,
+                socket: None,
+                channels: ch,
+                last_modulators: None,
+                max_age: std::time::Duration::from_secs(1),
             }
         }
 
-        /// Construct with known channel count so `next_ingress` can split
-        /// stimulus prefix from appended neuromodulator tail (4 floats).
-        ///
-        /// The default `new()` uses `channels=0`, which means the entire readout
-        /// is passed as stimuli and no modulators are extracted. Library users
-        /// who want automatic modulator extraction must use `with_channels(cfg.channels)`.
-        pub fn with_channels(ch: usize) -> Self {
-            Self {
-                inner: ZmqBrainBackend::new(),
-                channels: ch,
-            }
+        /// Override the freshness window applied to typed `StimulusBatch` timestamps.
+        pub fn with_max_age(mut self, max_age: std::time::Duration) -> Self {
+            self.max_age = max_age;
+            self
+        }
+
+        /// Connect the SUB socket to an explicit endpoint (tests / custom wiring).
+        pub fn connect(&mut self, endpoint: &str) -> Result<()> {
+            let context = ::zmq::Context::new();
+            let socket = context
+                .socket(::zmq::SUB)
+                .map_err(|e| anyhow::anyhow!("failed to create ZMQ SUB socket: {e}"))?;
+            socket
+                .set_subscribe(b"")
+                .map_err(|e| anyhow::anyhow!("ZMQ subscribe: {e}"))?;
+            socket
+                .set_rcvhwm(16)
+                .map_err(|e| anyhow::anyhow!("ZMQ rcvhwm: {e}"))?;
+            socket
+                .connect(endpoint)
+                .map_err(|e| anyhow::anyhow!("ZMQ connect to {endpoint}: {e}"))?;
+            self.socket = Some(SafeSocket { socket });
+            Ok(())
+        }
+
+        fn readout_endpoint() -> String {
+            std::env::var(CORPUS_IPC_ZMQ_READOUT_ENV)
+                .or_else(|_| std::env::var(LEGACY_READOUT_ENV))
+                .unwrap_or_else(|_| "tcp://127.0.0.1:5555".to_string())
+        }
+
+        fn now_ns() -> u64 {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64
         }
     }
 
     impl StimulusSource for ZmqStimulusSource {
         fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
-            let readout = self.inner.process_signals(&[])?;
-            let ch = self.channels;
-            if ch > 0 && readout.len() > ch {
-                let stimuli = readout[..ch].to_vec();
-                let modulators = if readout.len() >= ch + 4 {
-                    Some(readout[ch..ch + 4].to_vec())
-                } else {
-                    None
-                };
-                Ok(Some(IngressPacket {
-                    stimuli,
-                    modulators,
-                }))
-            } else {
-                Ok(Some(IngressPacket {
-                    stimuli: readout,
-                    modulators: None,
-                }))
+            let socket = self
+                .socket
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("ZMQ stimulus source not initialized"))?;
+            match socket.socket.recv_bytes(::zmq::DONTWAIT) {
+                Ok(buf) => {
+                    let policy = IngressPolicy::new(self.channels, Some(self.max_age));
+                    let mut packet = accept_ipc_json(&buf, &policy, Self::now_ns())
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    if let Some(mods) = packet.modulators.as_ref() {
+                        self.last_modulators = Some(mods.clone());
+                    } else {
+                        packet.modulators = self.last_modulators.clone();
+                    }
+                    Ok(Some(packet))
+                }
+                Err(::zmq::Error::EAGAIN) => Ok(None),
+                Err(e) => Err(anyhow::anyhow!("ZMQ recv failed: {e}")),
             }
         }
 
-        fn initialize(&mut self, model_path: Option<&str>) -> Result<()> {
-            self.inner.initialize(model_path)?;
-            Ok(())
+        fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+            if self.socket.is_some() {
+                return Ok(());
+            }
+            self.connect(&Self::readout_endpoint())
         }
     }
 
@@ -268,7 +308,7 @@ mod zmq_impl {
             let cap = self.corpus_buf.capacity();
             let corpus_spikes = std::mem::replace(&mut self.corpus_buf, Vec::with_capacity(cap));
 
-            let msg = SpineMessage::Spikes(SpikeBatch {
+            let msg = IpcMessage::Spikes(SpikeBatch {
                 session_id: None,
                 batch_id,
                 timestamp,
@@ -283,6 +323,77 @@ mod zmq_impl {
                 .map_err(|_| anyhow::anyhow!("ZMQ socket mutex poisoned"))?;
             guard.socket.send(payload, 0)?;
             Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::ingress::STIMULUS_SCHEMA;
+        use corpus_ipc::{BatchMetadata, StimulusBatch};
+        use std::collections::HashMap;
+        use std::time::Duration;
+
+        fn sample_frame(channels: usize, batch_id: u64) -> Vec<u8> {
+            let mut values = vec![0.0; channels];
+            let mut valid_mask = vec![true; channels];
+            values[0] = 1.0;
+            if channels > 1 {
+                valid_mask[1] = false;
+            }
+            let mut custom = HashMap::new();
+            custom.insert("schema".into(), STIMULUS_SCHEMA.to_string());
+            let batch = StimulusBatch {
+                session_id: Some("zmq-loopback".into()),
+                batch_id,
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64,
+                values,
+                valid_mask: Some(valid_mask),
+                metadata: Some(BatchMetadata {
+                    processing_latency_ns: None,
+                    source: Some("thalamic-relay-fixture".into()),
+                    custom,
+                }),
+            };
+            serde_json::to_vec(&IpcMessage::Stimuli(batch)).expect("serialize")
+        }
+
+        #[test]
+        fn typed_json_frame_round_trips_over_zmq() {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            drop(listener);
+            let endpoint = format!("tcp://127.0.0.1:{port}");
+
+            let context = ::zmq::Context::new();
+            let publisher = context.socket(::zmq::PUB).unwrap();
+            publisher.bind(&endpoint).unwrap();
+
+            let mut source =
+                ZmqStimulusSource::with_channels(4).with_max_age(Duration::from_secs(5));
+            source.connect(&endpoint).unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+
+            let frame = sample_frame(4, 100);
+            publisher.send(&frame, 0).unwrap();
+
+            let packet = (0..50)
+                .find_map(|_| match source.next_ingress() {
+                    Ok(Some(packet)) => Some(packet),
+                    Ok(None) => {
+                        std::thread::sleep(Duration::from_millis(10));
+                        None
+                    }
+                    Err(err) => panic!("ingress error: {err}"),
+                })
+                .expect("ZMQ SUB should receive a typed StimulusBatch");
+
+            assert_eq!(packet.batch_id, Some(100));
+            assert_eq!(packet.valid_mask.as_ref().map(|m| m[1]), Some(false));
+            assert!((packet.stimuli[0] - 1.0).abs() < f32::EPSILON);
         }
     }
 }

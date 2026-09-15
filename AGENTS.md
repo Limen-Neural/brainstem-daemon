@@ -45,7 +45,7 @@ If a `--all-features` build fails because the C++ compiler cannot find a standar
 
 ## Cursor Cloud setup
 
-This repository is preconfigured on the Cursor Cloud virtual machine. The Rust toolchain is pinned to **1.97.1 only** via `rust-toolchain.toml`. At startup the environment runs `cargo fetch`.
+This repository is preconfigured on the Cursor Cloud virtual machine. The Rust toolchain is pinned to **1.98.1 only** via `rust-toolchain.toml`. At startup the environment runs `cargo fetch`.
 
 ### Backend features
 
@@ -83,7 +83,7 @@ spine_pub_port = 5556
 model_path     = "~/models/soma16.mem"
 ```
 
-The `model_path` is not used by the stub backend.
-With `--features corpus-ipc` the binary passes it literally to `ZmqStimulusSource::initialize`.
-`~` is not expanded, and the pinned `ZmqBrainBackend` currently ignores `_model_path`.
+The `model_path` is loaded as a JSON checkpoint when the file exists; otherwise the runtime constructs a blank `SpikingNetwork::with_dimensions`.
+With `--features corpus-ipc` the binary also connects a ZMQ SUB socket for JSON `IpcMessage` frames (`CORPUS_IPC_ZMQ_READOUT_IPC` / `SPIKENAUT_ZMQ_READOUT_IPC`).
+`~` is not expanded.
 With the stub backend, `brainstem-daemon` runs a headless spiking-neural-network tick loop and logs `🔌 Using stub backend`.
