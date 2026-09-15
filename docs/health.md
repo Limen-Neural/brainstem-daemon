@@ -29,6 +29,7 @@ waiting on the tick loop's backend or `SpikingNetwork::step`.
 | From | Event | To | live | ready | Notes |
 |---|---|---|---|---|---|
 | (unstarted) | `ProcessStarted` | `starting` | true | false | Construction. Live does not imply ready. |
+| (unstarted) | init/checkpoint success or failure | (unstarted) | false | false | Ignored until `ProcessStarted`, matching out-of-order success handling. |
 | `starting` | `InitializationCompleted` | `loading_checkpoint` | true | false | `initialize()` succeeded. Live daemon then applies the checkpoint stand-in (next row). |
 | `starting` | `InitializationFailed` | `fatal` | true | false | Sticky. Detail is JSON-only, never a metric label. |
 | `loading_checkpoint` | `CheckpointValidated` | `running` | true | true | Ready only after this gate. Until LIM-1133 the daemon emits this right after `initialize`. |
@@ -43,7 +44,8 @@ waiting on the tick loop's backend or `SpikingNetwork::step`.
 After `BeginDrain`, `BrainstemDaemon::run` stops the control listener. External
 `/readyz` probes may get connection refused rather than `503`. In-process
 `HealthHandle::snapshot()` still reports `phase: draining`. There is no probe
-grace period.
+grace period. If all 32 in-flight control slots are busy, a new connection gets
+a bounded `503` (`busy`) instead of a silent drop.
 
 Recoverable reasons (`stale_input`, `overload`) are independent: clearing one
 leaves the other. `capacity == 0` means “no queue instrumented” (LIM-1216) and

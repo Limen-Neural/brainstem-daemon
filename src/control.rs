@@ -15,7 +15,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tracing::{info, warn};
 
 use crate::health::{HealthHandle, HealthSnapshot};
@@ -97,14 +97,27 @@ fn spawn_accepted(
 }
 
 fn spawn_control_conn(stream: TcpStream, slots: &Arc<Semaphore>, health: &HealthHandle) {
-    let Ok(permit) = slots.clone().try_acquire_owned() else {
-        return;
-    };
-    let health = health.clone();
+    match slots.clone().try_acquire_owned() {
+        Ok(permit) => spawn_served_conn(stream, permit, health.clone()),
+        Err(_) => spawn_busy_conn(stream),
+    }
+}
+
+fn spawn_served_conn(stream: TcpStream, permit: OwnedSemaphorePermit, health: HealthHandle) {
     tokio::spawn(async move {
         let _permit = permit;
         if let Err(e) = handle_connection(stream, &health).await {
             warn!("control connection failed: {e}");
+        }
+    });
+}
+
+fn spawn_busy_conn(stream: TcpStream) {
+    tokio::spawn(async move {
+        let mut stream = stream;
+        let response = http_response(503, "text/plain; charset=utf-8", b"busy\n");
+        if let Err(e) = write_http_response(&mut stream, &response).await {
+            warn!("control busy reply failed: {e}");
         }
     });
 }
@@ -333,6 +346,26 @@ mod tests {
 
         let _ = tx.send(true);
         server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn saturated_control_writes_503() {
+        let slots = Arc::new(Semaphore::new(0));
+        let health = HealthHandle::started(HealthLimits::default());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        spawn_control_conn(server, &slots, &health);
+        let mut buf = vec![0u8; 512];
+        let n = tokio::time::timeout(Duration::from_secs(2), client.read(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        let raw = String::from_utf8_lossy(&buf[..n]);
+        assert!(raw.contains("HTTP/1.1 503"), "{raw}");
+        assert!(raw.contains("busy"), "{raw}");
+        assert_eq!(slots.available_permits(), 0);
     }
 
     async fn http_get(addr: SocketAddr, path: &str) -> String {

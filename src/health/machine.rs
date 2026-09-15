@@ -139,7 +139,7 @@ impl HealthMachine {
             HealthEvent::ProcessStarted => self.mark_started(now),
             HealthEvent::InitializationCompleted => self.mark_initialized(),
             HealthEvent::InitializationFailed { detail } => {
-                self.enter_fatal(FatalCode::InitializationFailed, detail);
+                self.fatal_if_started(FatalCode::InitializationFailed, detail);
             }
             _ => {}
         }
@@ -168,7 +168,7 @@ impl HealthMachine {
                 }
             }
             HealthEvent::CheckpointRejected { detail } => {
-                self.enter_fatal(FatalCode::CheckpointInvalid, detail);
+                self.fatal_if_started(FatalCode::CheckpointInvalid, detail);
             }
             _ => {}
         }
@@ -330,6 +330,12 @@ impl HealthMachine {
             HealthPhase::Degraded
         } else {
             HealthPhase::Running
+        }
+    }
+
+    fn fatal_if_started(&mut self, code: FatalCode, detail: String) {
+        if self.started {
+            self.enter_fatal(code, detail);
         }
     }
 

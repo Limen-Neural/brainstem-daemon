@@ -77,11 +77,30 @@ fn initialization_before_start_is_ignored() {
     let (mut m, _) = machine();
     m.apply(HealthEvent::InitializationCompleted);
     m.apply(HealthEvent::CheckpointValidated { identity: ckpt() });
+    m.apply(HealthEvent::ProcessStarted);
     let snap = m.snapshot();
-    assert!(!snap.live);
+    assert!(snap.live);
     assert!(!snap.ready);
     assert_eq!(snap.phase, HealthPhase::Starting);
+    assert!(snap.checkpoint.is_none());
     assert_eq!(snap.reasons, vec![ReasonCode::Starting]);
+}
+
+#[test]
+fn initialization_failure_before_start_is_ignored() {
+    let (mut m, _) = machine();
+    m.apply(HealthEvent::InitializationFailed {
+        detail: "too early".into(),
+    });
+    m.apply(HealthEvent::CheckpointRejected {
+        detail: "too early".into(),
+    });
+    m.apply(HealthEvent::ProcessStarted);
+    let snap = m.snapshot();
+    assert!(snap.live);
+    assert!(!snap.ready);
+    assert_eq!(snap.phase, HealthPhase::Starting);
+    assert!(snap.fatal.is_none());
 }
 
 #[test]
