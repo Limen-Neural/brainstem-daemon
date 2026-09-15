@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -62,13 +65,13 @@ jobs:
             ${{ runner.os }}-cargo-stub-
 
       - name: Run clippy (default features)
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Build (default features)
-        run: cargo build
+        run: cargo build --locked
 
       - name: Test (default features)
-        run: cargo test
+        run: cargo test --locked
 
   corpus-ipc:
     name: corpus-ipc (ubuntu)
@@ -104,16 +107,16 @@ jobs:
         env:
           CC: gcc
           CXX: g++
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Build (all-features)
         env:
           CC: gcc
           CXX: g++
-        run: cargo build --all-features
+        run: cargo build --locked --all-features
 
       - name: Test (all-features)
         env:
           CC: gcc
           CXX: g++
-        run: cargo test --all-features
+        run: cargo test --locked --all-features

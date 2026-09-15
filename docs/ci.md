@@ -9,8 +9,8 @@ system `libzmq` is available.
 | Job | Runner | Features | Commands |
 |---|---|---|---|
 | `rustfmt` | `ubuntu-latest` | n/a | `cargo fmt --check` |
-| `stub` | `ubuntu-latest`, `macos-latest`, `windows-latest` | default (empty) | `cargo clippy --all-targets -- -D warnings`, `cargo build`, `cargo test` |
-| `corpus-ipc` | `ubuntu-latest` | `--all-features` (`corpus-ipc` + `zmq`) | clippy, build, test |
+| `stub` | `ubuntu-latest`, `macos-latest`, `windows-latest` | default (empty) | `cargo clippy --locked --all-targets -- -D warnings`, `cargo build --locked`, `cargo test --locked` |
+| `corpus-ipc` | `ubuntu-latest` | `--all-features` (the `corpus-ipc` feature, which enables the optional `zmq` dependency) | clippy, build, test |
 
 Default features are empty. Stub jobs do **not** install `libzmq` and do
 not pass `--features corpus-ipc`.
