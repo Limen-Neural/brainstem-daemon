@@ -22,6 +22,10 @@ and does **not** need `libzmq`.
 The optional `corpus-ipc` feature (same as `--all-features` today) links
 ZeroMQ. Install `libzmq` first (`libzmq3-dev` on Debian/Ubuntu).
 
+See README [Backends (temporary)](README.md#backends-temporary) for the
+feature → backend → config-key truth table (including env vars that are
+no-ops under stub).
+
 ## Mandatory commands (stub, no ZMQ)
 
 ```bash

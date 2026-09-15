@@ -43,8 +43,9 @@ fn main() -> anyhow::Result<()> {
     })?;
 
     // Set the readout endpoint env var(s) when corpus-ipc feature is enabled.
-    // Binary controls the endpoint; we set both the documented SPIKENAUT name
-    // and the CORPUS_IPC_ZMQ name that the pinned corpus-ipc backend reads.
+    // Binary controls the endpoint. Pinned corpus-ipc reads SPIKENAUT_ZMQ_READOUT_IPC
+    // only; CORPUS_IPC_ZMQ_READOUT_IPC is still set for compatibility and is unused.
+
     #[cfg(feature = "corpus-ipc")]
     {
         let readout_endpoint = format!("tcp://127.0.0.1:{}", cfg.spine_sub_port);
@@ -78,7 +79,9 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
         // is intentionally conservative.
         let mut source = brainstem_daemon::backend::ZmqStimulusSource::with_channels(cfg.channels);
 
-        // Pass the model path through (was dropped before).
+        // Pass the model path through (was dropped before). The pinned
+        // ZmqBrainBackend::initialize takes `_model_path` and currently ignores it.
+
         let model_path = cfg.model_path.to_string_lossy();
         source
             .initialize(Some(model_path.as_ref()))

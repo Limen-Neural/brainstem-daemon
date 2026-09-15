@@ -52,6 +52,11 @@ For most development, use the in-memory stub backend. It needs no `libzmq` and n
 
 If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls the `corpus-ipc` git dependency and links the system `libzmq` library (install `libzmq3-dev` on Debian/Ubuntu). It does not vendor ZeroMQ.
 
+Prefer the README [Backends (temporary)](README.md#backends-temporary) section as the user-facing truth table, unless a newer code change supersedes it.
+That table maps Cargo flags to the backend and to which config keys and env vars apply.
+`BrainstemDaemon::new()` uses the stub even when the feature is enabled.
+The `brainstem-daemon` binary is what wires ZeroMQ.
+
 ### Running the daemon
 
 Build the release binary:
@@ -77,4 +82,7 @@ spine_pub_port = 5556
 model_path     = "~/models/soma16.mem"
 ```
 
-The `model_path` is not used by the stub backend. With the stub backend, `brainstem-daemon` runs a headless spiking-neural-network tick loop and logs `🔌 Using stub backend`.
+The `model_path` is not used by the stub backend.
+With `--features corpus-ipc` the binary passes it literally to `ZmqStimulusSource::initialize`.
+`~` is not expanded, and the pinned `ZmqBrainBackend` currently ignores `_model_path`.
+With the stub backend, `brainstem-daemon` runs a headless spiking-neural-network tick loop and logs `🔌 Using stub backend`.
