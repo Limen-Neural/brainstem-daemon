@@ -6,7 +6,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Monotonic clock used by the health state machine.
+///
+/// [`Clock::now`] must return without blocking or I/O. Snapshots call it while a
+/// handle read guard is held.
 pub trait Clock: Send + Sync {
+    /// Current monotonic time. Must not block or perform I/O.
     fn now(&self) -> Instant;
 }
 
