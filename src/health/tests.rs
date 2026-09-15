@@ -22,12 +22,26 @@ fn ckpt() -> CheckpointIdentity {
     }
 }
 
-fn bring_ready(m: &mut HealthMachine) {
+fn seed_ready(m: &mut HealthMachine, identity: CheckpointIdentity) {
     m.apply(HealthEvent::ProcessStarted);
     m.apply(HealthEvent::InitializationCompleted);
-    m.apply(HealthEvent::CheckpointValidated { identity: ckpt() });
+    m.apply(HealthEvent::CheckpointValidated { identity });
     m.apply(HealthEvent::IngressObserved);
     m.apply(HealthEvent::TickSucceeded);
+}
+
+fn bring_ready(m: &mut HealthMachine) {
+    seed_ready(m, ckpt());
+}
+
+fn standin_ready(m: &mut HealthMachine) {
+    seed_ready(
+        m,
+        CheckpointIdentity {
+            id: "soma16".into(),
+            digest: None,
+        },
+    );
 }
 
 #[test]
@@ -380,21 +394,11 @@ fn try_snapshot_does_not_block_on_write_lock() {
 }
 
 #[test]
-fn example_snapshots_match_documented_shapes() {
+fn documented_running_snapshot_uses_null_digest() {
     let (mut healthy, _) = machine();
-    healthy.apply(HealthEvent::ProcessStarted);
-    healthy.apply(HealthEvent::InitializationCompleted);
-    healthy.apply(HealthEvent::CheckpointValidated {
-        identity: CheckpointIdentity {
-            id: "soma16".into(),
-            digest: None,
-        },
-    });
-    healthy.apply(HealthEvent::IngressObserved);
-    healthy.apply(HealthEvent::TickSucceeded);
-    let healthy = healthy.snapshot();
+    standin_ready(&mut healthy);
     assert_eq!(
-        serde_json::to_value(&healthy).unwrap(),
+        serde_json::to_value(healthy.snapshot()).unwrap(),
         serde_json::json!({
             "live": true,
             "ready": true,
@@ -409,7 +413,10 @@ fn example_snapshots_match_documented_shapes() {
             "observed_at_ms": 0
         })
     );
+}
 
+#[test]
+fn documented_degraded_snapshot_stays_ready() {
     let (mut degraded, clock) = machine();
     bring_ready(&mut degraded);
     degraded.apply(HealthEvent::QueuePressure {
@@ -424,7 +431,10 @@ fn example_snapshots_match_documented_shapes() {
         vec![ReasonCode::StaleInput, ReasonCode::Overload]
     );
     assert!(degraded.ready);
+}
 
+#[test]
+fn documented_fatal_snapshot_drops_readiness() {
     let (mut fatal, _) = machine();
     fatal.apply(HealthEvent::ProcessStarted);
     fatal.apply(HealthEvent::InitializationCompleted);
