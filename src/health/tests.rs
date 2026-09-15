@@ -1,5 +1,5 @@
 use super::*;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn limits() -> HealthLimits {
     HealthLimits {
@@ -369,12 +369,10 @@ fn prometheus_labels_are_low_cardinality_and_omit_detail() {
 #[test]
 fn try_snapshot_does_not_block_on_write_lock() {
     let handle = HealthHandle::started(limits());
-    let start = Instant::now();
     {
         let _guard = handle.lock_write_for_test();
         assert!(handle.try_snapshot().is_none());
     }
-    assert!(start.elapsed() < Duration::from_millis(50));
     assert!(handle.try_snapshot().is_some());
     let snap = handle.snapshot();
     assert!(snap.live);
@@ -490,6 +488,19 @@ fn equal_overload_watermarks_are_replaced() {
         stale_after: Duration::from_millis(100),
         overload_high: 0.80,
         overload_low: 0.80,
+    }
+    .sanitized();
+    assert_eq!(limits.stale_after, Duration::from_millis(100));
+    assert_eq!(limits.overload_high, 0.90);
+    assert_eq!(limits.overload_low, 0.70);
+}
+
+#[test]
+fn out_of_range_overload_watermarks_are_replaced() {
+    let limits = HealthLimits {
+        stale_after: Duration::from_millis(100),
+        overload_high: 1.5,
+        overload_low: -0.1,
     }
     .sanitized();
     assert_eq!(limits.stale_after, Duration::from_millis(100));

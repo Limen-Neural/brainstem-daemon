@@ -32,11 +32,11 @@ impl Default for HealthLimits {
 }
 
 impl HealthLimits {
-    /// Replace non-finite, inverted, or equal watermarks with the built-in defaults.
+    /// Replace non-finite, out-of-range, inverted, or equal watermarks with the built-in defaults.
     pub fn sanitized(self) -> Self {
         let high = finite_or(self.overload_high, 0.90);
         let low = finite_or(self.overload_low, 0.70);
-        if high > low {
+        if (0.0..=1.0).contains(&high) && (0.0..=1.0).contains(&low) && high > low {
             Self {
                 stale_after: self.stale_after,
                 overload_high: high,
