@@ -238,64 +238,74 @@ impl HealthSnapshot {
     /// Prometheus text exposition. Labels are stable reason/phase codes only.
     pub fn prometheus_text(&self) -> String {
         let mut out = String::default();
-        push_gauge(
-            &mut out,
-            "brainstem_live",
-            "1 if the process health reporter is running.",
-            u8::from(self.live),
-        );
-        push_gauge(
-            &mut out,
-            "brainstem_ready",
-            "1 if initialized, checkpoint-valid, not draining, not fatal.",
-            u8::from(self.ready),
-        );
-
-        out.push_str("# HELP brainstem_phase 1 for the current health phase.\n");
-        out.push_str("# TYPE brainstem_phase gauge\n");
-        write_phase_gauges(&mut out, self.phase);
-        out.push_str("# HELP brainstem_degraded Recoverable degradation by stable reason code.\n");
-        out.push_str("# TYPE brainstem_degraded gauge\n");
-        write_degraded_gauges(&mut out, &self.reasons);
-
-        push_gauge(
-            &mut out,
-            "brainstem_fatal",
-            "1 if this process has entered a sticky fatal state.",
-            u8::from(self.fatal.is_some()),
-        );
-        push_gauge(
-            &mut out,
-            "brainstem_last_successful_tick_ms",
-            "Milliseconds from process start until the last successful tick (not tick age).",
-            self.last_successful_tick_ms.unwrap_or(0),
-        );
-        push_gauge(
-            &mut out,
-            "brainstem_tick_age_ms",
-            "Milliseconds since the last successful tick; 0 if none yet.",
-            self.tick_age_ms.unwrap_or(0),
-        );
-        push_gauge(
-            &mut out,
-            "brainstem_input_age_ms",
-            "Age of last ingress (or checkpoint, if none) in milliseconds.",
-            self.input_freshness.age_ms.unwrap_or(0),
-        );
-        push_gauge(
-            &mut out,
-            "brainstem_queue_depth",
-            "Ingress queue depth.",
-            self.queue_pressure.depth,
-        );
-        push_gauge(
-            &mut out,
-            "brainstem_queue_capacity",
-            "Ingress queue capacity.",
-            self.queue_pressure.capacity,
-        );
+        write_probe_gauges(&mut out, self);
+        write_labeled_gauges(&mut out, self);
+        write_runtime_gauges(&mut out, self);
         out
     }
+}
+
+fn write_probe_gauges(out: &mut String, snap: &HealthSnapshot) {
+    push_gauge(
+        out,
+        "brainstem_live",
+        "1 if the process health reporter is running.",
+        u8::from(snap.live),
+    );
+    push_gauge(
+        out,
+        "brainstem_ready",
+        "1 if initialized, checkpoint-valid, not draining, not fatal.",
+        u8::from(snap.ready),
+    );
+}
+
+fn write_labeled_gauges(out: &mut String, snap: &HealthSnapshot) {
+    out.push_str("# HELP brainstem_phase 1 for the current health phase.\n");
+    out.push_str("# TYPE brainstem_phase gauge\n");
+    write_phase_gauges(out, snap.phase);
+    out.push_str("# HELP brainstem_degraded Recoverable degradation by stable reason code.\n");
+    out.push_str("# TYPE brainstem_degraded gauge\n");
+    write_degraded_gauges(out, &snap.reasons);
+}
+
+fn write_runtime_gauges(out: &mut String, snap: &HealthSnapshot) {
+    push_gauge(
+        out,
+        "brainstem_fatal",
+        "1 if this process has entered a sticky fatal state.",
+        u8::from(snap.fatal.is_some()),
+    );
+    push_gauge(
+        out,
+        "brainstem_last_successful_tick_ms",
+        "Milliseconds from process start until the last successful tick (not tick age).",
+        snap.last_successful_tick_ms.unwrap_or(0),
+    );
+    push_gauge(
+        out,
+        "brainstem_tick_age_ms",
+        "Milliseconds since the last successful tick; 0 if none yet.",
+        snap.tick_age_ms.unwrap_or(0),
+    );
+    push_gauge(
+        out,
+        "brainstem_input_age_ms",
+        "Age of last ingress (or checkpoint, if none) in milliseconds.",
+        snap.input_freshness.age_ms.unwrap_or(0),
+    );
+    push_gauge(
+        out,
+        "brainstem_queue_depth",
+        "Ingress queue depth.",
+        snap.queue_pressure.depth,
+    );
+    push_gauge(
+        out,
+        "brainstem_queue_capacity",
+        "Ingress queue capacity.",
+        snap.queue_pressure.capacity,
+    );
 }
 
 fn push_gauge(out: &mut String, name: &str, help: &str, value: impl std::fmt::Display) {
@@ -413,21 +423,25 @@ impl HealthMachine {
 
     fn apply_boot(&mut self, event: HealthEvent, now: Instant) {
         match event {
-            HealthEvent::ProcessStarted => {
-                if !self.started {
-                    self.started = true;
-                    self.started_at = Some(now);
-                }
-            }
-            HealthEvent::InitializationCompleted => {
-                if self.fatal.is_none() && !self.draining {
-                    self.initialized = true;
-                }
-            }
+            HealthEvent::ProcessStarted => self.mark_started(now),
+            HealthEvent::InitializationCompleted => self.mark_initialized(),
             HealthEvent::InitializationFailed { detail } => {
                 self.enter_fatal(FatalCode::InitializationFailed, detail);
             }
             _ => {}
+        }
+    }
+
+    fn mark_started(&mut self, now: Instant) {
+        if !self.started {
+            self.started = true;
+            self.started_at = Some(now);
+        }
+    }
+
+    fn mark_initialized(&mut self) {
+        if self.fatal.is_none() && !self.draining {
+            self.initialized = true;
         }
     }
 
@@ -486,24 +500,10 @@ impl HealthMachine {
         let now = self.clock.now();
         let origin = self.started_at.unwrap_or(now);
         let ms = |t: Instant| duration_ms(t.saturating_duration_since(origin));
-        let age_base = self.last_ingress.or(self.checkpoint_at);
-        let age_ms = age_base.map(|t| duration_ms(now.saturating_duration_since(t)));
         let stale = self.compute_stale(now);
-        let live = self.started;
-        let ready = live
-            && self.initialized
-            && self.checkpoint_ok
-            && !self.draining
-            && self.fatal.is_none();
-        let ratio = if self.queue_capacity == 0 {
-            None
-        } else {
-            Some(self.queue_depth as f64 / self.queue_capacity as f64)
-        };
-
         HealthSnapshot {
-            live,
-            ready,
+            live: self.started,
+            ready: self.is_ready(),
             phase: self.phase(stale),
             reasons: self.reasons(stale),
             last_successful_tick_ms: self.last_tick.map(ms),
@@ -511,15 +511,48 @@ impl HealthMachine {
                 .last_tick
                 .map(|t| duration_ms(now.saturating_duration_since(t))),
             checkpoint: self.checkpoint.clone(),
-            input_freshness: InputFreshness { age_ms, stale },
-            queue_pressure: QueuePressure {
-                depth: self.queue_depth,
-                capacity: self.queue_capacity,
-                ratio,
-                overloaded: self.overloaded,
+            input_freshness: InputFreshness {
+                age_ms: self.input_age_ms(now),
+                stale,
             },
+            queue_pressure: self.queue_pressure(),
             fatal: self.fatal.clone(),
             observed_at_ms: ms(now),
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        self.is_initialized() && self.is_serving()
+    }
+
+    fn is_initialized(&self) -> bool {
+        self.started && self.initialized && self.checkpoint_ok
+    }
+
+    fn is_serving(&self) -> bool {
+        !self.draining && self.fatal.is_none()
+    }
+
+    fn input_age_ms(&self, now: Instant) -> Option<u64> {
+        self.last_ingress
+            .or(self.checkpoint_at)
+            .map(|t| duration_ms(now.saturating_duration_since(t)))
+    }
+
+    fn queue_pressure(&self) -> QueuePressure {
+        QueuePressure {
+            depth: self.queue_depth,
+            capacity: self.queue_capacity,
+            ratio: self.queue_ratio(),
+            overloaded: self.overloaded,
+        }
+    }
+
+    fn queue_ratio(&self) -> Option<f64> {
+        if self.queue_capacity == 0 {
+            None
+        } else {
+            Some(self.queue_depth as f64 / self.queue_capacity as f64)
         }
     }
 
@@ -527,12 +560,22 @@ impl HealthMachine {
         if self.fatal.is_some() {
             return vec![ReasonCode::Fatal];
         }
-        let mut reasons = Vec::default();
+        let mut reasons = self.boot_reasons();
+        self.push_runtime_reasons(&mut reasons, stale);
+        reasons
+    }
+
+    fn boot_reasons(&self) -> Vec<ReasonCode> {
         if !self.initialized {
-            reasons.push(ReasonCode::Starting);
+            vec![ReasonCode::Starting]
         } else if !self.checkpoint_ok {
-            reasons.push(ReasonCode::CheckpointPending);
+            vec![ReasonCode::CheckpointPending]
+        } else {
+            Vec::default()
         }
+    }
+
+    fn push_runtime_reasons(&self, reasons: &mut Vec<ReasonCode>, stale: bool) {
         if self.draining {
             reasons.push(ReasonCode::Draining);
         }
@@ -542,17 +585,33 @@ impl HealthMachine {
         if self.overloaded {
             reasons.push(ReasonCode::Overload);
         }
-        reasons
     }
 
     fn phase(&self, stale: bool) -> HealthPhase {
+        self.terminal_phase()
+            .unwrap_or_else(|| self.operational_phase(stale))
+    }
+
+    fn terminal_phase(&self) -> Option<HealthPhase> {
         if self.fatal.is_some() {
-            HealthPhase::Fatal
+            Some(HealthPhase::Fatal)
         } else if self.draining {
-            HealthPhase::Draining
-        } else if !self.initialized {
+            Some(HealthPhase::Draining)
+        } else {
+            None
+        }
+    }
+
+    fn operational_phase(&self, stale: bool) -> HealthPhase {
+        if !self.initialized {
             HealthPhase::Starting
-        } else if !self.checkpoint_ok {
+        } else {
+            self.checkpoint_phase(stale)
+        }
+    }
+
+    fn checkpoint_phase(&self, stale: bool) -> HealthPhase {
+        if !self.checkpoint_ok {
             HealthPhase::LoadingCheckpoint
         } else if stale || self.overloaded {
             HealthPhase::Degraded

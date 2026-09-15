@@ -225,19 +225,33 @@ async fn start_control(
     let Some(bind) = bind else {
         return Ok((None, None));
     };
+    let listener = bind_control(bind).await?;
+    Ok(spawn_control_task(listener, health))
+}
+
+async fn bind_control(bind: &str) -> Result<tokio::net::TcpListener> {
     let addr: SocketAddr = bind
         .parse()
         .with_context(|| format!("invalid control_bind {bind}"))?;
-    let listener = tokio::net::TcpListener::bind(addr)
+    tokio::net::TcpListener::bind(addr)
         .await
-        .with_context(|| format!("failed to bind control surface on {addr}"))?;
+        .with_context(|| format!("failed to bind control surface on {addr}"))
+}
+
+fn spawn_control_task(
+    listener: tokio::net::TcpListener,
+    health: HealthHandle,
+) -> (
+    Option<watch::Sender<bool>>,
+    Option<tokio::task::JoinHandle<()>>,
+) {
     let (tx, rx) = watch::channel(false);
     let task = tokio::spawn(async move {
         if let Err(e) = crate::control::serve_listener(listener, health, rx).await {
             warn!("control surface stopped: {e}");
         }
     });
-    Ok((Some(tx), Some(task)))
+    (Some(tx), Some(task))
 }
 
 async fn stop_control(

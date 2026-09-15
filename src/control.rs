@@ -7,6 +7,7 @@
 //! started from `BrainstemDaemon::run` when `control_bind` is set. Do not add
 //! a second server alongside this one.
 
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,7 +44,7 @@ pub async fn serve_listener(
         .context("control listener has no local address")?;
     info!(%bound, "control surface listening (/livez /readyz /health /metrics)");
 
-    if *shutdown.borrow() {
+    if shutdown_signaled(&shutdown) {
         return Ok(());
     }
 
@@ -51,7 +52,7 @@ pub async fn serve_listener(
     loop {
         tokio::select! {
             changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
+                if should_stop_control(changed, &shutdown) {
                     break;
                 }
             }
@@ -62,6 +63,17 @@ pub async fn serve_listener(
     }
 
     Ok(())
+}
+
+fn shutdown_signaled(shutdown: &watch::Receiver<bool>) -> bool {
+    *shutdown.borrow()
+}
+
+fn should_stop_control(
+    changed: Result<(), watch::error::RecvError>,
+    shutdown: &watch::Receiver<bool>,
+) -> bool {
+    changed.is_err() || shutdown_signaled(shutdown)
 }
 
 fn spawn_accepted(
@@ -89,38 +101,54 @@ fn spawn_control_conn(stream: TcpStream, slots: &Arc<Semaphore>, health: &Health
 }
 
 async fn handle_connection(mut stream: TcpStream, health: &HealthHandle) -> Result<()> {
+    let req = read_http_request(&mut stream).await?;
+    let response = render_http(&req, &health.snapshot());
+    write_http_response(&mut stream, &response).await
+}
+
+async fn read_http_request(stream: &mut TcpStream) -> Result<String> {
     let mut buf = [0u8; 1024];
-    let n = tokio::time::timeout(IO_TIMEOUT, read_request_line(&mut stream, &mut buf))
-        .await
-        .context("control read timed out")?
-        .context("control read failed")?;
-    let req = std::str::from_utf8(&buf[..n]).unwrap_or("");
-    let snap = health.snapshot();
-    let response = render_http(req, &snap);
-    tokio::time::timeout(IO_TIMEOUT, async {
-        stream.write_all(&response).await?;
+    let n = timed_io(
+        "control read timed out",
+        read_request_line(stream, &mut buf),
+    )
+    .await?;
+    Ok(std::str::from_utf8(&buf[..n]).unwrap_or("").to_owned())
+}
+
+async fn write_http_response(stream: &mut TcpStream, response: &[u8]) -> Result<()> {
+    timed_io("control write timed out", async {
+        stream.write_all(response).await?;
         stream.flush().await?;
-        Ok::<_, std::io::Error>(())
+        Ok(())
     })
     .await
-    .context("control write timed out")?
-    .context("control write failed")?;
-    Ok(())
+}
+
+async fn timed_io<T, F>(timeout_msg: &'static str, fut: F) -> Result<T>
+where
+    F: Future<Output = std::io::Result<T>>,
+{
+    tokio::time::timeout(IO_TIMEOUT, fut)
+        .await
+        .context(timeout_msg)?
+        .context("control I/O failed")
 }
 
 async fn read_request_line(stream: &mut TcpStream, buf: &mut [u8]) -> std::io::Result<usize> {
     let mut total = 0;
     while total < buf.len() {
         let n = stream.read(&mut buf[total..]).await?;
-        if n == 0 {
-            break;
-        }
         total += n;
-        if buf[..total].contains(&b'\n') {
+        if request_line_complete(n, &buf[..total]) {
             break;
         }
     }
     Ok(total)
+}
+
+fn request_line_complete(read: usize, buf: &[u8]) -> bool {
+    read == 0 || buf.contains(&b'\n')
 }
 
 pub(crate) fn render_http(request: &str, snap: &HealthSnapshot) -> Vec<u8> {
