@@ -64,7 +64,7 @@ cargo bench                              # profile.bench (when benches exist)
 lif_count      = 16        # LIF neurons
 izh_count      = 5         # Izhikevich neurons
 channels       = 16        # expected input channels
-model_path     = "~/models/soma16.mem" # weights/thresholds
+model_path     = "~/models/soma16.mem" # literal path; `~` is not expanded
 
 # Runtime
 tick_rate_hz   = 1000      # loop frequency
@@ -110,13 +110,13 @@ Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`
 | `services` | used (`ServiceRegistry`) | used |
 | `spine_sub_port` | parsed, **no-op** | sets readout env vars to `tcp://127.0.0.1:<port>` |
 | `spine_pub_port` | parsed, **no-op** | binds ZMQ PUB `tcp://*:<port>` |
-| `model_path` | parsed, **no-op** (`StubStimulusSource::initialize` ignores it) | passed to `ZmqStimulusSource::initialize` |
+| `model_path` | parsed, **no-op** (`StubStimulusSource::initialize` ignores it) | passed literally to `ZmqStimulusSource::initialize` (no `~` expansion) |
 
 **Settings that only take effect with `corpus-ipc`** (the `brainstem-daemon` binary built `--features corpus-ipc`):
 
 - `spine_sub_port`
 - `spine_pub_port`
-- `model_path`
+- `model_path` (literal filesystem path; `~` is not expanded)
 - `SPIKENAUT_ZMQ_READOUT_IPC` (const `CORPUS_IPC_READOUT_ENV` in code)
 - `CORPUS_IPC_ZMQ_READOUT_IPC` (what the pinned `corpus-ipc` backend reads)
 
