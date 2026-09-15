@@ -4,19 +4,22 @@
 //! Brainstem daemon runtime and config-driven service registry.
 
 use std::fs;
-use std::path::PathBuf;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use neuromod::{NeuroModulators, SpikingNetwork};
 use serde::Deserialize;
 use tokio::signal;
+use tokio::sync::watch;
 use tokio::time;
 use tracing::{error, info, warn};
 
 use crate::backend::{
     BackendPair, IngressPacket, SpikeEvent as LocalSpikeEvent, SpikeSink, StimulusSource,
 };
+use crate::health::{CheckpointIdentity, HealthEvent, HealthHandle, HealthLimits, HealthSnapshot};
 use crate::registry::{ServiceConfig, ServiceRegistry};
 
 // Keep the const for compatibility when the corpus-ipc feature is used.
@@ -35,6 +38,12 @@ pub struct DaemonConfig {
     pub channels: usize,
     #[serde(default)]
     pub services: Vec<ServiceConfig>,
+    /// Optional `ip:port` for the process control surface (`/livez`, `/readyz`, `/health`, `/metrics`).
+    ///
+    /// Unset by default so existing configs keep opening no extra sockets. This is the
+    /// repository's only HTTP listener; do not add a second server beside it.
+    #[serde(default)]
+    pub control_bind: Option<String>,
 }
 
 impl DaemonConfig {
@@ -68,6 +77,7 @@ pub struct BrainstemDaemon {
     config: DaemonConfig,
     registry: ServiceRegistry,
     backend: BackendPair,
+    health: HealthHandle,
 }
 
 impl BrainstemDaemon {
@@ -118,6 +128,7 @@ impl BrainstemDaemon {
             config,
             registry,
             backend,
+            health: HealthHandle::started(HealthLimits::default()),
         })
     }
 
@@ -126,54 +137,35 @@ impl BrainstemDaemon {
         &self.registry
     }
 
+    /// Clone the non-blocking health handle (independent of the tick-loop backend lock).
+    pub fn health(&self) -> HealthHandle {
+        self.health.clone()
+    }
+
+    /// Current health snapshot. Does not wait on ingress or `SpikingNetwork::step`.
+    pub fn health_snapshot(&self) -> HealthSnapshot {
+        self.health.snapshot()
+    }
+
     /// Run the daemon until a termination signal is received.
     pub async fn run(self) -> Result<()> {
         let cfg = self.config;
         let mut backend = self.backend;
+        let health = self.health;
 
-        if cfg.tick_rate_hz == 0 || cfg.tick_rate_hz > 1_000_000 {
-            anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
+        validate_tick_rate(cfg.tick_rate_hz)?;
+
+        let (control_stop, control_task) =
+            start_control(cfg.control_bind.as_deref(), health.clone()).await?;
+
+        if let Err(e) = initialize_source(&mut *backend.source, &cfg, &health) {
+            stop_control(control_stop, control_task).await;
+            return Err(e);
         }
 
-        let tick_duration = Duration::from_nanos(1_000_000_000 / u64::from(cfg.tick_rate_hz));
-        let mut ticker = time::interval(tick_duration);
-        ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-
-        let mut network =
-            SpikingNetwork::with_dimensions(cfg.lif_count, cfg.izh_count, cfg.channels);
-        let mut stimuli = vec![0.0; cfg.channels];
-        let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
-
-        let mut shutdown = std::pin::pin!(shutdown_signal());
-
-        loop {
-            tokio::select! {
-                _ = ticker.tick() => {
-                    run_tick(
-                        &mut *backend.source,
-                        &mut network,
-                        &mut *backend.sink,
-                        &mut stimuli,
-                        &mut spike_buf,
-                    );
-                }
-                _ = &mut shutdown => {
-                    info!("Termination signal received, shutting down");
-                    break;
-                }
-            }
-        }
-
-        // Explicit backend lifecycle hooks (flush sink, shutdown source) are invoked
-        // for custom backends. Current built-ins are no-ops, but this satisfies
-        // CodeAnt/CodeRabbit "missing cleanup" notes.
-        if let Err(e) = backend.sink.flush() {
-            warn!("Failed to flush spike sink on shutdown: {e}");
-        }
-        if let Err(e) = backend.source.shutdown() {
-            warn!("Failed to shut down stimulus source: {e}");
-        }
-
+        run_until_shutdown(&cfg, &mut backend, &health).await;
+        stop_control(control_stop, control_task).await;
+        shutdown_backend(&mut backend);
         Ok(())
     }
 }
@@ -223,6 +215,148 @@ fn init_runtime_default() -> BackendPair {
     BackendPair::stub()
 }
 
+async fn start_control(
+    bind: Option<&str>,
+    health: HealthHandle,
+) -> Result<(
+    Option<watch::Sender<bool>>,
+    Option<tokio::task::JoinHandle<()>>,
+)> {
+    let Some(bind) = bind else {
+        return Ok((None, None));
+    };
+    let listener = bind_control(bind).await?;
+    Ok(spawn_control_task(listener, health))
+}
+
+async fn bind_control(bind: &str) -> Result<tokio::net::TcpListener> {
+    let addr: SocketAddr = bind
+        .parse()
+        .with_context(|| format!("invalid control_bind {bind}"))?;
+    tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("failed to bind control surface on {addr}"))
+}
+
+fn spawn_control_task(
+    listener: tokio::net::TcpListener,
+    health: HealthHandle,
+) -> (
+    Option<watch::Sender<bool>>,
+    Option<tokio::task::JoinHandle<()>>,
+) {
+    let (tx, rx) = watch::channel(false);
+    let task = tokio::spawn(async move {
+        if let Err(e) = crate::control::serve_listener(listener, health, rx).await {
+            warn!("control surface stopped: {e}");
+        }
+    });
+    (Some(tx), Some(task))
+}
+
+async fn stop_control(
+    stop: Option<watch::Sender<bool>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+) {
+    if let Some(tx) = stop {
+        let _ = tx.send(true);
+    }
+    if let Some(task) = task {
+        let _ = task.await;
+    }
+}
+
+fn initialize_source(
+    source: &mut dyn StimulusSource,
+    cfg: &DaemonConfig,
+    health: &HealthHandle,
+) -> Result<()> {
+    let model_path = cfg.model_path.to_string_lossy();
+    if let Err(e) = source.initialize(Some(model_path.as_ref())) {
+        health.apply(HealthEvent::InitializationFailed {
+            detail: "stimulus source initialization failed".into(),
+        });
+        error!("Stimulus source initialization failed: {e}");
+        return Err(e).context("failed to initialize stimulus source");
+    }
+    health.apply(HealthEvent::InitializationCompleted);
+    // Successful initialize is the current checkpoint gate. Real digest/weight
+    // validation is tracked in LIM-1133 and will replace this stand-in.
+    health.apply(HealthEvent::CheckpointValidated {
+        identity: CheckpointIdentity {
+            id: checkpoint_id_from_path(&cfg.model_path),
+            digest: None,
+        },
+    });
+    Ok(())
+}
+
+fn checkpoint_id_from_path(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn packet_carries_input(packet: &IngressPacket) -> bool {
+    !packet.stimuli.is_empty()
+        || packet
+            .modulators
+            .as_ref()
+            .is_some_and(|mods| !mods.is_empty())
+}
+
+fn validate_tick_rate(tick_rate_hz: u32) -> Result<()> {
+    if tick_rate_hz == 0 || tick_rate_hz > 1_000_000 {
+        anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
+    }
+    Ok(())
+}
+
+async fn run_until_shutdown(cfg: &DaemonConfig, backend: &mut BackendPair, health: &HealthHandle) {
+    let tick_duration = Duration::from_nanos(1_000_000_000 / u64::from(cfg.tick_rate_hz));
+    let mut ticker = time::interval(tick_duration);
+    ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+
+    let mut network = SpikingNetwork::with_dimensions(cfg.lif_count, cfg.izh_count, cfg.channels);
+    let mut stimuli = vec![0.0; cfg.channels];
+    let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
+    let mut shutdown = std::pin::pin!(shutdown_signal());
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                run_tick(
+                    &mut *backend.source,
+                    &mut network,
+                    &mut *backend.sink,
+                    &mut stimuli,
+                    &mut spike_buf,
+                    health,
+                );
+            }
+            _ = &mut shutdown => {
+                info!("Termination signal received, shutting down");
+                health.apply(HealthEvent::BeginDrain);
+                break;
+            }
+        }
+    }
+}
+
+fn shutdown_backend(backend: &mut BackendPair) {
+    // Explicit backend lifecycle hooks (flush sink, shutdown source) are invoked
+    // for custom backends. Current built-ins are no-ops, but this satisfies
+    // CodeAnt/CodeRabbit "missing cleanup" notes.
+    if let Err(e) = backend.sink.flush() {
+        warn!("Failed to flush spike sink on shutdown: {e}");
+    }
+    if let Err(e) = backend.source.shutdown() {
+        warn!("Failed to shut down stimulus source: {e}");
+    }
+}
+
 fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
     let total = config
         .lif_count
@@ -255,56 +389,75 @@ fn run_tick(
     sink: &mut dyn SpikeSink,
     stimuli: &mut [f32],
     spike_buf: &mut Vec<LocalSpikeEvent>,
+    health: &HealthHandle,
 ) {
-    let packet = match source.next_ingress() {
-        Ok(Some(p)) => p,
+    let Some(packet) = next_ingress_packet(source, health) else {
+        return;
+    };
+    let modulators = decode_inputs(&packet, stimuli);
+    let Some(spike_ids) = step_network(network, stimuli, &modulators) else {
+        return;
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    fill_spike_buf(spike_buf, &spike_ids, now);
+    emit_tick(sink, spike_buf, &spike_ids, now, health);
+}
+
+fn next_ingress_packet(
+    source: &mut dyn StimulusSource,
+    health: &HealthHandle,
+) -> Option<IngressPacket> {
+    match source.next_ingress() {
+        Ok(Some(p)) => {
+            if packet_carries_input(&p) {
+                health.apply(HealthEvent::IngressObserved);
+            }
+            Some(p)
+        }
         Ok(None) => {
             // Per StimulusSource contract: None means skip ingress this tick but still
             // advance the network with zeroed stimuli (maintains tick cadence).
             // decode_inputs will zero-fill the stimuli buffer based on the empty readout.
-            IngressPacket {
+            Some(IngressPacket {
                 stimuli: Vec::new(),
                 modulators: None,
-            }
+            })
         }
         Err(e) => {
             warn!("Failed to receive from stimulus source: {e}");
-            return;
+            None
         }
-    };
+    }
+}
 
-    let modulators = decode_inputs(&packet, stimuli);
-
-    // Note: decode_inputs already zero-fills any remaining channels when packet.stimuli is shorter.
-
-    let spike_ids = match network.step(stimuli, &modulators) {
-        Ok(spikes) => spikes,
+fn step_network(
+    network: &mut SpikingNetwork,
+    stimuli: &[f32],
+    modulators: &NeuroModulators,
+) -> Option<Vec<usize>> {
+    match network.step(stimuli, modulators) {
+        Ok(spikes) => Some(spikes),
         Err(e) => {
             error!("Network step failed: {e:?}");
-            return;
+            None
         }
-    };
+    }
+}
 
-    // Single timestamp for both per-spike time and batch metadata (keeps them consistent).
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
+fn fill_spike_buf(spike_buf: &mut Vec<LocalSpikeEvent>, spike_ids: &[usize], now: Duration) {
     let tick = now.as_millis() as u64;
-
     spike_buf.clear();
     let mut dropped = 0usize;
-    for &idx in &spike_ids {
+    for &idx in spike_ids {
         match u16::try_from(idx) {
-            Ok(channel) => {
-                spike_buf.push(LocalSpikeEvent {
-                    channel,
-                    time: (tick & (u32::MAX as u64)) as u32,
-                    strength: 1.0,
-                });
-            }
-            Err(_) => {
-                dropped += 1;
-            }
+            Ok(channel) => spike_buf.push(LocalSpikeEvent {
+                channel,
+                time: (tick & (u32::MAX as u64)) as u32,
+                strength: 1.0,
+            }),
+            Err(_) => dropped += 1,
         }
     }
     if dropped > 0 {
@@ -313,10 +466,19 @@ fn run_tick(
             dropped
         );
     }
+}
 
+fn emit_tick(
+    sink: &mut dyn SpikeSink,
+    spike_buf: &[LocalSpikeEvent],
+    spike_ids: &[usize],
+    now: Duration,
+    health: &HealthHandle,
+) {
     if spike_buf.is_empty() && !spike_ids.is_empty() {
         // Had spikes from network but all IDs were out of u16 range (dropped).
         // Nothing valid to publish; skip to avoid empty batch for dropped case.
+        health.apply(HealthEvent::TickSucceeded);
         return;
     }
 
@@ -327,7 +489,9 @@ fn run_tick(
     //   expectations (CollectingSpikeSink) and wire behavior stable.
     if let Err(e) = sink.emit(spike_buf, now) {
         warn!("Failed to emit spikes: {e}");
+        return;
     }
+    health.apply(HealthEvent::TickSucceeded);
 }
 
 /// decode_inputs now takes an IngressPacket.
@@ -368,8 +532,9 @@ pub(crate) fn run_tick_for_test(
     sink: &mut dyn SpikeSink,
     stimuli: &mut [f32],
     spike_buf: &mut Vec<LocalSpikeEvent>,
+    health: &HealthHandle,
 ) {
-    run_tick(source, network, sink, stimuli, spike_buf);
+    run_tick(source, network, sink, stimuli, spike_buf, health);
 }
 
 #[cfg(test)]
@@ -391,6 +556,7 @@ mod tests {
                 ServiceConfig::named("telemetry"),
                 ServiceConfig::named("critic-ipc"),
             ],
+            control_bind: None,
         }
     }
 
@@ -400,6 +566,35 @@ mod tests {
         assert_eq!(daemon.registry().len(), 2);
         assert!(daemon.registry().contains("telemetry"));
         assert!(daemon.registry().contains("critic-ipc"));
+    }
+
+    #[test]
+    fn daemon_is_live_not_ready_before_run() {
+        let daemon = BrainstemDaemon::new(sample_config());
+        let snap = daemon.health_snapshot();
+        assert!(snap.live);
+        assert!(!snap.ready);
+        assert_eq!(snap.phase, crate::health::HealthPhase::Starting);
+        assert!(!snap.reasons.is_empty());
+    }
+
+    #[test]
+    fn config_parses_optional_control_bind() {
+        let cfg: DaemonConfig = toml::from_str(
+            r#"
+tick_rate_hz = 1000
+log_level = "info"
+spine_sub_port = 5555
+spine_pub_port = 5556
+model_path = "/tmp/model.mem"
+lif_count = 1
+izh_count = 0
+channels = 1
+control_bind = "127.0.0.1:9464"
+"#,
+        )
+        .expect("toml");
+        assert_eq!(cfg.control_bind.as_deref(), Some("127.0.0.1:9464"));
     }
 
     #[test]
@@ -506,6 +701,7 @@ mod tests {
         let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
         let mut stimuli = vec![0.0; 2];
         let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+        let health = HealthHandle::started(HealthLimits::default());
 
         // Prime one tick
         run_tick_for_test(
@@ -514,10 +710,18 @@ mod tests {
             &mut sink,
             &mut stimuli,
             &mut spike_buf,
+            &health,
         );
 
         // Sink should have received one (possibly empty) batch
         assert_eq!(sink.emitted.len(), 1);
+        let snap = health.snapshot();
+        assert!(snap.live);
+        assert!(
+            snap.last_successful_tick_ms.is_some(),
+            "a successful network step must update last_successful_tick"
+        );
+        assert!(!snap.input_freshness.stale);
     }
 
     // Sends a real SIGTERM to this test process, so it's `#[ignore]`d by default:

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Distinct liveness, readiness, recoverable degradation, and sticky fatal health
+  (`src/health/`) with a fake-clock state-machine test for every transition and
+  recovery path. Optional `control_bind` listener serves `/livez`, `/readyz`,
+  `/health`, and `/metrics` (the repository's first control surface; none existed
+  before). Contract, transition table, and example snapshots: [`docs/health.md`](docs/health.md).
 - GitHub Actions CI matrix: stub build/test/clippy on Linux, macOS, and
   Windows; rustfmt and optional `corpus-ipc` / libzmq jobs on Linux only
   (`docs/ci.md`).
