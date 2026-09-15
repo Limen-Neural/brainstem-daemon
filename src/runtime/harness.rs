@@ -50,10 +50,6 @@ pub struct FakeCore {
 }
 
 impl FakeCore {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn last_stimuli(&self) -> Option<&[f32]> {
         self.last_stimuli.as_deref()
     }
@@ -65,7 +61,7 @@ impl FakeCore {
             .iter()
             .enumerate()
             .filter(|(_, s)| **s > 0.5)
-            .map(|(i, _)| u16::try_from(i).unwrap_or(u16::MAX))
+            .filter_map(|(i, _)| u16::try_from(i).ok())
             .collect())
     }
 }
@@ -292,7 +288,7 @@ impl RuntimeHarness {
 
     fn initialize(&mut self) -> Result<()> {
         self.fail_point(FaultPoint::Before(Boundary::Initialize))?;
-        self.core = FakeCore::new();
+        self.core = FakeCore::default();
         self.channel_open = true;
         self.published.clear();
         self.metrics.clear();
@@ -328,8 +324,12 @@ impl RuntimeHarness {
     fn recover_session(&mut self, mut state: DurableState) -> Result<()> {
         let inflight = state.inflight.take();
         self.incomplete_prior = inflight.is_some();
-        self.session_id = state.last_session_id + 1;
-        state.last_session_id = self.session_id;
+        let Some(session_id) = state.last_session_id.checked_add(1) else {
+            self.reject_checkpoint();
+            bail!("session id overflow");
+        };
+        self.session_id = session_id;
+        state.last_session_id = session_id;
         self.store.persist(&state)?;
         self.durable = state;
         self.restart_outcome = Some(if self.incomplete_prior {
@@ -360,13 +360,19 @@ impl RuntimeHarness {
 
     fn execute_tick(&mut self, packet: &SequencedIngress) -> Result<(u64, Vec<u16>)> {
         self.fail_point(FaultPoint::Before(Boundary::TickExecute))?;
-        let tick_seq = self.durable.committed_tick_seq + 1;
-        self.durable.inflight = Some(InflightRecord {
+        let tick_seq = self
+            .durable
+            .committed_tick_seq
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("tick sequence overflow"))?;
+        let mut next = self.durable.clone();
+        next.inflight = Some(InflightRecord {
             session_id: self.session_id,
             tick_seq,
             ingress_seq: packet.seq,
         });
-        self.store.persist(&self.durable)?;
+        self.store.persist(&next)?;
+        self.durable = next;
         if self.injector.take(FaultPoint::CoreStepError) {
             self.apply_fault(FaultPoint::CoreStepError);
             bail!("core-step error");
@@ -399,16 +405,18 @@ impl RuntimeHarness {
             spike_ids,
             time_ns: self.clock.now_ns(),
         };
+        let mut next = self.durable.clone();
+        next.committed_tick_seq = tick_seq;
+        next.committed_ingress_seq = ingress_seq;
+        next.inflight = None;
+        self.store.persist(&next)?;
+        self.durable = next;
         self.metrics.push(MetricEvent {
             session_id: output.session_id,
             tick_seq: output.tick_seq,
             ingress_seq: output.ingress_seq,
         });
         self.published.push(output);
-        self.durable.committed_tick_seq = tick_seq;
-        self.durable.committed_ingress_seq = ingress_seq;
-        self.durable.inflight = None;
-        self.store.persist(&self.durable)?;
         self.fail_point(FaultPoint::After(Boundary::MetricPublish))
     }
 
@@ -496,7 +504,7 @@ impl HarnessBuilder {
     pub fn build(self) -> RuntimeHarness {
         RuntimeHarness {
             clock: FakeClock::new(self.seed.wrapping_mul(1_000_000).saturating_add(1)),
-            core: FakeCore::new(),
+            core: FakeCore::default(),
             store: self.store,
             durable: DurableState::fresh(),
             injector: self.injector,
@@ -530,4 +538,36 @@ pub fn packets_for_seed(seed: u64) -> Vec<SequencedIngress> {
 fn stimuli_for(seed: u64, seq: u64) -> Vec<f32> {
     let v = ((seed.wrapping_add(seq.wrapping_mul(17))) % 10) as f32 / 10.0;
     vec![v, 1.0 - v]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{DurableState, RestartOutcome};
+
+    #[test]
+    fn fake_core_drops_out_of_range_spike_ids() {
+        let mut core = FakeCore::default();
+        let mut stimuli = vec![0.0; (u16::MAX as usize) + 2];
+        stimuli[0] = 0.9;
+        stimuli[u16::MAX as usize + 1] = 0.9;
+        let spikes = core.step(&stimuli).unwrap();
+        assert_eq!(spikes, vec![0]);
+    }
+
+    #[test]
+    fn exhausted_session_id_fails_before_live_loop() {
+        let mut state = DurableState::fresh();
+        state.last_session_id = u64::MAX;
+        let store = DurableStore::from_state(&state).unwrap();
+        let mut h = RuntimeHarness::builder(0).store(store).build();
+        let err = h.boot().unwrap_err().to_string();
+        assert!(
+            err.contains("session id overflow"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(h.health(), crate::runtime::Health::CheckpointInvalid);
+        assert!(!h.live_loop_entered());
+        assert_eq!(h.restart_outcome(), Some(RestartOutcome::RejectedInvalid));
+    }
 }
