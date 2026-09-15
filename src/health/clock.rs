@@ -10,7 +10,7 @@ pub trait Clock: Send + Sync {
     fn now(&self) -> Instant;
 }
 
-/// Wall-clock monotonic clock.
+/// System monotonic clock.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemClock;
 

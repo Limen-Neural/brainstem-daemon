@@ -21,8 +21,10 @@ use tracing::{info, warn};
 use crate::health::{HealthHandle, HealthSnapshot};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
+const BUSY_IO_TIMEOUT: Duration = Duration::from_millis(50);
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 const MAX_CONTROL_CONNS: usize = 32;
+const MAX_BUSY_CONNS: usize = 4;
 
 pub async fn serve(
     addr: SocketAddr,
@@ -50,6 +52,7 @@ pub async fn serve_listener(
     }
 
     let slots = Arc::new(Semaphore::new(MAX_CONTROL_CONNS));
+    let busy_slots = Arc::new(Semaphore::new(MAX_BUSY_CONNS));
     loop {
         tokio::select! {
             changed = shutdown.changed() => {
@@ -58,7 +61,7 @@ pub async fn serve_listener(
                 }
             }
             accepted = listener.accept() => {
-                if !spawn_accepted(accepted, &slots, &health) {
+                if !spawn_accepted(accepted, &slots, &busy_slots, &health) {
                     tokio::time::sleep(ACCEPT_BACKOFF).await;
                 }
             }
@@ -82,11 +85,12 @@ fn should_stop_control(
 fn spawn_accepted(
     accepted: std::io::Result<(TcpStream, std::net::SocketAddr)>,
     slots: &Arc<Semaphore>,
+    busy_slots: &Arc<Semaphore>,
     health: &HealthHandle,
 ) -> bool {
     match accepted {
         Ok((stream, _)) => {
-            spawn_control_conn(stream, slots, health);
+            spawn_control_conn(stream, slots, busy_slots, health);
             true
         }
         Err(e) => {
@@ -96,10 +100,15 @@ fn spawn_accepted(
     }
 }
 
-fn spawn_control_conn(stream: TcpStream, slots: &Arc<Semaphore>, health: &HealthHandle) {
+fn spawn_control_conn(
+    stream: TcpStream,
+    slots: &Arc<Semaphore>,
+    busy_slots: &Arc<Semaphore>,
+    health: &HealthHandle,
+) {
     match slots.clone().try_acquire_owned() {
         Ok(permit) => spawn_served_conn(stream, permit, health.clone()),
-        Err(_) => spawn_busy_conn(stream),
+        Err(_) => spawn_busy_conn(stream, busy_slots),
     }
 }
 
@@ -112,10 +121,14 @@ fn spawn_served_conn(stream: TcpStream, permit: OwnedSemaphorePermit, health: He
     });
 }
 
-fn spawn_busy_conn(stream: TcpStream) {
+fn spawn_busy_conn(stream: TcpStream, busy_slots: &Arc<Semaphore>) {
+    let Ok(permit) = busy_slots.clone().try_acquire_owned() else {
+        return;
+    };
     tokio::spawn(async move {
+        let _permit = permit;
         let mut stream = stream;
-        if let Err(e) = write_http_response(&mut stream, &busy_http()).await {
+        if let Err(e) = write_busy_http(&mut stream).await {
             warn!("control busy reply failed: {e}");
         }
     });
@@ -135,6 +148,17 @@ fn control_response(req: &str, health: &HealthHandle) -> Vec<u8> {
 
 fn busy_http() -> Vec<u8> {
     http_response(503, "text/plain; charset=utf-8", b"busy\n")
+}
+
+async fn write_busy_http(stream: &mut TcpStream) -> Result<()> {
+    tokio::time::timeout(BUSY_IO_TIMEOUT, async {
+        stream.write_all(&busy_http()).await?;
+        stream.flush().await?;
+        Ok::<(), std::io::Error>(())
+    })
+    .await
+    .context("control busy write timed out")?
+    .context("control busy write failed")
 }
 
 async fn read_http_request(stream: &mut TcpStream) -> Result<String> {
@@ -365,7 +389,8 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let mut client = TcpStream::connect(addr).await.unwrap();
         let (server, _) = listener.accept().await.unwrap();
-        spawn_control_conn(server, &slots, &health);
+        let busy_slots = Arc::new(Semaphore::new(MAX_BUSY_CONNS));
+        spawn_control_conn(server, &slots, &busy_slots, &health);
         let mut buf = vec![0u8; 512];
         let n = tokio::time::timeout(Duration::from_secs(2), client.read(&mut buf))
             .await
@@ -375,6 +400,24 @@ mod tests {
         assert!(raw.contains("HTTP/1.1 503"), "{raw}");
         assert!(raw.contains("busy"), "{raw}");
         assert_eq!(slots.available_permits(), 0);
+    }
+
+    #[tokio::test]
+    async fn fully_saturated_control_closes_without_reply() {
+        let slots = Arc::new(Semaphore::new(0));
+        let busy_slots = Arc::new(Semaphore::new(0));
+        let health = HealthHandle::started(HealthLimits::default());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        spawn_control_conn(server, &slots, &busy_slots, &health);
+        let mut buf = vec![0u8; 512];
+        let result = tokio::time::timeout(Duration::from_millis(200), client.read(&mut buf)).await;
+        assert!(
+            matches!(result, Ok(Ok(0)) | Ok(Err(_))),
+            "expected close, got {result:?}"
+        );
     }
 
     #[test]

@@ -7,7 +7,10 @@ use super::clock::SystemClock;
 use super::machine::{HealthEvent, HealthLimits, HealthMachine};
 use super::snapshot::HealthSnapshot;
 
-/// Cloneable, non-tick-blocking handle for supervisors and the control surface.
+/// Cloneable handle for supervisors and the control surface.
+///
+/// `try_snapshot` never waits. `snapshot` may wait only for an in-flight `apply`
+/// (no I/O, no tick-loop backend).
 #[derive(Clone)]
 pub struct HealthHandle {
     inner: Arc<RwLock<HealthMachine>>,
