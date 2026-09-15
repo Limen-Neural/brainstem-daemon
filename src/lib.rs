@@ -5,7 +5,12 @@
 
 pub mod backend;
 pub mod daemon;
+pub mod ingress;
 pub mod registry;
 
 // Re-export the new pluggable I/O surface (pub from day one).
 pub use backend::{BackendPair, IngressPacket, SpikeEvent, SpikeSink, StimulusSource};
+pub use ingress::{
+    BoundedIngress, ClassMetrics, DrainedTick, EnqueueOutcome, IngressConfig, IngressMetrics,
+    MessageClass, OverflowPolicy,
+};
