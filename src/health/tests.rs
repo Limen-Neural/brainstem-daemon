@@ -59,6 +59,18 @@ fn initialization_does_not_imply_readiness() {
 }
 
 #[test]
+fn initialization_before_start_is_ignored() {
+    let (mut m, _) = machine();
+    m.apply(HealthEvent::InitializationCompleted);
+    m.apply(HealthEvent::CheckpointValidated { identity: ckpt() });
+    let snap = m.snapshot();
+    assert!(!snap.live);
+    assert!(!snap.ready);
+    assert_eq!(snap.phase, HealthPhase::Starting);
+    assert_eq!(snap.reasons, vec![ReasonCode::Starting]);
+}
+
+#[test]
 fn checkpoint_validation_makes_ready() {
     let (mut m, _) = machine();
     m.apply(HealthEvent::ProcessStarted);
@@ -372,7 +384,16 @@ fn try_snapshot_does_not_block_on_write_lock() {
 #[test]
 fn example_snapshots_match_documented_shapes() {
     let (mut healthy, _) = machine();
-    bring_ready(&mut healthy);
+    healthy.apply(HealthEvent::ProcessStarted);
+    healthy.apply(HealthEvent::InitializationCompleted);
+    healthy.apply(HealthEvent::CheckpointValidated {
+        identity: CheckpointIdentity {
+            id: "soma16".into(),
+            digest: None,
+        },
+    });
+    healthy.apply(HealthEvent::IngressObserved);
+    healthy.apply(HealthEvent::TickSucceeded);
     let healthy = healthy.snapshot();
     assert_eq!(
         serde_json::to_value(&healthy).unwrap(),
@@ -383,7 +404,7 @@ fn example_snapshots_match_documented_shapes() {
             "reasons": [],
             "last_successful_tick_ms": 0,
             "tick_age_ms": 0,
-            "checkpoint": { "id": "soma16", "digest": "abc123" },
+            "checkpoint": { "id": "soma16", "digest": null },
             "input_freshness": { "age_ms": 0, "stale": false },
             "queue_pressure": { "depth": 0, "capacity": 0, "ratio": null, "overloaded": false },
             "fatal": null,
@@ -456,6 +477,19 @@ fn inverted_overload_limits_keep_stale_after() {
         stale_after: Duration::from_millis(100),
         overload_high: 0.50,
         overload_low: 0.90,
+    }
+    .sanitized();
+    assert_eq!(limits.stale_after, Duration::from_millis(100));
+    assert_eq!(limits.overload_high, 0.90);
+    assert_eq!(limits.overload_low, 0.70);
+}
+
+#[test]
+fn equal_overload_watermarks_are_replaced() {
+    let limits = HealthLimits {
+        stale_after: Duration::from_millis(100),
+        overload_high: 0.80,
+        overload_low: 0.80,
     }
     .sanitized();
     assert_eq!(limits.stale_after, Duration::from_millis(100));

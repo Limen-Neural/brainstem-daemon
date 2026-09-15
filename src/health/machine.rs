@@ -32,11 +32,11 @@ impl Default for HealthLimits {
 }
 
 impl HealthLimits {
-    /// Replace non-finite or inverted watermarks with the built-in defaults.
+    /// Replace non-finite, inverted, or equal watermarks with the built-in defaults.
     pub fn sanitized(self) -> Self {
         let high = finite_or(self.overload_high, 0.90);
         let low = finite_or(self.overload_low, 0.70);
-        if high >= low {
+        if high > low {
             Self {
                 stale_after: self.stale_after,
                 overload_high: high,
@@ -153,7 +153,7 @@ impl HealthMachine {
     }
 
     fn mark_initialized(&mut self) {
-        if self.fatal.is_none() && !self.draining {
+        if self.started && self.fatal.is_none() && !self.draining {
             self.initialized = true;
         }
     }
@@ -175,7 +175,7 @@ impl HealthMachine {
     }
 
     fn can_accept_checkpoint(&self) -> bool {
-        self.fatal.is_none() && !self.draining && self.initialized
+        self.started && self.fatal.is_none() && !self.draining && self.initialized
     }
 
     fn apply_terminal(&mut self, event: HealthEvent) {
