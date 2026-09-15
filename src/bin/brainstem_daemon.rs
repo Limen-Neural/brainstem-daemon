@@ -79,8 +79,9 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
         // is intentionally conservative.
         let mut source = brainstem_daemon::backend::ZmqStimulusSource::with_channels(cfg.channels);
 
-        // Pass the model path through (was dropped before). The pinned
-        // ZmqBrainBackend::initialize takes `_model_path` and currently ignores it.
+        // Pass the model path through for initialize's signature. Checkpoint
+        // loading is performed by `BrainstemDaemon::run` from `cfg.model_path`.
+        // The ZMQ source only connects the SUB socket here.
 
         let model_path = cfg.model_path.to_string_lossy();
         source

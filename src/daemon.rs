@@ -17,6 +17,7 @@ use tracing::{error, info, warn};
 use crate::backend::{
     BackendPair, IngressPacket, SpikeEvent as LocalSpikeEvent, SpikeSink, StimulusSource,
 };
+use crate::checkpoint::{CheckpointIdentity, NetworkDims, try_load_checkpoint};
 use crate::registry::{ServiceConfig, ServiceRegistry};
 
 // Keep the const for compatibility when the corpus-ipc feature is used.
@@ -59,6 +60,17 @@ impl DaemonConfig {
             .with_context(|| format!("failed to parse config from {}", path.display()))?;
         Ok(cfg)
     }
+}
+
+/// Observable counters from a bounded tick run (smoke / integration harness).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuntimeStats {
+    pub ticks: u64,
+    pub accepted_batches: u64,
+    pub rejected_batches: u64,
+    pub last_batch_id: Option<u64>,
+    pub last_valid_mask: Option<Vec<bool>>,
+    pub loaded_checkpoint: Option<CheckpointIdentity>,
 }
 
 /// Headless spiking-network daemon.
@@ -130,6 +142,8 @@ impl BrainstemDaemon {
     pub async fn run(self) -> Result<()> {
         let cfg = self.config;
         let mut backend = self.backend;
+        let mut stats = RuntimeStats::default();
+        let mut network = instantiate_network(&cfg, &mut stats)?;
 
         if cfg.tick_rate_hz == 0 || cfg.tick_rate_hz > 1_000_000 {
             anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
@@ -139,8 +153,6 @@ impl BrainstemDaemon {
         let mut ticker = time::interval(tick_duration);
         ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
-        let mut network =
-            SpikingNetwork::with_dimensions(cfg.lif_count, cfg.izh_count, cfg.channels);
         let mut stimuli = vec![0.0; cfg.channels];
         let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
 
@@ -155,6 +167,7 @@ impl BrainstemDaemon {
                         &mut *backend.sink,
                         &mut stimuli,
                         &mut spike_buf,
+                        &mut stats,
                     );
                 }
                 _ = &mut shutdown => {
@@ -175,6 +188,36 @@ impl BrainstemDaemon {
         }
 
         Ok(())
+    }
+
+    /// Drive a bounded number of ticks without waiting for a termination signal.
+    ///
+    /// Used by the CPU-only Thalamic → corpus-ipc → Brainstem smoke harness.
+    pub fn run_for_ticks(self, ticks: u64) -> Result<RuntimeStats> {
+        let cfg = self.config;
+        let mut backend = self.backend;
+        let mut stats = RuntimeStats::default();
+        let mut network = instantiate_network(&cfg, &mut stats)?;
+        let mut stimuli = vec![0.0; cfg.channels];
+        let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
+
+        for _ in 0..ticks {
+            run_tick(
+                &mut *backend.source,
+                &mut network,
+                &mut *backend.sink,
+                &mut stimuli,
+                &mut spike_buf,
+                &mut stats,
+            );
+        }
+
+        backend.sink.flush().context("failed to flush spike sink")?;
+        backend
+            .source
+            .shutdown()
+            .context("failed to shut down stimulus source")?;
+        Ok(stats)
     }
 }
 
@@ -247,6 +290,38 @@ fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
     Ok(())
 }
 
+fn instantiate_network(cfg: &DaemonConfig, stats: &mut RuntimeStats) -> Result<SpikingNetwork> {
+    let expected = NetworkDims {
+        lif_count: cfg.lif_count,
+        izh_count: cfg.izh_count,
+        channels: cfg.channels,
+    };
+    match try_load_checkpoint(&cfg.model_path, expected)? {
+        Some((network, identity)) => {
+            info!(
+                model_id = %identity.model_id,
+                schema_version = identity.schema_version,
+                fingerprint = %identity.fingerprint,
+                path = %identity.path.display(),
+                "loaded explicit checkpoint"
+            );
+            stats.loaded_checkpoint = Some(identity);
+            Ok(network)
+        }
+        None => {
+            info!(
+                path = %cfg.model_path.display(),
+                "no checkpoint file present; constructing a blank network from dimensions"
+            );
+            Ok(SpikingNetwork::with_dimensions(
+                cfg.lif_count,
+                cfg.izh_count,
+                cfg.channels,
+            ))
+        }
+    }
+}
+
 // Trait-based tick loop (works with or without corpus-ipc feature)
 
 fn run_tick(
@@ -255,6 +330,7 @@ fn run_tick(
     sink: &mut dyn SpikeSink,
     stimuli: &mut [f32],
     spike_buf: &mut Vec<LocalSpikeEvent>,
+    stats: &mut RuntimeStats,
 ) {
     let packet = match source.next_ingress() {
         Ok(Some(p)) => p,
@@ -265,13 +341,23 @@ fn run_tick(
             IngressPacket {
                 stimuli: Vec::new(),
                 modulators: None,
+                valid_mask: None,
+                batch_id: None,
+                timestamp_ns: None,
             }
         }
         Err(e) => {
-            warn!("Failed to receive from stimulus source: {e}");
+            error!("Failed to receive from stimulus source: {e}");
+            stats.rejected_batches += 1;
             return;
         }
     };
+
+    if packet.batch_id.is_some() {
+        stats.accepted_batches += 1;
+        stats.last_batch_id = packet.batch_id;
+        stats.last_valid_mask = packet.valid_mask.clone();
+    }
 
     let modulators = decode_inputs(&packet, stimuli);
 
@@ -284,6 +370,7 @@ fn run_tick(
             return;
         }
     };
+    stats.ticks += 1;
 
     // Single timestamp for both per-spike time and batch metadata (keeps them consistent).
     let now = SystemTime::now()
@@ -341,6 +428,13 @@ fn decode_inputs(packet: &IngressPacket, stimuli: &mut [f32]) -> NeuroModulators
     if readout.len() < channels {
         stimuli[upto..].fill(0.0);
     }
+    if let Some(mask) = packet.valid_mask.as_ref() {
+        for (idx, valid) in mask.iter().enumerate().take(channels) {
+            if !*valid {
+                stimuli[idx] = 0.0;
+            }
+        }
+    }
 
     match packet.modulators.as_ref() {
         Some(mods) if mods.len() >= 4 => {
@@ -369,7 +463,14 @@ pub(crate) fn run_tick_for_test(
     stimuli: &mut [f32],
     spike_buf: &mut Vec<LocalSpikeEvent>,
 ) {
-    run_tick(source, network, sink, stimuli, spike_buf);
+    run_tick(
+        source,
+        network,
+        sink,
+        stimuli,
+        spike_buf,
+        &mut RuntimeStats::default(),
+    );
 }
 
 #[cfg(test)]
@@ -418,6 +519,9 @@ mod tests {
         let packet = IngressPacket {
             stimuli: vec![0.1, 0.2, 0.3, 0.4],
             modulators: None,
+            valid_mask: None,
+            batch_id: None,
+            timestamp_ns: None,
         };
         let mut stimuli = vec![0.0; 4];
         let _mods = decode_inputs(&packet, &mut stimuli);
@@ -429,6 +533,9 @@ mod tests {
         let packet = IngressPacket {
             stimuli: vec![0.0; 4],
             modulators: Some(vec![0.5, 0.6, 0.7, 0.8]),
+            valid_mask: None,
+            batch_id: None,
+            timestamp_ns: None,
         };
         let mut stimuli = vec![0.0; 4];
         let mods = decode_inputs(&packet, &mut stimuli);
@@ -443,11 +550,28 @@ mod tests {
         let packet = IngressPacket {
             stimuli: vec![0.1, 0.2],
             modulators: None,
+            valid_mask: None,
+            batch_id: None,
+            timestamp_ns: None,
         };
         let mut stimuli = vec![0.0; 4];
         let mods = decode_inputs(&packet, &mut stimuli);
         assert_eq!(stimuli, vec![0.1, 0.2, 0.0, 0.0]);
         assert_eq!(mods, NeuroModulators::default());
+    }
+
+    #[test]
+    fn decode_inputs_zeros_invalid_channels() {
+        let packet = IngressPacket {
+            stimuli: vec![1.0, 0.5, 0.25, 0.1],
+            modulators: None,
+            valid_mask: Some(vec![true, false, true, true]),
+            batch_id: Some(1),
+            timestamp_ns: Some(1),
+        };
+        let mut stimuli = vec![0.0; 4];
+        let _mods = decode_inputs(&packet, &mut stimuli);
+        assert_eq!(stimuli, vec![1.0, 0.0, 0.25, 0.1]);
     }
 
     #[test]
