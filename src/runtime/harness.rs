@@ -305,13 +305,20 @@ impl RuntimeHarness {
             bail!("malformed checkpoint");
         }
         match self.store.load() {
-            Ok(None) => self.start_fresh_session(),
-            Ok(Some(state)) => self.recover_session(state),
+            Ok(None) => self.start_fresh_session()?,
+            Ok(Some(state)) => {
+                if state.committed_tick_seq == u64::MAX {
+                    self.reject_checkpoint();
+                    bail!("tick sequence overflow");
+                }
+                self.recover_session(state)?;
+            }
             Err(err) => {
                 self.reject_checkpoint();
-                Err(err)
+                return Err(err);
             }
         }
+        Ok(())
     }
 
     fn start_fresh_session(&mut self) -> Result<()> {
@@ -363,11 +370,11 @@ impl RuntimeHarness {
 
     fn execute_tick(&mut self, packet: &SequencedIngress) -> Result<(u64, Vec<u16>)> {
         self.fail_point(FaultPoint::Before(Boundary::TickExecute))?;
-        let tick_seq = self
-            .durable
-            .committed_tick_seq
-            .checked_add(1)
-            .ok_or_else(|| anyhow::anyhow!("tick sequence overflow"))?;
+        let Some(tick_seq) = self.durable.committed_tick_seq.checked_add(1) else {
+            self.health = Health::Faulted;
+            self.live = false;
+            bail!("tick sequence overflow");
+        };
         let mut next = self.durable.clone();
         next.inflight = Some(InflightRecord {
             session_id: self.session_id,
@@ -596,6 +603,25 @@ mod tests {
         assert_eq!(h.health(), crate::runtime::Health::CheckpointInvalid);
         assert!(!h.live_loop_entered());
         assert_eq!(h.restart_outcome(), Some(RestartOutcome::RejectedInvalid));
+    }
+
+    #[test]
+    fn exhausted_tick_seq_fails_before_live_loop() {
+        let mut state = DurableState::fresh();
+        state.last_session_id = 1;
+        state.committed_tick_seq = u64::MAX;
+        let store = DurableStore::from_state(&state).unwrap();
+        let mut h = RuntimeHarness::builder(0).store(store).build();
+        let err = h.boot().unwrap_err().to_string();
+        assert!(
+            err.contains("tick sequence overflow"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(h.health(), crate::runtime::Health::CheckpointInvalid);
+        assert!(!h.is_live());
+        assert!(!h.live_loop_entered());
+        assert_eq!(h.restart_outcome(), Some(RestartOutcome::RejectedInvalid));
+        assert!(h.run_tick().is_err());
     }
 
     #[test]
