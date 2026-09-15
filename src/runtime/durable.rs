@@ -92,7 +92,11 @@ impl DurableState {
         let Some(inf) = &self.inflight else {
             return Ok(());
         };
-        if inf.tick_seq != self.committed_tick_seq + 1 {
+        let next = self
+            .committed_tick_seq
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("committed tick sequence overflow"))?;
+        if inf.tick_seq != next {
             bail!(
                 "inflight tick {} is not committed+1 ({})",
                 inf.tick_seq,
@@ -219,5 +223,19 @@ mod tests {
         });
         let err = state.validate().unwrap_err().to_string();
         assert!(err.contains("committed+1"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn inflight_at_max_committed_tick_is_rejected_without_overflow() {
+        let mut state = DurableState::fresh();
+        state.last_session_id = 1;
+        state.committed_tick_seq = u64::MAX;
+        state.inflight = Some(InflightRecord {
+            session_id: 1,
+            tick_seq: 0,
+            ingress_seq: 1,
+        });
+        let err = state.validate().unwrap_err().to_string();
+        assert!(err.contains("overflow"), "unexpected error: {err}");
     }
 }
