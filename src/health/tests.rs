@@ -1,5 +1,5 @@
 use super::*;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn limits() -> HealthLimits {
     HealthLimits {

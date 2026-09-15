@@ -11,13 +11,13 @@ This repository had no HTTP/metrics server before this surface. When
 |---|---|
 | `GET /livez` | `200` if live, `503` otherwise |
 | `GET /readyz` | `200` if ready, `503` otherwise |
-| `GET /health` | `200` JSON [`HealthSnapshot`](../src/health.rs) (always; inspect `phase`) |
+| `GET /health` | `200` JSON [`HealthSnapshot`](../src/health/snapshot.rs) (always; inspect `phase`) |
 | `GET /metrics` | Prometheus text; labels are phase/reason codes only |
 
 Leave `control_bind` unset to preserve the historical no-extra-socket default.
 Do not add a second control server beside this one.
 
-Library embedders can also clone [`HealthHandle`](../src/health.rs) from
+Library embedders can also clone [`HealthHandle`](../src/health/handle.rs) from
 `BrainstemDaemon::health()` and call `snapshot()` / `try_snapshot()` without
 waiting on the tick loop's backend or `SpikingNetwork::step`.
 
