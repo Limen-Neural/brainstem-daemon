@@ -73,17 +73,21 @@ The default config path is platform-dependent. On Linux it is typically `~/.conf
 A minimal TOML configuration includes:
 
 ```toml
+runtime_mode   = "live"    # default; use "simulation" for a blank with_dimensions() network
 lif_count      = 16
-izh_count      = 5
+izh_count      = 0         # live Spikenaut sidecars are LIF-only
 channels       = 16
 tick_rate_hz   = 1000
 log_level      = "info"
 spine_sub_port = 5555
 spine_pub_port = 5556
-model_path     = "~/models/soma16.mem"
+model_path     = "/var/lib/soma/snn_model.json"  # Distill sidecar JSON; `~` is not expanded
 ```
 
-The `model_path` is not used by the stub backend.
-With `--features corpus-ipc` the binary passes it literally to `ZmqStimulusSource::initialize`.
+In **live** mode (the default), `model_path` must point at Distill sidecar `snn_model.json` (or a Hugging Face layout directory / `config.json`). Startup fails closed on a missing, corrupt, incompatible, non-finite, or blank checkpoint. FPGA `.mem` dumps are not a software checkpoint.
+
+In **simulation** mode the daemon constructs a blank `SpikingNetwork::with_dimensions(...)` and does not claim to have loaded Spikenaut. `model_path` is unused for restoration.
+
+With `--features corpus-ipc` the binary still passes `model_path` literally to `ZmqStimulusSource::initialize`.
 `~` is not expanded, and the pinned `ZmqBrainBackend` currently ignores `_model_path`.
 With the stub backend, `brainstem-daemon` runs a headless spiking-neural-network tick loop and logs `🔌 Using stub backend`.
