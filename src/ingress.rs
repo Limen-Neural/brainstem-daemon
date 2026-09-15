@@ -868,10 +868,12 @@ mod tests {
 
     #[test]
     fn try_enqueue_never_blocks_block_timeout_class() {
-        let mut cfg = IngressConfig::default();
-        cfg.control_policy = OverflowPolicy::BlockTimeout;
-        cfg.control_capacity = 1;
-        cfg.block_timeout_ms = 60_000;
+        let cfg = IngressConfig {
+            control_policy: OverflowPolicy::BlockTimeout,
+            control_capacity: 1,
+            block_timeout_ms: 60_000,
+            ..IngressConfig::default()
+        };
         let ingress = BoundedIngress::new(cfg).unwrap();
         assert!(
             ingress
@@ -952,8 +954,10 @@ mod tests {
 
     #[test]
     fn zero_capacity_is_rejected_at_construction() {
-        let mut cfg = IngressConfig::default();
-        cfg.sensory_capacity = 0;
+        let cfg = IngressConfig {
+            sensory_capacity: 0,
+            ..IngressConfig::default()
+        };
         let err = match BoundedIngress::new(cfg) {
             Ok(_) => panic!("expected zero capacity to fail"),
             Err(err) => err,
