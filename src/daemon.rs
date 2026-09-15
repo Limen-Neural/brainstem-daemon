@@ -275,14 +275,7 @@ fn run_tick(
 ) {
     let backend_packet = match source.next_ingress() {
         Ok(Some(p)) => Some(p),
-        Ok(None) => {
-            // Per StimulusSource contract: None means skip backend ingress this tick
-            // but still advance the network. decode_inputs zero-fills a short readout.
-            Some(IngressPacket {
-                stimuli: Vec::new(),
-                modulators: None,
-            })
-        }
+        Ok(None) => None,
         Err(e) => {
             warn!("Failed to receive from stimulus source: {e}");
             None
@@ -291,7 +284,8 @@ fn run_tick(
 
     // Admit through bounded class queues so a bursty backend cannot grow
     // unbounded in-process, then drain control-first for this tick.
-    // Backend errors skip admit but still drain in-process producers.
+    // `None` (skip or error) does not enqueue a placeholder that could evict
+    // in-process sensory. decode_inputs zero-fills when drain yields no stimuli.
     if let Some(packet) = backend_packet {
         ingress.admit_backend_packet(packet);
     }
@@ -299,7 +293,7 @@ fn run_tick(
     if !drained.control.is_empty() {
         info!(
             count = drained.control.len(),
-            "applied control-class ingress"
+            "drained control-class ingress ahead of bulk"
         );
     }
     let packet = drained.into_packet();
@@ -425,6 +419,20 @@ mod tests {
             ],
             ingress: IngressConfig::default(),
         }
+    }
+
+    fn write_config_toml(stem: &str, body: &str) -> PathBuf {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-toml");
+        std::fs::create_dir_all(&dir).expect("create test-toml dir");
+        let path = dir.join(format!(
+            "{stem}-{}-{:?}.toml",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, body).expect("write test toml");
+        path
     }
 
     #[test]
@@ -570,13 +578,8 @@ mod tests {
 
     #[test]
     fn config_defaults_ingress_when_section_omitted() {
-        let path = std::env::temp_dir().join(format!(
-            "brainstem-daemon-ingress-omit-{}-{:?}.toml",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::write(
-            &path,
+        let path = write_config_toml(
+            "ingress-omit",
             r#"
 tick_rate_hz = 1000
 log_level = "info"
@@ -587,8 +590,7 @@ lif_count = 16
 izh_count = 5
 channels = 16
 "#,
-        )
-        .unwrap();
+        );
         let cfg = DaemonConfig::load(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(cfg.ingress, IngressConfig::default());
@@ -596,13 +598,8 @@ channels = 16
 
     #[test]
     fn config_parses_ingress_section() {
-        let path = std::env::temp_dir().join(format!(
-            "brainstem-daemon-ingress-set-{}-{:?}.toml",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::write(
-            &path,
+        let path = write_config_toml(
+            "ingress-set",
             r#"
 tick_rate_hz = 1000
 log_level = "info"
@@ -621,8 +618,7 @@ control_policy = "block_timeout"
 telemetry_policy = "reject"
 block_timeout_ms = 0
 "#,
-        )
-        .unwrap();
+        );
         let cfg = DaemonConfig::load(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(cfg.ingress.sensory_capacity, 2);
@@ -691,6 +687,50 @@ block_timeout_ms = 0
         assert_eq!(ingress.metrics().control.depth, 0);
         assert_eq!(ingress.metrics().sensory.depth, 0);
         assert_eq!(ingress.metrics().reward.depth, 0);
+        assert_eq!(sink.emitted.len(), 1);
+    }
+
+    #[test]
+    fn run_tick_skips_backend_none_without_evicting_sensory() {
+        use crate::backend::CollectingSpikeSink;
+        use crate::ingress::MessageClass;
+
+        let ingress = BoundedIngress::new(IngressConfig::tiny_fixture()).unwrap();
+        let _ = ingress.enqueue(
+            MessageClass::Sensory,
+            IngressPacket {
+                stimuli: vec![0.3, 0.4],
+                modulators: None,
+            },
+        );
+
+        struct NoneSource;
+        impl StimulusSource for NoneSource {
+            fn next_ingress(&mut self) -> anyhow::Result<Option<IngressPacket>> {
+                Ok(None)
+            }
+
+            fn initialize(&mut self, _model_path: Option<&str>) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut source = NoneSource;
+        let mut sink = CollectingSpikeSink::new();
+        let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
+        let mut stimuli = vec![0.0; 2];
+        let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+        super::run_tick(
+            &mut source,
+            &mut network,
+            &mut sink,
+            &mut stimuli,
+            &mut spike_buf,
+            &ingress,
+        );
+
+        assert_eq!(stimuli, vec![0.3, 0.4]);
+        assert_eq!(ingress.metrics().sensory.depth, 0);
         assert_eq!(sink.emitted.len(), 1);
     }
 
