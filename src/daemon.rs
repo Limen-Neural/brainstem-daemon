@@ -160,26 +160,10 @@ impl BrainstemDaemon {
         let (control_stop, control_task) =
             start_control(cfg.control_bind.as_deref(), health.clone()).await?;
 
-        let model_path = cfg.model_path.to_string_lossy();
-        if let Err(e) = backend.source.initialize(Some(model_path.as_ref())) {
-            health.apply(HealthEvent::InitializationFailed {
-                detail: e.to_string(),
-            });
-            error!("Stimulus source initialization failed: {e}");
-            await_shutdown_if_control(control_stop.is_some()).await;
+        if let Err(e) = initialize_source(&mut *backend.source, &cfg, &health) {
             stop_control(control_stop, control_task).await;
-            return Err(e).context("failed to initialize stimulus source");
+            return Err(e);
         }
-        health.apply(HealthEvent::InitializationCompleted);
-
-        // Successful initialize is the current checkpoint gate. Real digest/weight
-        // validation is tracked in LIM-1133 and will replace this stand-in.
-        health.apply(HealthEvent::CheckpointValidated {
-            identity: CheckpointIdentity {
-                id: checkpoint_id_from_path(&cfg.model_path),
-                digest: None,
-            },
-        });
 
         let tick_duration = Duration::from_nanos(1_000_000_000 / u64::from(cfg.tick_rate_hz));
         let mut ticker = time::interval(tick_duration);
@@ -286,9 +270,12 @@ async fn start_control(
     let addr: SocketAddr = bind
         .parse()
         .with_context(|| format!("invalid control_bind {bind}"))?;
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("failed to bind control surface on {addr}"))?;
     let (tx, rx) = watch::channel(false);
     let task = tokio::spawn(async move {
-        if let Err(e) = crate::control::serve(addr, health, rx).await {
+        if let Err(e) = crate::control::serve_listener(listener, health, rx).await {
             warn!("control surface stopped: {e}");
         }
     });
@@ -307,10 +294,29 @@ async fn stop_control(
     }
 }
 
-async fn await_shutdown_if_control(has_control: bool) {
-    if has_control {
-        shutdown_signal().await;
+fn initialize_source(
+    source: &mut dyn StimulusSource,
+    cfg: &DaemonConfig,
+    health: &HealthHandle,
+) -> Result<()> {
+    let model_path = cfg.model_path.to_string_lossy();
+    if let Err(e) = source.initialize(Some(model_path.as_ref())) {
+        health.apply(HealthEvent::InitializationFailed {
+            detail: "stimulus source initialization failed".into(),
+        });
+        error!("Stimulus source initialization failed: {e}");
+        return Err(e).context("failed to initialize stimulus source");
     }
+    health.apply(HealthEvent::InitializationCompleted);
+    // Successful initialize is the current checkpoint gate. Real digest/weight
+    // validation is tracked in LIM-1133 and will replace this stand-in.
+    health.apply(HealthEvent::CheckpointValidated {
+        identity: CheckpointIdentity {
+            id: checkpoint_id_from_path(&cfg.model_path),
+            digest: None,
+        },
+    });
+    Ok(())
 }
 
 fn checkpoint_id_from_path(path: &Path) -> String {
@@ -319,6 +325,14 @@ fn checkpoint_id_from_path(path: &Path) -> String {
         .filter(|name| !name.is_empty())
         .unwrap_or("unknown")
         .to_string()
+}
+
+fn packet_carries_input(packet: &IngressPacket) -> bool {
+    !packet.stimuli.is_empty()
+        || packet
+            .modulators
+            .as_ref()
+            .is_some_and(|mods| !mods.is_empty())
 }
 
 fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
@@ -357,7 +371,9 @@ fn run_tick(
 ) {
     let packet = match source.next_ingress() {
         Ok(Some(p)) => {
-            health.apply(HealthEvent::IngressObserved);
+            if packet_carries_input(&p) {
+                health.apply(HealthEvent::IngressObserved);
+            }
             p
         }
         Ok(None) => {
@@ -386,7 +402,6 @@ fn run_tick(
             return;
         }
     };
-    health.apply(HealthEvent::TickSucceeded);
 
     // Single timestamp for both per-spike time and batch metadata (keeps them consistent).
     let now = SystemTime::now()
@@ -420,6 +435,7 @@ fn run_tick(
     if spike_buf.is_empty() && !spike_ids.is_empty() {
         // Had spikes from network but all IDs were out of u16 range (dropped).
         // Nothing valid to publish; skip to avoid empty batch for dropped case.
+        health.apply(HealthEvent::TickSucceeded);
         return;
     }
 
@@ -430,7 +446,9 @@ fn run_tick(
     //   expectations (CollectingSpikeSink) and wire behavior stable.
     if let Err(e) = sink.emit(spike_buf, now) {
         warn!("Failed to emit spikes: {e}");
+        return;
     }
+    health.apply(HealthEvent::TickSucceeded);
 }
 
 /// decode_inputs now takes an IngressPacket.

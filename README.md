@@ -107,7 +107,7 @@ Default Cargo features are empty (`default = []` in `Cargo.toml`). That path use
 
 Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`. Those always inject `BackendPair::stub()`. Only `src/bin/brainstem_daemon.rs` constructs `ZmqStimulusSource` + `ZmqSpikeSink` when `corpus-ipc` is on.
 
-Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. Call `StimulusSource::initialize(...)` on the source first (as the binary does). `run` also calls `initialize` (idempotent on success) so readiness can move past the checkpoint gate. Skipping initialize before `run` is therefore no longer required for the stub path; a failing `initialize` marks health **fatal** and never becomes ready.
+Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. `BrainstemDaemon::run` is the sole caller of `StimulusSource::initialize` (the binary no longer initializes first, so the pinned ZMQ backend is not reconnected). A failing `initialize` marks health **fatal** and never becomes ready.
 
 Health snapshots, probe paths, and the transition table live in [`docs/health.md`](docs/health.md).
 

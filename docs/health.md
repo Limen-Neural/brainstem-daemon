@@ -53,7 +53,8 @@ file name (not the full path) with `digest: null`.
 
 ## Example snapshots
 
-Healthy (ready to consume events):
+Healthy (ready to consume events). Until LIM-1133 the live daemon stand-in uses
+`"digest": null`.
 
 ```json
 {
@@ -62,7 +63,8 @@ Healthy (ready to consume events):
   "phase": "running",
   "reasons": [],
   "last_successful_tick_ms": 0,
-  "checkpoint": { "id": "soma16", "digest": "abc123" },
+  "tick_age_ms": 0,
+  "checkpoint": { "id": "soma16", "digest": null },
   "input_freshness": { "age_ms": 0, "stale": false },
   "queue_pressure": { "depth": 0, "capacity": 0, "ratio": null, "overloaded": false },
   "fatal": null,
@@ -79,7 +81,8 @@ Degraded (still ready; supervisors should not bounce the process):
   "phase": "degraded",
   "reasons": ["stale_input", "overload"],
   "last_successful_tick_ms": 0,
-  "checkpoint": { "id": "soma16", "digest": "abc123" },
+  "tick_age_ms": 0,
+  "checkpoint": { "id": "soma16", "digest": null },
   "input_freshness": { "age_ms": 100, "stale": true },
   "queue_pressure": { "depth": 95, "capacity": 100, "ratio": 0.95, "overloaded": true },
   "fatal": null,
@@ -96,6 +99,7 @@ Fatal (never returns to ready in this process):
   "phase": "fatal",
   "reasons": ["fatal"],
   "last_successful_tick_ms": null,
+  "tick_age_ms": null,
   "checkpoint": null,
   "input_freshness": { "age_ms": null, "stale": false },
   "queue_pressure": { "depth": 0, "capacity": 0, "ratio": null, "overloaded": false },

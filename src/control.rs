@@ -8,15 +8,19 @@
 //! a second server alongside this one.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
 use tracing::{info, warn};
 
 use crate::health::{HealthHandle, HealthSnapshot};
+
+const IO_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_CONTROL_CONNS: usize = 32;
 
 pub async fn serve(
     addr: SocketAddr,
@@ -39,6 +43,11 @@ pub async fn serve_listener(
         .context("control listener has no local address")?;
     info!(%bound, "control surface listening (/livez /readyz /health /metrics)");
 
+    if *shutdown.borrow() {
+        return Ok(());
+    }
+
+    let slots = Arc::new(Semaphore::new(MAX_CONTROL_CONNS));
     loop {
         tokio::select! {
             changed = shutdown.changed() => {
@@ -49,8 +58,13 @@ pub async fn serve_listener(
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, _)) => {
+                        let Ok(permit) = slots.clone().try_acquire_owned() else {
+                            drop(stream);
+                            continue;
+                        };
                         let health = health.clone();
                         tokio::spawn(async move {
+                            let _permit = permit;
                             if let Err(e) = handle_connection(stream, &health).await {
                                 warn!("control connection failed: {e}");
                             }
@@ -67,42 +81,67 @@ pub async fn serve_listener(
 
 async fn handle_connection(mut stream: TcpStream, health: &HealthHandle) -> Result<()> {
     let mut buf = [0u8; 1024];
-    let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf))
+    let n = tokio::time::timeout(IO_TIMEOUT, read_request_line(&mut stream, &mut buf))
         .await
         .context("control read timed out")?
         .context("control read failed")?;
     let req = std::str::from_utf8(&buf[..n]).unwrap_or("");
     let snap = health.snapshot();
     let response = render_http(req, &snap);
-    stream.write_all(&response).await?;
-    stream.flush().await?;
+    tokio::time::timeout(IO_TIMEOUT, async {
+        stream.write_all(&response).await?;
+        stream.flush().await?;
+        Ok::<_, std::io::Error>(())
+    })
+    .await
+    .context("control write timed out")?
+    .context("control write failed")?;
     Ok(())
+}
+
+async fn read_request_line(stream: &mut TcpStream, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut total = 0;
+    while total < buf.len() {
+        let n = stream.read(&mut buf[total..]).await?;
+        if n == 0 {
+            break;
+        }
+        total += n;
+        if buf[..total].contains(&b'\n') {
+            break;
+        }
+    }
+    Ok(total)
 }
 
 pub(crate) fn render_http(request: &str, snap: &HealthSnapshot) -> Vec<u8> {
     match parse_get_path(request) {
         ParseResult::Get(path) => {
-            let (status, content_type, body) = match path {
-                "/livez" | "/healthz/live" => probe(snap.live, b"live\n", b"not live\n"),
-                "/readyz" | "/healthz/ready" => probe(snap.ready, b"ready\n", b"not ready\n"),
-                "/health" => (
-                    200,
-                    "application/json",
-                    serde_json::to_vec(snap).unwrap_or_else(|_| b"{}".to_vec()),
-                ),
-                "/metrics" => (
-                    200,
-                    "text/plain; version=0.0.4",
-                    snap.prometheus_text().into_bytes(),
-                ),
-                _ => (404, "text/plain; charset=utf-8", b"not found\n".to_vec()),
-            };
+            let (status, content_type, body) = route(path, snap);
             http_response(status, content_type, &body)
         }
         ParseResult::NotGet => {
             http_response(405, "text/plain; charset=utf-8", b"method not allowed\n")
         }
         ParseResult::Invalid => http_response(400, "text/plain; charset=utf-8", b"bad request\n"),
+    }
+}
+
+fn route(path: &str, snap: &HealthSnapshot) -> (u16, &'static str, Vec<u8>) {
+    match path {
+        "/livez" | "/healthz/live" => probe(snap.live, b"live\n", b"not live\n"),
+        "/readyz" | "/healthz/ready" => probe(snap.ready, b"ready\n", b"not ready\n"),
+        "/health" => (
+            200,
+            "application/json",
+            serde_json::to_vec(snap).unwrap_or_else(|_| b"{}".to_vec()),
+        ),
+        "/metrics" => (
+            200,
+            "text/plain; version=0.0.4",
+            snap.prometheus_text().into_bytes(),
+        ),
+        _ => (404, "text/plain; charset=utf-8", b"not found\n".to_vec()),
     }
 }
 
@@ -171,7 +210,7 @@ mod tests {
     };
 
     fn ready_snap() -> HealthSnapshot {
-        let clock = FakeClock::new();
+        let clock = FakeClock::default();
         let mut machine = HealthMachine::new(clock, HealthLimits::default());
         machine.apply(HealthEvent::ProcessStarted);
         machine.apply(HealthEvent::InitializationCompleted);
@@ -193,7 +232,7 @@ mod tests {
         let ready = String::from_utf8(render_http("GET /readyz HTTP/1.1\r\n\r\n", &snap)).unwrap();
         assert!(ready.starts_with("HTTP/1.1 200 OK"));
 
-        let starting = HealthMachine::new(FakeClock::new(), HealthLimits::default());
+        let starting = HealthMachine::new(FakeClock::default(), HealthLimits::default());
         let mut starting_m = starting;
         starting_m.apply(HealthEvent::ProcessStarted);
         let starting = starting_m.snapshot();
@@ -209,7 +248,7 @@ mod tests {
 
     #[test]
     fn health_json_is_always_200() {
-        let mut machine = HealthMachine::new(FakeClock::new(), HealthLimits::default());
+        let mut machine = HealthMachine::new(FakeClock::default(), HealthLimits::default());
         machine.apply(HealthEvent::ProcessStarted);
         let snap = machine.snapshot();
         let raw = String::from_utf8(render_http("GET /health HTTP/1.1\r\n\r\n", &snap)).unwrap();
