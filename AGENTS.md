@@ -26,22 +26,22 @@ PR is ready. GitHub Actions OS matrix and ZeroMQ skips are in
 Default (stub) commands — no `libzmq` required:
 
 - `cargo fmt --check` — verify formatting.
-- `cargo build` — compile the default stub backend.
-- `cargo clippy --all-targets -- -D warnings` — lint the stub path.
-- `cargo test` — run stub-backend tests.
+- `cargo build --locked` — compile the default stub backend.
+- `cargo clippy --locked --all-targets -- -D warnings` — lint the stub path.
+- `cargo test --locked` — run stub-backend tests.
 - `cargo build --release --bin brainstem-daemon` — build the release binary.
 
 Optional `corpus-ipc` / `--all-features` commands need the system ZeroMQ
 dev package (`libzmq3-dev` on Debian/Ubuntu). They are not vendored:
 
-- `cargo test --all-features`
-- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --locked --all-features`
+- `cargo clippy --locked --all-targets --all-features -- -D warnings`
 
 If a `--all-features` build fails because the C++ compiler cannot find a standard-library header, set the C Compiler (CC) and C++ Compiler (CXX) variables first:
 
-- `CC=gcc CXX=g++ cargo build --all-features`
-- `CC=gcc CXX=g++ cargo test --all-features`
-- `CC=gcc CXX=g++ cargo clippy --all-targets --all-features -- -D warnings`
+- `CC=gcc CXX=g++ cargo build --locked --all-features`
+- `CC=gcc CXX=g++ cargo test --locked --all-features`
+- `CC=gcc CXX=g++ cargo clippy --locked --all-targets --all-features -- -D warnings`
 
 ## Cursor Cloud setup
 

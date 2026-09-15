@@ -32,9 +32,9 @@ no-ops under stub).
 # Success is silent: exit 0 and no stdout means formatting is clean.
 cargo fmt --check
 
-cargo clippy --all-targets -- -D warnings
-cargo build
-cargo test
+cargo clippy --locked --all-targets -- -D warnings
+cargo build --locked
+cargo test --locked
 ```
 
 ## Optional `corpus-ipc` matrix (needs libzmq)
@@ -43,12 +43,13 @@ cargo test
 # Debian/Ubuntu
 sudo apt-get install -y libzmq3-dev
 
-cargo clippy --all-targets --features corpus-ipc -- -D warnings
-cargo test --features corpus-ipc
+cargo clippy --locked --all-targets --features corpus-ipc -- -D warnings
+cargo test --locked --features corpus-ipc
 
 # CI today uses --all-features (equivalent while corpus-ipc is the only feature)
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo build --locked --all-features
+cargo test --locked --all-features
 ```
 
 If a `--all-features` build fails because the C++ compiler cannot find a
