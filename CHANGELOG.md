@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test coverage for the non-`corpus-ipc` (stub) path that runs under `--no-default-features`.
 - Graceful `SIGTERM` handling alongside the existing `SIGINT` (Ctrl-C): the tick loop now
   breaks, flushes the backend, and exits `0` on either signal.
+- Bounded per-class ingress (`BoundedIngress`) in the tick loop: configured capacities,
+  overflow policies (`block_timeout`, `reject`, `drop_oldest`, `coalesce`), and
+  accepted/rejected/dropped/coalesced/depth/high-water-mark/producer-wait metrics.
+  Optional `[ingress]` TOML section; omitted keys keep the documented defaults.
+  Shutdown unblocks waiting producers.
 
 ### Changed
 
