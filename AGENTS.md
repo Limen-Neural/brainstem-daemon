@@ -82,4 +82,7 @@ spine_pub_port = 5556
 model_path     = "~/models/soma16.mem"
 ```
 
-The `model_path` is not used by the stub backend. With `--features corpus-ipc` the binary passes it literally to `ZmqStimulusSource::initialize`; `~` is not expanded. With the stub backend, `brainstem-daemon` runs a headless spiking-neural-network tick loop and logs `🔌 Using stub backend`.
+The `model_path` is not used by the stub backend.
+With `--features corpus-ipc` the binary passes it literally to `ZmqStimulusSource::initialize`.
+`~` is not expanded, and the pinned `ZmqBrainBackend` currently ignores `_model_path`.
+With the stub backend, `brainstem-daemon` runs a headless spiking-neural-network tick loop and logs `🔌 Using stub backend`.

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Stub vs `corpus-ipc` backend feature truth table in `README.md`: which Cargo flags wire which backend, which TOML keys apply, and which env vars are no-ops under stub. Documents that `model_path` is passed literally (no `~` expansion) on the `corpus-ipc` path.
+- Stub vs `corpus-ipc` backend feature truth table in `README.md`: which Cargo flags wire which backend, which TOML keys apply, and which env vars are no-ops under stub. Documents that `model_path` is passed literally (no `~` expansion) but currently ignored by pinned `ZmqBrainBackend`, that `CORPUS_IPC_ZMQ_READOUT_IPC` is binary-set compatibility only, and that `log_level` is binary tracing-init only.
 - GitHub Actions CI workflow for formatting, clippy, build, and test validation.
 - Config-driven `ServiceRegistry` and `BrainstemDaemon` in the library.
 - `DaemonConfig.services` field for registering named, enabled services.

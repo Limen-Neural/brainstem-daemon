@@ -99,28 +99,34 @@ Default Cargo features are empty (`default = []` in `Cargo.toml`). That path use
 | `--features corpus-ipc` | ZMQ / `corpus-ipc` | required | SUB via env, PUB on `spine_pub_port`; logs `📡 Using ZMQ corpus-ipc backend` | **still stub** |
 | `--all-features` | same as `corpus-ipc` | required | same as `--features corpus-ipc` | **still stub** |
 
-Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`. Those always inject `BackendPair::stub()`. Only `src/bin/brainstem_daemon.rs` constructs `ZmqStimulusSource` + `ZmqSpikeSink` when `corpus-ipc` is on. Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`.
+Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`. Those always inject `BackendPair::stub()`. Only `src/bin/brainstem_daemon.rs` constructs `ZmqStimulusSource` + `ZmqSpikeSink` when `corpus-ipc` is on.
+
+Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. Call `StimulusSource::initialize(...)` on the source first (as the binary does). Neither constructor nor `run` calls `initialize`; skipping it makes ingress fail with `ZmqBrainBackend not initialized`.
 
 #### Config keys and env vars
 
 | Setting | Stub (default binary / `::new()`) | `corpus-ipc` binary |
 |---|---|---|
 | `lif_count`, `izh_count`, `channels` | used (network dimensions) | used |
-| `tick_rate_hz`, `log_level` | used | used |
+| `tick_rate_hz` | used | used |
+| `log_level` | binary tracing init only; unused by `::new()` / `run` | binary tracing init only; unused by `::new()` / `run` |
 | `services` | used (`ServiceRegistry`) | used |
-| `spine_sub_port` | parsed, **no-op** | sets readout env vars to `tcp://127.0.0.1:<port>` |
+| `spine_sub_port` | parsed, **no-op** | sets `SPIKENAUT_ZMQ_READOUT_IPC` to `tcp://127.0.0.1:<port>` (also sets unused `CORPUS_IPC_ZMQ_READOUT_IPC` for compatibility) |
 | `spine_pub_port` | parsed, **no-op** | binds ZMQ PUB `tcp://*:<port>` |
-| `model_path` | parsed, **no-op** (`StubStimulusSource::initialize` ignores it) | passed literally to `ZmqStimulusSource::initialize` (no `~` expansion) |
+| `model_path` | parsed, **no-op** (`StubStimulusSource::initialize` ignores it) | passed literally to `initialize` (no `~` expansion); pinned `ZmqBrainBackend` currently ignores `_model_path` |
 
 **Settings that only take effect with `corpus-ipc`** (the `brainstem-daemon` binary built `--features corpus-ipc`):
 
-- `spine_sub_port`
+- `spine_sub_port` (drives `SPIKENAUT_ZMQ_READOUT_IPC`)
 - `spine_pub_port`
-- `model_path` (literal filesystem path; `~` is not expanded)
-- `SPIKENAUT_ZMQ_READOUT_IPC` (const `CORPUS_IPC_READOUT_ENV` in code)
-- `CORPUS_IPC_ZMQ_READOUT_IPC` (what the pinned `corpus-ipc` backend reads)
+- `SPIKENAUT_ZMQ_READOUT_IPC` (const `CORPUS_IPC_READOUT_ENV`; this is what pinned `ZmqBrainBackend::initialize` reads)
 
-Under stub those TOML keys are still parsed, and the two env vars are **no-ops**: the default binary never sets them, and nothing in this crate reads them without the feature.
+**Passed through / set, but currently unused by the pinned dep:**
+
+- `model_path` (literal filesystem path; `~` is not expanded; passed to `initialize`, which names the argument `_model_path` and does not consume it)
+- `CORPUS_IPC_ZMQ_READOUT_IPC` (the binary still sets this alongside `SPIKENAUT_ZMQ_READOUT_IPC` for compatibility; pinned `corpus-ipc` does not read it)
+
+Under stub those TOML keys are still parsed. The env vars are unset by the default binary. Nothing in this crate reads them without the `corpus-ipc` feature.
 
 The stub backend is always safe for core library builds, tests, and simulation. Example (feature-independent):
 
@@ -204,7 +210,7 @@ Needed only when the binary is built with `--features corpus-ipc` (ports `spine_
 ```bash
 sudo semanage port -a -t user_tcp_port_t -p tcp 5555
 sudo semanage port -a -t user_tcp_port_t -p tcp 5556
-sudo semanage fcontext -a -t user_home_t "~/.config/soma(/.*)?"
+sudo semanage fcontext -a -t user_home_t "$HOME/.config/soma(/.*)?"
 restorecon -Rv ~/.config/soma
 ```
 
