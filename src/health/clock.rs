@@ -34,7 +34,11 @@ impl FakeClock {
 
     pub fn advance(&self, duration: Duration) {
         let add = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
-        self.offset_nanos.fetch_add(add, Ordering::SeqCst);
+        let _ = self
+            .offset_nanos
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                Some(current.saturating_add(add))
+            });
     }
 }
 

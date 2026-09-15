@@ -61,7 +61,9 @@ fn initialization_does_not_imply_readiness() {
 #[test]
 fn checkpoint_validation_makes_ready() {
     let (mut m, _) = machine();
-    bring_ready(&mut m);
+    m.apply(HealthEvent::ProcessStarted);
+    m.apply(HealthEvent::InitializationCompleted);
+    m.apply(HealthEvent::CheckpointValidated { identity: ckpt() });
     let snap = m.snapshot();
     assert!(snap.live);
     assert!(snap.ready);
@@ -71,7 +73,7 @@ fn checkpoint_validation_makes_ready() {
         snap.checkpoint.as_ref().map(|c| c.id.as_str()),
         Some("soma16")
     );
-    assert_eq!(snap.last_successful_tick_ms, Some(0));
+    assert_eq!(snap.last_successful_tick_ms, None);
     assert!(!snap.input_freshness.stale);
 }
 
@@ -125,7 +127,7 @@ fn stale_input_degrades_and_recovers_only_after_fresh_ingress() {
 }
 
 #[test]
-fn overload_uses_hysteresis_and_clears_only_below_low_watermark() {
+fn overload_uses_hysteresis_and_clears_at_or_below_low_watermark() {
     let (mut m, _) = machine();
     bring_ready(&mut m);
 
