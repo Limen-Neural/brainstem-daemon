@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Live-mode startup gate that loads and validates a Distill sidecar
+  `snn_model.json` (Hugging Face `rmems/Spikenaut-SNN`) before the tick loop.
+  Provenance (path, SHA-256, schema id, encoder, lineage) is logged. Startup
+  fails closed on missing, corrupt, dimension-mismatched, non-finite, or
+  blank checkpoints. FPGA Q8.8 `.mem` dumps are rejected.
+- Explicit `runtime_mode = "simulation"` for blank `with_dimensions()`
+  networks; it cannot masquerade as a loaded Spikenaut checkpoint.
 - GitHub Actions CI matrix: stub build/test/clippy on Linux, macOS, and
   Windows; rustfmt and optional `corpus-ipc` / libzmq jobs on Linux only
   (`docs/ci.md`).
@@ -28,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Relicense from GPL-3.0 to dual MIT/Apache-2.0.
+- `model_path` in live mode is a real checkpoint path (Distill sidecar JSON), not backend-initialization trivia. Simulation mode is the only remaining blank-network path.
 - Add SPDX license identifiers to all source files.
 - Refactor `soma-daemon` binary into a thin wrapper over `BrainstemDaemon`.
 - Renamed the legacy `soma-daemon` binary to `brainstem-daemon` (matches the crate/repo name).
@@ -45,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed / Cleaned
 
+- Live restore rejects Distill values that are finite as `f64` but overflow `f32`, and requires Distill `source = "spikenaut_julia"`. The binary restores once before sockets and reuses that network for the tick loop.
 - Removed unconditional dependency on `corpus-ipc` git crate and system `libzmq` for core builds and tests.
 
 ## [0.1.2] - 2026-04-22

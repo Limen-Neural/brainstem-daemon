@@ -17,10 +17,26 @@ use tracing::{error, info, warn};
 use crate::backend::{
     BackendPair, IngressPacket, SpikeEvent as LocalSpikeEvent, SpikeSink, StimulusSource,
 };
+use crate::checkpoint::{self, ModelProvenance};
 use crate::registry::{ServiceConfig, ServiceRegistry};
 
 // Keep the const for compatibility when the corpus-ipc feature is used.
 pub const CORPUS_IPC_READOUT_ENV: &str = "SPIKENAUT_ZMQ_READOUT_IPC";
+
+/// How the daemon obtains its `SpikingNetwork` at startup.
+///
+/// Live mode is the default and **requires** a validated Spikenaut sidecar
+/// checkpoint at `model_path`. Simulation mode is the only way to tick a
+/// blank `with_dimensions()` network; it must be requested explicitly.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeMode {
+    /// Restore and validate a Distill sidecar `snn_model.json` before ticks.
+    #[default]
+    Live,
+    /// Construct a blank `SpikingNetwork::with_dimensions(...)` for tests.
+    Simulation,
+}
 
 /// Daemon configuration loaded from TOML.
 #[derive(Debug, Deserialize, Clone)]
@@ -33,6 +49,9 @@ pub struct DaemonConfig {
     pub lif_count: usize,
     pub izh_count: usize,
     pub channels: usize,
+    /// `live` (default) or `simulation`. Omitted keys deserialize as live.
+    #[serde(default)]
+    pub runtime_mode: RuntimeMode,
     #[serde(default)]
     pub services: Vec<ServiceConfig>,
 }
@@ -126,21 +145,62 @@ impl BrainstemDaemon {
         &self.registry
     }
 
+    /// Restore the runtime network from config (live checkpoint or simulation).
+    ///
+    /// Live mode fails closed: an unreadable or incompatible checkpoint is never
+    /// replaced with a blank `with_dimensions()` network.
+    pub fn restore_network(&self) -> Result<(SpikingNetwork, ModelProvenance)> {
+        checkpoint::restore_network(&self.config)
+    }
+
     /// Run the daemon until a termination signal is received.
+    ///
+    /// Restores the network from config. The binary should prefer
+    /// [`Self::run_with_restored_network`] so the checkpoint is read once,
+    /// before sockets open.
     pub async fn run(self) -> Result<()> {
+        self.run_loop(None).await
+    }
+
+    /// Run with a network already restored by the caller (typically the binary).
+    ///
+    /// This avoids a second disk read after the pre-socket fail-closed check.
+    pub async fn run_with_restored_network(
+        self,
+        network: SpikingNetwork,
+        provenance: ModelProvenance,
+    ) -> Result<()> {
+        self.run_loop(Some((network, provenance))).await
+    }
+
+    async fn run_loop(self, restored: Option<(SpikingNetwork, ModelProvenance)>) -> Result<()> {
         let cfg = self.config;
         let mut backend = self.backend;
 
         if cfg.tick_rate_hz == 0 || cfg.tick_rate_hz > 1_000_000 {
+            shutdown_backend(&mut backend);
             anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
         }
+
+        let restored = match restored {
+            Some(pair) => Ok(pair),
+            None => checkpoint::restore_network(&cfg)
+                .context("failed to restore runtime network before entering the tick loop"),
+        };
+        let (mut network, provenance) = match restored {
+            Ok(pair) => pair,
+            Err(err) => {
+                shutdown_backend(&mut backend);
+                return Err(err);
+            }
+        };
+
+        log_model_provenance(&cfg, &provenance);
 
         let tick_duration = Duration::from_nanos(1_000_000_000 / u64::from(cfg.tick_rate_hz));
         let mut ticker = time::interval(tick_duration);
         ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
-        let mut network =
-            SpikingNetwork::with_dimensions(cfg.lif_count, cfg.izh_count, cfg.channels);
         let mut stimuli = vec![0.0; cfg.channels];
         let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
 
@@ -164,17 +224,20 @@ impl BrainstemDaemon {
             }
         }
 
-        // Explicit backend lifecycle hooks (flush sink, shutdown source) are invoked
-        // for custom backends. Current built-ins are no-ops, but this satisfies
-        // CodeAnt/CodeRabbit "missing cleanup" notes.
-        if let Err(e) = backend.sink.flush() {
-            warn!("Failed to flush spike sink on shutdown: {e}");
-        }
-        if let Err(e) = backend.source.shutdown() {
-            warn!("Failed to shut down stimulus source: {e}");
-        }
-
+        shutdown_backend(&mut backend);
         Ok(())
+    }
+}
+
+fn shutdown_backend(backend: &mut BackendPair) {
+    // Explicit backend lifecycle hooks (flush sink, shutdown source) are invoked
+    // for custom backends. Current built-ins are no-ops, but this satisfies
+    // CodeAnt/CodeRabbit "missing cleanup" notes.
+    if let Err(e) = backend.sink.flush() {
+        warn!("Failed to flush spike sink on shutdown: {e}");
+    }
+    if let Err(e) = backend.source.shutdown() {
+        warn!("Failed to shut down stimulus source: {e}");
     }
 }
 
@@ -221,6 +284,36 @@ async fn shutdown_signal() {
 /// wires a real backend. This is the intended temporary state.
 fn init_runtime_default() -> BackendPair {
     BackendPair::stub()
+}
+
+fn log_model_provenance(config: &DaemonConfig, provenance: &ModelProvenance) {
+    match config.runtime_mode {
+        RuntimeMode::Simulation => {
+            warn!(
+                schema_id = %provenance.schema_id,
+                model_id = %provenance.model_id,
+                lif_count = config.lif_count,
+                izh_count = config.izh_count,
+                channels = config.channels,
+                "Simulation mode: blank with_dimensions() network; not a loaded Spikenaut checkpoint"
+            );
+        }
+        RuntimeMode::Live => {
+            info!(
+                schema_id = %provenance.schema_id,
+                model_id = %provenance.model_id,
+                path = %provenance.source_path.display(),
+                sha256 = %provenance.content_sha256,
+                encoder = provenance.encoder.as_deref().unwrap_or("-"),
+                source = provenance.source.as_deref().unwrap_or("-"),
+                lineage = provenance.frozen_lineage.as_deref().unwrap_or("-"),
+                lif_count = config.lif_count,
+                izh_count = config.izh_count,
+                channels = config.channels,
+                "Loaded Spikenaut checkpoint; entering tick loop"
+            );
+        }
+    }
 }
 
 fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
@@ -387,6 +480,7 @@ mod tests {
             lif_count: 16,
             izh_count: 5,
             channels: 16,
+            runtime_mode: RuntimeMode::Simulation,
             services: vec![
                 ServiceConfig::named("telemetry"),
                 ServiceConfig::named("critic-ipc"),
@@ -495,6 +589,52 @@ mod tests {
             message.contains("overflows usize"),
             "unexpected error: {message}"
         );
+    }
+
+    #[test]
+    fn omitted_runtime_mode_deserializes_as_live() {
+        let text = r#"
+tick_rate_hz = 1000
+log_level = "info"
+spine_sub_port = 5555
+spine_pub_port = 5556
+model_path = "snn_model.json"
+lif_count = 16
+izh_count = 0
+channels = 16
+"#;
+        let cfg: DaemonConfig = toml::from_str(text).expect("toml");
+        assert_eq!(cfg.runtime_mode, RuntimeMode::Live);
+    }
+
+    #[test]
+    fn live_restore_fails_closed_without_replacing_with_blank_network() {
+        let mut cfg = sample_config();
+        cfg.runtime_mode = RuntimeMode::Live;
+        cfg.izh_count = 0;
+        cfg.model_path = PathBuf::from("/no/such/snn_model.json");
+        let daemon = BrainstemDaemon::try_new(cfg).expect("construction does not load weights");
+        let err = match daemon.restore_network() {
+            Ok(_) => panic!("live mode must fail closed"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("checkpoint not found"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_fails_before_tick_loop_when_live_checkpoint_is_missing() {
+        let mut cfg = sample_config();
+        cfg.runtime_mode = RuntimeMode::Live;
+        cfg.izh_count = 0;
+        cfg.model_path = PathBuf::from("/no/such/snn_model.json");
+        let daemon = BrainstemDaemon::try_new(cfg).unwrap();
+        let result = tokio::time::timeout(Duration::from_millis(500), daemon.run()).await;
+        let inner = result.expect("run must return immediately rather than tick");
+        assert!(inner.is_err());
     }
 
     #[test]
