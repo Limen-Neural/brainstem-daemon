@@ -114,7 +114,12 @@ pub enum RestartOutcome {
     RejectedInvalid,
 }
 
-/// Sequenced stimulus packet. Sequence numbers are the idempotency key.
+/// Sequenced stimulus packet.
+///
+/// `seq` is a monotonic high-water mark and the idempotency key. After a
+/// sequence is committed, any later packet with `seq <= committed_ingress_seq`
+/// is treated as a replay, including a never-seen lower sequence delivered
+/// after a higher one. Sources must emit strictly increasing sequences.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SequencedIngress {
     pub seq: u64,
