@@ -3,159 +3,16 @@
 
 //! Fake-clock / fake-core runtime that can inject faults at lifecycle boundaries.
 
-use std::collections::VecDeque;
-
 use anyhow::{Result, bail};
 
+use super::clock::{BACKPRESSURE_BUDGET_NS, FakeClock, TICK_PERIOD_NS};
 use super::durable::{DurableState, DurableStore, FAKE_CHECKPOINT_ID, InflightRecord};
-use super::{Boundary, FaultPoint, Health, RestartOutcome, SequencedIngress};
+use super::fakes::{CommittedOutput, FakeCore, MetricEvent, ScriptedSource, TickResult};
+use super::inject::{FaultInjector, injected_terminal_health};
+use super::{Boundary, FaultPoint, Health, RestartOutcome, SequencedIngress, packets_for_seed};
 
 /// Hard cap on ticks per harness instance. Replaces wall-clock timeouts.
 pub const MAX_STEPS: u32 = 64;
-
-/// Fake-clock nanoseconds advanced on a backpressure timeout (10 ms).
-pub const BACKPRESSURE_BUDGET_NS: u64 = 10_000_000;
-
-/// One nanosecond-scale tick period at 1 kHz, applied without sleeping.
-pub const TICK_PERIOD_NS: u64 = 1_000_000;
-
-/// Deterministic clock. `advance` never sleeps or yields.
-#[derive(Debug, Clone)]
-pub struct FakeClock {
-    now_ns: u64,
-}
-
-impl FakeClock {
-    pub fn new(now_ns: u64) -> Self {
-        Self { now_ns }
-    }
-
-    pub fn now_ns(&self) -> u64 {
-        self.now_ns
-    }
-
-    pub fn advance(&mut self, ns: u64) {
-        self.now_ns = self.now_ns.saturating_add(ns);
-    }
-}
-
-/// CPU-only stand-in for `neuromod::SpikingNetwork`.
-///
-/// Membrane / last-stimuli fields are volatile: a restarted harness gets a
-/// fresh core even when the durable store is reused.
-#[derive(Debug, Clone, Default)]
-pub struct FakeCore {
-    pub steps: u64,
-    last_stimuli: Option<Vec<f32>>,
-}
-
-impl FakeCore {
-    pub fn last_stimuli(&self) -> Option<&[f32]> {
-        self.last_stimuli.as_deref()
-    }
-
-    fn step(&mut self, stimuli: &[f32]) -> Result<Vec<u16>> {
-        self.steps += 1;
-        self.last_stimuli = Some(stimuli.to_vec());
-        Ok(stimuli
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| **s > 0.5)
-            .filter_map(|(i, _)| u16::try_from(i).ok())
-            .collect())
-    }
-}
-
-/// Scripted ingress. No sockets.
-#[derive(Debug, Clone, Default)]
-pub struct ScriptedSource {
-    packets: VecDeque<SequencedIngress>,
-}
-
-impl ScriptedSource {
-    pub fn new(packets: impl IntoIterator<Item = SequencedIngress>) -> Self {
-        Self {
-            packets: packets.into_iter().collect(),
-        }
-    }
-
-    pub fn push(&mut self, packet: SequencedIngress) {
-        self.packets.push_back(packet);
-    }
-
-    fn push_front(&mut self, packet: SequencedIngress) {
-        self.packets.push_front(packet);
-    }
-
-    fn next(&mut self) -> Option<SequencedIngress> {
-        self.packets.pop_front()
-    }
-}
-
-/// One successfully published tick. Appended only after metric publication.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CommittedOutput {
-    pub session_id: u64,
-    pub tick_seq: u64,
-    pub ingress_seq: u64,
-    pub spike_ids: Vec<u16>,
-    pub time_ns: u64,
-}
-
-/// Metric publication that is allowed only for committed ticks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MetricEvent {
-    pub session_id: u64,
-    pub tick_seq: u64,
-    pub ingress_seq: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TickResult {
-    Committed,
-    SkippedReplay,
-    NoIngress,
-}
-
-#[derive(Debug, Default)]
-struct FaultInjector {
-    armed: Option<FaultPoint>,
-}
-
-impl FaultInjector {
-    fn none() -> Self {
-        Self { armed: None }
-    }
-
-    fn arm(point: FaultPoint) -> Self {
-        Self { armed: Some(point) }
-    }
-
-    fn set(&mut self, point: FaultPoint) {
-        self.armed = Some(point);
-    }
-
-    fn fire(&mut self, point: FaultPoint) -> Result<()> {
-        if self.armed == Some(point) {
-            self.armed = None;
-            bail!(injected_message(point));
-        }
-        Ok(())
-    }
-
-    fn take(&mut self, point: FaultPoint) -> bool {
-        if self.armed == Some(point) {
-            self.armed = None;
-            true
-        } else {
-            false
-        }
-    }
-}
-
-fn injected_message(point: FaultPoint) -> String {
-    format!("injected fault: {point:?}")
-}
 
 /// Synchronous runtime session used by the fault-injection suite.
 pub struct RuntimeHarness {
@@ -477,31 +334,6 @@ impl RuntimeHarness {
     }
 }
 
-/// Terminal health assigned by the harness. Kept independent of
-/// [`super::expected_outcome`] so the matrix test can detect drift.
-fn injected_terminal_health(point: FaultPoint) -> Health {
-    match point {
-        FaultPoint::Before(Boundary::Initialize)
-        | FaultPoint::After(Boundary::Initialize)
-        | FaultPoint::Before(Boundary::CheckpointValidation)
-        | FaultPoint::After(Boundary::CheckpointValidation)
-        | FaultPoint::Before(Boundary::TickExecute)
-        | FaultPoint::After(Boundary::TickExecute)
-        | FaultPoint::After(Boundary::MetricPublish)
-        | FaultPoint::After(Boundary::Shutdown)
-        | FaultPoint::CoreStepError => Health::Faulted,
-        FaultPoint::MalformedCheckpoint => Health::CheckpointInvalid,
-        FaultPoint::Before(Boundary::Ingress)
-        | FaultPoint::After(Boundary::Ingress)
-        | FaultPoint::ClosedChannel
-        | FaultPoint::Before(Boundary::MetricPublish)
-        | FaultPoint::BackpressureTimeout => Health::Degraded,
-        FaultPoint::Before(Boundary::Shutdown) | FaultPoint::InterruptedShutdown => {
-            Health::IncompleteShutdown
-        }
-    }
-}
-
 /// Builder for a deterministic harness instance.
 pub struct HarnessBuilder {
     seed: u64,
@@ -558,36 +390,10 @@ impl HarnessBuilder {
     }
 }
 
-/// Scripted packets for a seed. Stimuli (and therefore fake-core spikes)
-/// vary, but sequence numbers stay `1..=8`.
-pub fn packets_for_seed(seed: u64) -> Vec<SequencedIngress> {
-    (1..=8)
-        .map(|seq| SequencedIngress {
-            seq,
-            stimuli: stimuli_for(seed, seq),
-        })
-        .collect()
-}
-
-fn stimuli_for(seed: u64, seq: u64) -> Vec<f32> {
-    let v = ((seed.wrapping_add(seq.wrapping_mul(17))) % 10) as f32 / 10.0;
-    vec![v, 1.0 - v]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::runtime::{DurableState, RestartOutcome};
-
-    #[test]
-    fn fake_core_drops_out_of_range_spike_ids() {
-        let mut core = FakeCore::default();
-        let mut stimuli = vec![0.0; (u16::MAX as usize) + 2];
-        stimuli[0] = 0.9;
-        stimuli[u16::MAX as usize + 1] = 0.9;
-        let spikes = core.step(&stimuli).unwrap();
-        assert_eq!(spikes, vec![0]);
-    }
 
     #[test]
     fn exhausted_session_id_fails_before_live_loop() {
