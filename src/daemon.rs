@@ -154,16 +154,47 @@ impl BrainstemDaemon {
     }
 
     /// Run the daemon until a termination signal is received.
+    ///
+    /// Restores the network from config. The binary should prefer
+    /// [`Self::run_with_restored_network`] so the checkpoint is read once,
+    /// before sockets open.
     pub async fn run(self) -> Result<()> {
+        self.run_loop(None).await
+    }
+
+    /// Run with a network already restored by the caller (typically the binary).
+    ///
+    /// This avoids a second disk read after the pre-socket fail-closed check.
+    pub async fn run_with_restored_network(
+        self,
+        network: SpikingNetwork,
+        provenance: ModelProvenance,
+    ) -> Result<()> {
+        self.run_loop(Some((network, provenance))).await
+    }
+
+    async fn run_loop(self, restored: Option<(SpikingNetwork, ModelProvenance)>) -> Result<()> {
         let cfg = self.config;
         let mut backend = self.backend;
 
         if cfg.tick_rate_hz == 0 || cfg.tick_rate_hz > 1_000_000 {
+            shutdown_backend(&mut backend);
             anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
         }
 
-        let (mut network, provenance) = checkpoint::restore_network(&cfg)
-            .context("failed to restore runtime network before entering the tick loop")?;
+        let restored = match restored {
+            Some(pair) => Ok(pair),
+            None => checkpoint::restore_network(&cfg)
+                .context("failed to restore runtime network before entering the tick loop"),
+        };
+        let (mut network, provenance) = match restored {
+            Ok(pair) => pair,
+            Err(err) => {
+                shutdown_backend(&mut backend);
+                return Err(err);
+            }
+        };
+
         log_model_provenance(&cfg, &provenance);
 
         let tick_duration = Duration::from_nanos(1_000_000_000 / u64::from(cfg.tick_rate_hz));
@@ -193,17 +224,20 @@ impl BrainstemDaemon {
             }
         }
 
-        // Explicit backend lifecycle hooks (flush sink, shutdown source) are invoked
-        // for custom backends. Current built-ins are no-ops, but this satisfies
-        // CodeAnt/CodeRabbit "missing cleanup" notes.
-        if let Err(e) = backend.sink.flush() {
-            warn!("Failed to flush spike sink on shutdown: {e}");
-        }
-        if let Err(e) = backend.source.shutdown() {
-            warn!("Failed to shut down stimulus source: {e}");
-        }
-
+        shutdown_backend(&mut backend);
         Ok(())
+    }
+}
+
+fn shutdown_backend(backend: &mut BackendPair) {
+    // Explicit backend lifecycle hooks (flush sink, shutdown source) are invoked
+    // for custom backends. Current built-ins are no-ops, but this satisfies
+    // CodeAnt/CodeRabbit "missing cleanup" notes.
+    if let Err(e) = backend.sink.flush() {
+        warn!("Failed to flush spike sink on shutdown: {e}");
+    }
+    if let Err(e) = backend.source.shutdown() {
+        warn!("Failed to shut down stimulus source: {e}");
     }
 }
 

@@ -74,8 +74,8 @@ A minimal TOML configuration includes:
 
 ```toml
 runtime_mode   = "live"    # default; use "simulation" for a blank with_dimensions() network
-lif_count      = 16
-izh_count      = 0         # live Spikenaut sidecars are LIF-only
+lif_count      = 16        # leak-integrate-and-fire (LIF) cells; must match sidecar
+izh_count      = 0         # live Spikenaut sidecars are leak-integrate-and-fire (LIF) only
 channels       = 16
 tick_rate_hz   = 1000
 log_level      = "info"
@@ -84,7 +84,7 @@ spine_pub_port = 5556
 model_path     = "/var/lib/soma/snn_model.json"  # Distill sidecar JSON; `~` is not expanded
 ```
 
-In **live** mode (the default), `model_path` must point at Distill sidecar `snn_model.json` (or a Hugging Face layout directory / `config.json`). Startup fails closed on a missing, corrupt, incompatible, non-finite, or blank checkpoint. FPGA `.mem` dumps are not a software checkpoint.
+In **live** mode (the default), `model_path` should point at Distill sidecar `snn_model.json` (or a Hugging Face layout directory / `config.json`). Startup fails closed on a missing, corrupt, incompatible, non-finite, or blank checkpoint. Field-programmable gate array (FPGA) `.mem` dumps are not a software checkpoint. Set `runtime_mode = "simulation"` to skip checkpoint restore and tick a blank `with_dimensions()` network instead.
 
 In **simulation** mode the daemon constructs a blank `SpikingNetwork::with_dimensions(...)` and does not claim to have loaded Spikenaut. `model_path` is unused for restoration.
 

@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed / Cleaned
 
+- Live restore rejects Distill values that are finite as `f64` but overflow `f32`, and requires Distill `source = "spikenaut_julia"`. The binary restores once before sockets and reuses that network for the tick loop.
 - Removed unconditional dependency on `corpus-ipc` git crate and system `libzmq` for core builds and tests.
 
 ## [0.1.2] - 2026-04-22
