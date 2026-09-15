@@ -4,7 +4,7 @@ version = "0.1.2"
 edition = "2024"
 rust-version = "1.97.1"
 description = "SNN Engine + Inference + Telemetry + AI (Tier 1 — headless)"
-authors = ["Raul Cardenas Montoya <montoya34raul@gmail.com>"]
+authors = ["Raul Cardenas Montoya <montoyaraul34@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Limen-Neural/brainstem-daemon"
 
