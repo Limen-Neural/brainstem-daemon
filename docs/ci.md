@@ -28,5 +28,7 @@ not pass `--features corpus-ipc`.
 
 ## Local equivalent
 
-The human checklist (same stub commands, plus optional `corpus-ipc` on
-Linux) is in [`REVIEW.md`](../REVIEW.md).
+The human checklist is in [`REVIEW.md`](../REVIEW.md). Mandatory stub
+commands match CI: `cargo fmt --check`, `cargo clippy --locked --all-targets
+-- -D warnings`, `cargo build --locked`, and `cargo test --locked`, plus
+optional `corpus-ipc` / `--all-features` commands on Linux.
