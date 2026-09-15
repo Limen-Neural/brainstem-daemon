@@ -101,7 +101,7 @@ Default Cargo features are empty (`default = []` in `Cargo.toml`). That path use
 
 | Cargo flags | Wired backend | `libzmq` | Binary (`brainstem-daemon`) | Library `BrainstemDaemon::new()` / `try_new()` |
 |---|---|---|---|---|
-| default / `--no-default-features` | stub | not required | no sockets; logs `🔌 Using stub backend` | stub |
+| default / `--no-default-features` | stub | not required | no backend sockets by default; `control_bind` opens the control listener; logs `🔌 Using stub backend` | stub |
 | `--features corpus-ipc` | ZMQ / `corpus-ipc` | required | SUB via env, PUB on `spine_pub_port`; logs `📡 Using ZMQ corpus-ipc backend` | **still stub** |
 | `--all-features` | same as `corpus-ipc` | required | same as `--features corpus-ipc` | **still stub** |
 
