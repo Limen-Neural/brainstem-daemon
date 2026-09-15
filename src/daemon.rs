@@ -4,19 +4,22 @@
 //! Brainstem daemon runtime and config-driven service registry.
 
 use std::fs;
-use std::path::PathBuf;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use neuromod::{NeuroModulators, SpikingNetwork};
 use serde::Deserialize;
 use tokio::signal;
+use tokio::sync::watch;
 use tokio::time;
 use tracing::{error, info, warn};
 
 use crate::backend::{
     BackendPair, IngressPacket, SpikeEvent as LocalSpikeEvent, SpikeSink, StimulusSource,
 };
+use crate::health::{CheckpointIdentity, HealthEvent, HealthHandle, HealthLimits, HealthSnapshot};
 use crate::registry::{ServiceConfig, ServiceRegistry};
 
 // Keep the const for compatibility when the corpus-ipc feature is used.
@@ -35,6 +38,12 @@ pub struct DaemonConfig {
     pub channels: usize,
     #[serde(default)]
     pub services: Vec<ServiceConfig>,
+    /// Optional `ip:port` for the process control surface (`/livez`, `/readyz`, `/health`, `/metrics`).
+    ///
+    /// Unset by default so existing configs keep opening no extra sockets. This is the
+    /// repository's only HTTP listener; do not add a second server beside it.
+    #[serde(default)]
+    pub control_bind: Option<String>,
 }
 
 impl DaemonConfig {
@@ -68,6 +77,7 @@ pub struct BrainstemDaemon {
     config: DaemonConfig,
     registry: ServiceRegistry,
     backend: BackendPair,
+    health: HealthHandle,
 }
 
 impl BrainstemDaemon {
@@ -118,6 +128,7 @@ impl BrainstemDaemon {
             config,
             registry,
             backend,
+            health: HealthHandle::started(HealthLimits::default()),
         })
     }
 
@@ -126,14 +137,49 @@ impl BrainstemDaemon {
         &self.registry
     }
 
+    /// Clone the non-blocking health handle (independent of the tick-loop backend lock).
+    pub fn health(&self) -> HealthHandle {
+        self.health.clone()
+    }
+
+    /// Current health snapshot. Does not wait on ingress or `SpikingNetwork::step`.
+    pub fn health_snapshot(&self) -> HealthSnapshot {
+        self.health.snapshot()
+    }
+
     /// Run the daemon until a termination signal is received.
     pub async fn run(self) -> Result<()> {
         let cfg = self.config;
         let mut backend = self.backend;
+        let health = self.health;
 
         if cfg.tick_rate_hz == 0 || cfg.tick_rate_hz > 1_000_000 {
             anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
         }
+
+        let (control_stop, control_task) =
+            start_control(cfg.control_bind.as_deref(), health.clone()).await?;
+
+        let model_path = cfg.model_path.to_string_lossy();
+        if let Err(e) = backend.source.initialize(Some(model_path.as_ref())) {
+            health.apply(HealthEvent::InitializationFailed {
+                detail: e.to_string(),
+            });
+            error!("Stimulus source initialization failed: {e}");
+            await_shutdown_if_control(control_stop.is_some()).await;
+            stop_control(control_stop, control_task).await;
+            return Err(e).context("failed to initialize stimulus source");
+        }
+        health.apply(HealthEvent::InitializationCompleted);
+
+        // Successful initialize is the current checkpoint gate. Real digest/weight
+        // validation is tracked in LIM-1133 and will replace this stand-in.
+        health.apply(HealthEvent::CheckpointValidated {
+            identity: CheckpointIdentity {
+                id: checkpoint_id_from_path(&cfg.model_path),
+                digest: None,
+            },
+        });
 
         let tick_duration = Duration::from_nanos(1_000_000_000 / u64::from(cfg.tick_rate_hz));
         let mut ticker = time::interval(tick_duration);
@@ -155,14 +201,18 @@ impl BrainstemDaemon {
                         &mut *backend.sink,
                         &mut stimuli,
                         &mut spike_buf,
+                        &health,
                     );
                 }
                 _ = &mut shutdown => {
                     info!("Termination signal received, shutting down");
+                    health.apply(HealthEvent::BeginDrain);
                     break;
                 }
             }
         }
+
+        stop_control(control_stop, control_task).await;
 
         // Explicit backend lifecycle hooks (flush sink, shutdown source) are invoked
         // for custom backends. Current built-ins are no-ops, but this satisfies
@@ -223,6 +273,54 @@ fn init_runtime_default() -> BackendPair {
     BackendPair::stub()
 }
 
+async fn start_control(
+    bind: Option<&str>,
+    health: HealthHandle,
+) -> Result<(
+    Option<watch::Sender<bool>>,
+    Option<tokio::task::JoinHandle<()>>,
+)> {
+    let Some(bind) = bind else {
+        return Ok((None, None));
+    };
+    let addr: SocketAddr = bind
+        .parse()
+        .with_context(|| format!("invalid control_bind {bind}"))?;
+    let (tx, rx) = watch::channel(false);
+    let task = tokio::spawn(async move {
+        if let Err(e) = crate::control::serve(addr, health, rx).await {
+            warn!("control surface stopped: {e}");
+        }
+    });
+    Ok((Some(tx), Some(task)))
+}
+
+async fn stop_control(
+    stop: Option<watch::Sender<bool>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+) {
+    if let Some(tx) = stop {
+        let _ = tx.send(true);
+    }
+    if let Some(task) = task {
+        let _ = task.await;
+    }
+}
+
+async fn await_shutdown_if_control(has_control: bool) {
+    if has_control {
+        shutdown_signal().await;
+    }
+}
+
+fn checkpoint_id_from_path(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
 fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
     let total = config
         .lif_count
@@ -255,9 +353,13 @@ fn run_tick(
     sink: &mut dyn SpikeSink,
     stimuli: &mut [f32],
     spike_buf: &mut Vec<LocalSpikeEvent>,
+    health: &HealthHandle,
 ) {
     let packet = match source.next_ingress() {
-        Ok(Some(p)) => p,
+        Ok(Some(p)) => {
+            health.apply(HealthEvent::IngressObserved);
+            p
+        }
         Ok(None) => {
             // Per StimulusSource contract: None means skip ingress this tick but still
             // advance the network with zeroed stimuli (maintains tick cadence).
@@ -284,6 +386,7 @@ fn run_tick(
             return;
         }
     };
+    health.apply(HealthEvent::TickSucceeded);
 
     // Single timestamp for both per-spike time and batch metadata (keeps them consistent).
     let now = SystemTime::now()
@@ -368,8 +471,9 @@ pub(crate) fn run_tick_for_test(
     sink: &mut dyn SpikeSink,
     stimuli: &mut [f32],
     spike_buf: &mut Vec<LocalSpikeEvent>,
+    health: &HealthHandle,
 ) {
-    run_tick(source, network, sink, stimuli, spike_buf);
+    run_tick(source, network, sink, stimuli, spike_buf, health);
 }
 
 #[cfg(test)]
@@ -391,6 +495,7 @@ mod tests {
                 ServiceConfig::named("telemetry"),
                 ServiceConfig::named("critic-ipc"),
             ],
+            control_bind: None,
         }
     }
 
@@ -400,6 +505,36 @@ mod tests {
         assert_eq!(daemon.registry().len(), 2);
         assert!(daemon.registry().contains("telemetry"));
         assert!(daemon.registry().contains("critic-ipc"));
+    }
+
+    #[test]
+    #[test]
+    fn daemon_is_live_not_ready_before_run() {
+        let daemon = BrainstemDaemon::new(sample_config());
+        let snap = daemon.health_snapshot();
+        assert!(snap.live);
+        assert!(!snap.ready);
+        assert_eq!(snap.phase, crate::health::HealthPhase::Starting);
+        assert!(!snap.reasons.is_empty());
+    }
+
+    #[test]
+    fn config_parses_optional_control_bind() {
+        let cfg: DaemonConfig = toml::from_str(
+            r#"
+tick_rate_hz = 1000
+log_level = "info"
+spine_sub_port = 5555
+spine_pub_port = 5556
+model_path = "/tmp/model.mem"
+lif_count = 1
+izh_count = 0
+channels = 1
+control_bind = "127.0.0.1:9464"
+"#,
+        )
+        .expect("toml");
+        assert_eq!(cfg.control_bind.as_deref(), Some("127.0.0.1:9464"));
     }
 
     #[test]
@@ -506,6 +641,7 @@ mod tests {
         let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
         let mut stimuli = vec![0.0; 2];
         let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+        let health = HealthHandle::started(HealthLimits::default());
 
         // Prime one tick
         run_tick_for_test(
@@ -514,10 +650,18 @@ mod tests {
             &mut sink,
             &mut stimuli,
             &mut spike_buf,
+            &health,
         );
 
         // Sink should have received one (possibly empty) batch
         assert_eq!(sink.emitted.len(), 1);
+        let snap = health.snapshot();
+        assert!(snap.live);
+        assert!(
+            snap.last_successful_tick_ms.is_some(),
+            "a successful network step must update last_successful_tick"
+        );
+        assert!(!snap.input_freshness.stale);
     }
 
     // Sends a real SIGTERM to this test process, so it's `#[ignore]`d by default:

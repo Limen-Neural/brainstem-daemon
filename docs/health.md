@@ -1,0 +1,109 @@
+# Runtime health
+
+Supervisors should treat **liveness** and **readiness** as independent. A live
+`brainstem-daemon` process has a health reporter; it is ready only after
+stimulus-source initialization and checkpoint validation have succeeded.
+
+This repository had no HTTP/metrics server before this surface. When
+`control_bind` is set, `BrainstemDaemon::run` starts **one** listener:
+
+| Path | Meaning |
+|---|---|
+| `GET /livez` | `200` if live, `503` otherwise |
+| `GET /readyz` | `200` if ready, `503` otherwise |
+| `GET /health` | `200` JSON [`HealthSnapshot`](../src/health.rs) (always; inspect `phase`) |
+| `GET /metrics` | Prometheus text; labels are phase/reason codes only |
+
+Leave `control_bind` unset to preserve the historical no-extra-socket default.
+Do not add a second control server beside this one.
+
+Library embedders can also clone [`HealthHandle`](../src/health.rs) from
+`BrainstemDaemon::health()` and call `snapshot()` / `try_snapshot()` without
+waiting on the tick loop's backend or `SpikingNetwork::step`.
+
+## Transition table
+
+| From | Event | To | live | ready | Notes |
+|---|---|---|---|---|---|
+| (unstarted) | `ProcessStarted` | `starting` | true | false | Construction. Live does not imply ready. |
+| `starting` | `InitializationCompleted` | `loading_checkpoint` | true | false | `initialize()` succeeded; checkpoint still required. |
+| `starting` | `InitializationFailed` | `fatal` | true | false | Sticky. Detail is JSON-only, never a metric label. |
+| `loading_checkpoint` | `CheckpointValidated` | `running` | true | true | Ready only after this gate. |
+| `loading_checkpoint` | `CheckpointRejected` | `fatal` | true | false | Sticky. |
+| `running` | clock ≥ `stale_after` without ingress | `degraded` | true | true | Reason `stale_input`. Ready stays true. |
+| `degraded` (stale) | `IngressObserved` | `running` (if no other reasons) | true | true | Ticks without ingress do **not** clear stale. |
+| `running` | queue fill ≥ `overload_high` | `degraded` | true | true | Reason `overload`. |
+| `degraded` (overload) | fill ≤ `overload_low` | `running` (if no other reasons) | true | true | Hysteresis: mid-band does not recover. |
+| `running` / `degraded` | `BeginDrain` | `draining` | true | false | SIGTERM/SIGINT. Does not return to ready. |
+| any non-fatal | `Fatal` / init or checkpoint failure | `fatal` | true | false | Subsequent validate/tick/drain cannot restore ready. |
+
+Recoverable reasons (`stale_input`, `overload`) are independent: clearing one
+leaves the other. `capacity == 0` means “no queue instrumented” (LIM-1216) and
+never counts as overload.
+
+Fatal and draining are sticky for **this process**. A new process starts in
+`starting` again.
+
+## Checkpoint stand-in
+
+[`LIM-1133`](https://linear.app/rpd-34/issue/LIM-1133) will load and digest a
+real Spikenaut checkpoint. Until then, a successful `StimulusSource::initialize`
+is treated as the checkpoint gate. The snapshot identity is the `model_path`
+file name (not the full path) with `digest: null`.
+
+## Example snapshots
+
+Healthy (ready to consume events):
+
+```json
+{
+  "live": true,
+  "ready": true,
+  "phase": "running",
+  "reasons": [],
+  "last_successful_tick_ms": 0,
+  "checkpoint": { "id": "soma16", "digest": "abc123" },
+  "input_freshness": { "age_ms": 0, "stale": false },
+  "queue_pressure": { "depth": 0, "capacity": 0, "ratio": null, "overloaded": false },
+  "fatal": null,
+  "observed_at_ms": 0
+}
+```
+
+Degraded (still ready; supervisors should not bounce the process):
+
+```json
+{
+  "live": true,
+  "ready": true,
+  "phase": "degraded",
+  "reasons": ["stale_input", "overload"],
+  "last_successful_tick_ms": 0,
+  "checkpoint": { "id": "soma16", "digest": "abc123" },
+  "input_freshness": { "age_ms": 100, "stale": true },
+  "queue_pressure": { "depth": 95, "capacity": 100, "ratio": 0.95, "overloaded": true },
+  "fatal": null,
+  "observed_at_ms": 100
+}
+```
+
+Fatal (never returns to ready in this process):
+
+```json
+{
+  "live": true,
+  "ready": false,
+  "phase": "fatal",
+  "reasons": ["fatal"],
+  "last_successful_tick_ms": null,
+  "checkpoint": null,
+  "input_freshness": { "age_ms": null, "stale": false },
+  "queue_pressure": { "depth": 0, "capacity": 0, "ratio": null, "overloaded": false },
+  "fatal": { "code": "checkpoint_invalid", "detail": "blank weights" },
+  "observed_at_ms": 0
+}
+```
+
+`fatal.detail` belongs in JSON/logs. Prometheus `/metrics` exposes
+`brainstem_fatal 1` and `brainstem_phase{phase="fatal"} 1` without the detail
+string.

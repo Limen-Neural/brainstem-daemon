@@ -15,6 +15,7 @@ Headless spiking neural-network runtime written in Rust.
 - Modular `neuromod::SpikingNetwork` core (CPU)
 - Optional **ZeroMQ PUB/SUB** networking via `corpus-ipc`
 - Headless **`brainstem-daemon`** binary for background execution
+- Distinct **liveness / readiness / degraded / fatal** health snapshots (library handle plus optional `control_bind` listener)
 
 ---
 
@@ -71,6 +72,10 @@ model_path     = "~/models/soma16.mem" # literal path; `~` is not expanded
 tick_rate_hz   = 1000      # loop frequency
 log_level      = "info"    # error|warn|info|debug|trace
 
+# Optional process control surface (unset = no extra socket; historical default).
+# Serves /livez, /readyz, /health, /metrics. See docs/health.md.
+# control_bind   = "127.0.0.1:9464"
+
 # ZMQ (still required in TOML; no-ops under the default stub backend)
 spine_sub_port = 5555      # stimuli in
 spine_pub_port = 5556      # spikes out
@@ -102,7 +107,9 @@ Default Cargo features are empty (`default = []` in `Cargo.toml`). That path use
 
 Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`. Those always inject `BackendPair::stub()`. Only `src/bin/brainstem_daemon.rs` constructs `ZmqStimulusSource` + `ZmqSpikeSink` when `corpus-ipc` is on.
 
-Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. Call `StimulusSource::initialize(...)` on the source first (as the binary does). Neither constructor nor `run` calls `initialize`; skipping it makes ingress fail with `ZmqBrainBackend not initialized`.
+Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. Call `StimulusSource::initialize(...)` on the source first (as the binary does). `run` also calls `initialize` (idempotent on success) so readiness can move past the checkpoint gate. Skipping initialize before `run` is therefore no longer required for the stub path; a failing `initialize` marks health **fatal** and never becomes ready.
+
+Health snapshots, probe paths, and the transition table live in [`docs/health.md`](docs/health.md).
 
 #### Config keys and env vars
 
@@ -112,6 +119,7 @@ Library users who want live ZMQ must build that pair themselves under `#[cfg(fea
 | `tick_rate_hz` | used | used |
 | `log_level` | binary tracing init only; unused by `::new()` / `run` | binary tracing init only; unused by `::new()` / `run` |
 | `services` | used (`ServiceRegistry`) | used |
+| `control_bind` | optional HTTP control surface; unset = no listener | same |
 | `spine_sub_port` | parsed, **no-op** | sets `SPIKENAUT_ZMQ_READOUT_IPC` to `tcp://127.0.0.1:<port>` (also sets unused `CORPUS_IPC_ZMQ_READOUT_IPC` for compatibility) |
 | `spine_pub_port` | parsed, **no-op** | binds ZMQ PUB `tcp://*:<port>` |
 | `model_path` | parsed, **no-op** (`StubStimulusSource::initialize` ignores it) | passed literally to `initialize` (no `~` expansion); pinned `ZmqBrainBackend` currently ignores `_model_path` |
