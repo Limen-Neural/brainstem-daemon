@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Deterministic fake-clock / fake-core fault-injection harness (`src/runtime`)
+  that injects failures at initialization, checkpoint validation, ingress,
+  tick execution, metric publication, and shutdown. Restart preserves only
+  durable session/tick/ingress identifiers; replayed inputs are not counted
+  as fresh work (LIM-1218).
 - GitHub Actions CI matrix: stub build/test/clippy on Linux, macOS, and
   Windows; rustfmt and optional `corpus-ipc` / libzmq jobs on Linux only
   (`docs/ci.md`).
