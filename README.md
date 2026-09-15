@@ -20,7 +20,11 @@ Headless spiking neural-network runtime written in Rust.
 
 ## Building
 
-Requires **Rust 1.97.1 only** (`rust-toolchain.toml`). Do not use other toolchains.
+Requires **Rust 1.98.1 only**. That version is the single source of truth
+across `rust-toolchain.toml` `channel`, `Cargo.toml` `rust-version`,
+`.github/workflows/ci.yml` `toolchain:`, and `Dockerfile` `FROM rust:`
+(see [REVIEW.md](REVIEW.md) "MSRV pin rule"). Do not use other toolchains.
+It matches the rest of the Spikenaut software stack.
 
 ```bash
 # Release build, default stub backend (no libzmq)
@@ -230,7 +234,7 @@ restorecon -Rv ~/.config/soma
 
 ### Relationship to other projects
 
-- **`neuromod`** — core spiking-network library consumed by the daemon. The daemon configures dimensions and drives `SpikingNetwork::step` on every tick.
+- **`neuromod`** — crates.io **0.5.2** (`neuromod = "0.5.2"`; Cargo's pre-1.0 range stays on 0.5.z). The daemon configures dimensions and drives `SpikingNetwork::step` on every tick. The optional 4-float ingress tail is dopamine, serotonin, acetylcholine, norepinephrine (the 0.5 modulator API; `cortisol` / `tempo` / `aux_dopamine` are gone). Checkpoint loading ([#41](https://github.com/Limen-Neural/brainstem-daemon/issues/41)) must deserialize this crate's `SpikingNetwork` — 0.5.x JSON has no `stdp_config` / `eligibility` fields. Do not fork those types in-tree.
 - **`limbic-critic`** — expected to send neuromodulator / critic signals over the `corpus-ipc` ingress channel when that feature is enabled. The daemon applies them but does not generate them. The default stub path does not open an ingress socket.
 - **`silicon-bridge`** — consumes the daemon's outbound spike stream (ZeroMQ PUB) when the `corpus-ipc` feature is enabled. The daemon does not know what silicon-bridge does with the spikes. The default stub sink is a no-op.
 - **`Spikenaut-Hardware`** — physical hardware coordination is out of scope; the daemon publishes logical spike events only.

@@ -4,6 +4,10 @@ GitHub Actions (`.github/workflows/ci.yml`) checks that the default stub
 backend is portable, and that optional ZeroMQ features still build where
 system `libzmq` is available.
 
+All jobs install **Rust 1.98.1** — the same string as `Cargo.toml`
+`rust-version` and `rust-toolchain.toml` `channel` (see REVIEW.md
+"MSRV pin rule").
+
 ## Matrix
 
 | Job | Runner | Features | Commands |
