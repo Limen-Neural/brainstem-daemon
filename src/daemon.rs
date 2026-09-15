@@ -508,7 +508,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn daemon_is_live_not_ready_before_run() {
         let daemon = BrainstemDaemon::new(sample_config());
         let snap = daemon.health_snapshot();
