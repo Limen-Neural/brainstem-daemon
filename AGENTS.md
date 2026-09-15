@@ -84,9 +84,14 @@ spine_pub_port = 5556
 model_path     = "/var/lib/soma/snn_model.json"  # Distill sidecar JSON; `~` is not expanded
 ```
 
-In **live** mode (the default), `model_path` should point at Distill sidecar `snn_model.json` (or a Hugging Face layout directory / `config.json`). Startup fails closed on a missing, corrupt, incompatible, non-finite, or blank checkpoint. Field-programmable gate array (FPGA) `.mem` dumps are not a software checkpoint. Set `runtime_mode = "simulation"` to skip checkpoint restore and tick a blank `with_dimensions()` network instead.
+In **live** mode (the default), `model_path` should point at Distill sidecar `snn_model.json`.
+A Hugging Face layout directory or hub `config.json` is also accepted.
+Startup fails closed on a missing, corrupt, incompatible, non-finite, or blank checkpoint.
+Field-programmable gate array (FPGA) `.mem` dumps are not a software checkpoint.
+Set `runtime_mode = "simulation"` to skip restore and tick a blank `with_dimensions()` network.
 
-In **simulation** mode the daemon constructs a blank `SpikingNetwork::with_dimensions(...)` and does not claim to have loaded Spikenaut. `model_path` is unused for restoration.
+In **simulation** mode the daemon constructs a blank `SpikingNetwork::with_dimensions(...)`.
+It does not claim to have loaded Spikenaut. `model_path` is unused for restoration.
 
 With `--features corpus-ipc` the binary still passes `model_path` literally to `ZmqStimulusSource::initialize`.
 `~` is not expanded, and the pinned `ZmqBrainBackend` currently ignores `_model_path`.
