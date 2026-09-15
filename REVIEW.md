@@ -4,9 +4,9 @@ These commands are the **human quality bar** beyond GitHub Actions.
 Run them before claiming a PR is ready when the change touches `src/`,
 `Cargo.toml`, public APIs, or CI.
 
-This file is the local checklist. Multi-OS CI is tracked separately in
-[#21](https://github.com/Limen-Neural/brainstem-daemon/issues/21) and is
-not duplicated here.
+This file is the local checklist. GitHub Actions runs the stub commands on
+Linux, macOS, and Windows, and the optional `corpus-ipc` job on Linux
+only. See [`docs/ci.md`](docs/ci.md).
 
 ## When to run
 
@@ -32,8 +32,9 @@ no-ops under stub).
 # Success is silent: exit 0 and no stdout means formatting is clean.
 cargo fmt --check
 
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --locked --all-targets -- -D warnings
+cargo build --locked
+cargo test --locked
 ```
 
 ## Optional `corpus-ipc` matrix (needs libzmq)
@@ -42,12 +43,13 @@ cargo test
 # Debian/Ubuntu
 sudo apt-get install -y libzmq3-dev
 
-cargo clippy --all-targets --features corpus-ipc -- -D warnings
-cargo test --features corpus-ipc
+cargo clippy --locked --all-targets --features corpus-ipc -- -D warnings
+cargo test --locked --features corpus-ipc
 
 # CI today uses --all-features (equivalent while corpus-ipc is the only feature)
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo build --locked --all-features
+cargo test --locked --all-features
 ```
 
 If a `--all-features` build fails because the C++ compiler cannot find a
