@@ -153,9 +153,7 @@ impl BrainstemDaemon {
         let mut backend = self.backend;
         let health = self.health;
 
-        if cfg.tick_rate_hz == 0 || cfg.tick_rate_hz > 1_000_000 {
-            anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
-        }
+        validate_tick_rate(cfg.tick_rate_hz)?;
 
         let (control_stop, control_task) =
             start_control(cfg.control_bind.as_deref(), health.clone()).await?;
@@ -165,49 +163,9 @@ impl BrainstemDaemon {
             return Err(e);
         }
 
-        let tick_duration = Duration::from_nanos(1_000_000_000 / u64::from(cfg.tick_rate_hz));
-        let mut ticker = time::interval(tick_duration);
-        ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-
-        let mut network =
-            SpikingNetwork::with_dimensions(cfg.lif_count, cfg.izh_count, cfg.channels);
-        let mut stimuli = vec![0.0; cfg.channels];
-        let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
-
-        let mut shutdown = std::pin::pin!(shutdown_signal());
-
-        loop {
-            tokio::select! {
-                _ = ticker.tick() => {
-                    run_tick(
-                        &mut *backend.source,
-                        &mut network,
-                        &mut *backend.sink,
-                        &mut stimuli,
-                        &mut spike_buf,
-                        &health,
-                    );
-                }
-                _ = &mut shutdown => {
-                    info!("Termination signal received, shutting down");
-                    health.apply(HealthEvent::BeginDrain);
-                    break;
-                }
-            }
-        }
-
+        run_until_shutdown(&cfg, &mut backend, &health).await;
         stop_control(control_stop, control_task).await;
-
-        // Explicit backend lifecycle hooks (flush sink, shutdown source) are invoked
-        // for custom backends. Current built-ins are no-ops, but this satisfies
-        // CodeAnt/CodeRabbit "missing cleanup" notes.
-        if let Err(e) = backend.sink.flush() {
-            warn!("Failed to flush spike sink on shutdown: {e}");
-        }
-        if let Err(e) = backend.source.shutdown() {
-            warn!("Failed to shut down stimulus source: {e}");
-        }
-
+        shutdown_backend(&mut backend);
         Ok(())
     }
 }
@@ -335,6 +293,56 @@ fn packet_carries_input(packet: &IngressPacket) -> bool {
             .is_some_and(|mods| !mods.is_empty())
 }
 
+fn validate_tick_rate(tick_rate_hz: u32) -> Result<()> {
+    if tick_rate_hz == 0 || tick_rate_hz > 1_000_000 {
+        anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
+    }
+    Ok(())
+}
+
+async fn run_until_shutdown(cfg: &DaemonConfig, backend: &mut BackendPair, health: &HealthHandle) {
+    let tick_duration = Duration::from_nanos(1_000_000_000 / u64::from(cfg.tick_rate_hz));
+    let mut ticker = time::interval(tick_duration);
+    ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+
+    let mut network = SpikingNetwork::with_dimensions(cfg.lif_count, cfg.izh_count, cfg.channels);
+    let mut stimuli = vec![0.0; cfg.channels];
+    let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
+    let mut shutdown = std::pin::pin!(shutdown_signal());
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                run_tick(
+                    &mut *backend.source,
+                    &mut network,
+                    &mut *backend.sink,
+                    &mut stimuli,
+                    &mut spike_buf,
+                    health,
+                );
+            }
+            _ = &mut shutdown => {
+                info!("Termination signal received, shutting down");
+                health.apply(HealthEvent::BeginDrain);
+                break;
+            }
+        }
+    }
+}
+
+fn shutdown_backend(backend: &mut BackendPair) {
+    // Explicit backend lifecycle hooks (flush sink, shutdown source) are invoked
+    // for custom backends. Current built-ins are no-ops, but this satisfies
+    // CodeAnt/CodeRabbit "missing cleanup" notes.
+    if let Err(e) = backend.sink.flush() {
+        warn!("Failed to flush spike sink on shutdown: {e}");
+    }
+    if let Err(e) = backend.source.shutdown() {
+        warn!("Failed to shut down stimulus source: {e}");
+    }
+}
+
 fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
     let total = config
         .lif_count
@@ -369,60 +377,73 @@ fn run_tick(
     spike_buf: &mut Vec<LocalSpikeEvent>,
     health: &HealthHandle,
 ) {
-    let packet = match source.next_ingress() {
+    let Some(packet) = next_ingress_packet(source, health) else {
+        return;
+    };
+    let modulators = decode_inputs(&packet, stimuli);
+    let Some(spike_ids) = step_network(network, stimuli, &modulators) else {
+        return;
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    fill_spike_buf(spike_buf, &spike_ids, now);
+    emit_tick(sink, spike_buf, &spike_ids, now, health);
+}
+
+fn next_ingress_packet(
+    source: &mut dyn StimulusSource,
+    health: &HealthHandle,
+) -> Option<IngressPacket> {
+    match source.next_ingress() {
         Ok(Some(p)) => {
             if packet_carries_input(&p) {
                 health.apply(HealthEvent::IngressObserved);
             }
-            p
+            Some(p)
         }
         Ok(None) => {
             // Per StimulusSource contract: None means skip ingress this tick but still
             // advance the network with zeroed stimuli (maintains tick cadence).
             // decode_inputs will zero-fill the stimuli buffer based on the empty readout.
-            IngressPacket {
+            Some(IngressPacket {
                 stimuli: Vec::new(),
                 modulators: None,
-            }
+            })
         }
         Err(e) => {
             warn!("Failed to receive from stimulus source: {e}");
-            return;
+            None
         }
-    };
+    }
+}
 
-    let modulators = decode_inputs(&packet, stimuli);
-
-    // Note: decode_inputs already zero-fills any remaining channels when packet.stimuli is shorter.
-
-    let spike_ids = match network.step(stimuli, &modulators) {
-        Ok(spikes) => spikes,
+fn step_network(
+    network: &mut SpikingNetwork,
+    stimuli: &[f32],
+    modulators: &NeuroModulators,
+) -> Option<Vec<usize>> {
+    match network.step(stimuli, modulators) {
+        Ok(spikes) => Some(spikes),
         Err(e) => {
             error!("Network step failed: {e:?}");
-            return;
+            None
         }
-    };
+    }
+}
 
-    // Single timestamp for both per-spike time and batch metadata (keeps them consistent).
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
+fn fill_spike_buf(spike_buf: &mut Vec<LocalSpikeEvent>, spike_ids: &[usize], now: Duration) {
     let tick = now.as_millis() as u64;
-
     spike_buf.clear();
     let mut dropped = 0usize;
-    for &idx in &spike_ids {
+    for &idx in spike_ids {
         match u16::try_from(idx) {
-            Ok(channel) => {
-                spike_buf.push(LocalSpikeEvent {
-                    channel,
-                    time: (tick & (u32::MAX as u64)) as u32,
-                    strength: 1.0,
-                });
-            }
-            Err(_) => {
-                dropped += 1;
-            }
+            Ok(channel) => spike_buf.push(LocalSpikeEvent {
+                channel,
+                time: (tick & (u32::MAX as u64)) as u32,
+                strength: 1.0,
+            }),
+            Err(_) => dropped += 1,
         }
     }
     if dropped > 0 {
@@ -431,7 +452,15 @@ fn run_tick(
             dropped
         );
     }
+}
 
+fn emit_tick(
+    sink: &mut dyn SpikeSink,
+    spike_buf: &[LocalSpikeEvent],
+    spike_ids: &[usize],
+    now: Duration,
+    health: &HealthHandle,
+) {
     if spike_buf.is_empty() && !spike_ids.is_empty() {
         // Had spikes from network but all IDs were out of u16 range (dropped).
         // Nothing valid to publish; skip to avoid empty batch for dropped case.

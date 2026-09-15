@@ -253,24 +253,10 @@ impl HealthSnapshot {
 
         out.push_str("# HELP brainstem_phase 1 for the current health phase.\n");
         out.push_str("# TYPE brainstem_phase gauge\n");
-        for phase in HealthPhase::ALL {
-            out.push_str(&format!(
-                "brainstem_phase{{phase=\"{}\"}} {}\n",
-                phase.as_str(),
-                u8::from(self.phase == phase)
-            ));
-        }
-
+        write_phase_gauges(&mut out, self.phase);
         out.push_str("# HELP brainstem_degraded Recoverable degradation by stable reason code.\n");
         out.push_str("# TYPE brainstem_degraded gauge\n");
-        for reason in ReasonCode::RECOVERABLE {
-            let active = self.reasons.contains(&reason);
-            out.push_str(&format!(
-                "brainstem_degraded{{reason=\"{}\"}} {}\n",
-                reason.as_str(),
-                u8::from(active)
-            ));
-        }
+        write_degraded_gauges(&mut out, &self.reasons);
 
         push_gauge(
             &mut out,
@@ -325,6 +311,26 @@ fn push_gauge(out: &mut String, name: &str, help: &str, value: impl std::fmt::Di
     out.push(' ');
     out.push_str(&value.to_string());
     out.push('\n');
+}
+
+fn write_phase_gauges(out: &mut String, current: HealthPhase) {
+    for phase in HealthPhase::ALL {
+        out.push_str(&format!(
+            "brainstem_phase{{phase=\"{}\"}} {}\n",
+            phase.as_str(),
+            u8::from(current == phase)
+        ));
+    }
+}
+
+fn write_degraded_gauges(out: &mut String, reasons: &[ReasonCode]) {
+    for reason in ReasonCode::RECOVERABLE {
+        out.push_str(&format!(
+            "brainstem_degraded{{reason=\"{}\"}} {}\n",
+            reason.as_str(),
+            u8::from(reasons.contains(&reason))
+        ));
+    }
 }
 
 /// State-machine events. Tick-loop I/O never runs while these are applied.
@@ -394,6 +400,19 @@ impl HealthMachine {
 
     fn apply_lifecycle(&mut self, event: HealthEvent, now: Instant) {
         match event {
+            HealthEvent::ProcessStarted
+            | HealthEvent::InitializationCompleted
+            | HealthEvent::InitializationFailed { .. } => self.apply_boot(event, now),
+            HealthEvent::CheckpointValidated { .. } | HealthEvent::CheckpointRejected { .. } => {
+                self.apply_checkpoint(event, now)
+            }
+            HealthEvent::BeginDrain | HealthEvent::Fatal { .. } => self.apply_terminal(event),
+            _ => {}
+        }
+    }
+
+    fn apply_boot(&mut self, event: HealthEvent, now: Instant) {
+        match event {
             HealthEvent::ProcessStarted => {
                 if !self.started {
                     self.started = true;
@@ -408,8 +427,14 @@ impl HealthMachine {
             HealthEvent::InitializationFailed { detail } => {
                 self.enter_fatal(FatalCode::InitializationFailed, detail);
             }
+            _ => {}
+        }
+    }
+
+    fn apply_checkpoint(&mut self, event: HealthEvent, now: Instant) {
+        match event {
             HealthEvent::CheckpointValidated { identity } => {
-                if self.fatal.is_none() && !self.draining && self.initialized {
+                if self.can_accept_checkpoint() {
                     self.checkpoint = Some(identity);
                     self.checkpoint_ok = true;
                     self.checkpoint_at = Some(now);
@@ -418,17 +443,23 @@ impl HealthMachine {
             HealthEvent::CheckpointRejected { detail } => {
                 self.enter_fatal(FatalCode::CheckpointInvalid, detail);
             }
+            _ => {}
+        }
+    }
+
+    fn can_accept_checkpoint(&self) -> bool {
+        self.fatal.is_none() && !self.draining && self.initialized
+    }
+
+    fn apply_terminal(&mut self, event: HealthEvent) {
+        match event {
             HealthEvent::BeginDrain => {
                 if self.fatal.is_none() {
                     self.draining = true;
                 }
             }
-            HealthEvent::Fatal { code, detail } => {
-                self.enter_fatal(code, detail);
-            }
-            HealthEvent::TickSucceeded
-            | HealthEvent::IngressObserved
-            | HealthEvent::QueuePressure { .. } => {}
+            HealthEvent::Fatal { code, detail } => self.enter_fatal(code, detail),
+            _ => {}
         }
     }
 

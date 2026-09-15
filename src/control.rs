@@ -56,27 +56,37 @@ pub async fn serve_listener(
                 }
             }
             accepted = listener.accept() => {
-                match accepted {
-                    Ok((stream, _)) => {
-                        let Ok(permit) = slots.clone().try_acquire_owned() else {
-                            drop(stream);
-                            continue;
-                        };
-                        let health = health.clone();
-                        tokio::spawn(async move {
-                            let _permit = permit;
-                            if let Err(e) = handle_connection(stream, &health).await {
-                                warn!("control connection failed: {e}");
-                            }
-                        });
-                    }
-                    Err(e) => warn!("control accept failed: {e}"),
-                }
+                spawn_accepted(accepted, &slots, &health);
             }
         }
     }
 
     Ok(())
+}
+
+fn spawn_accepted(
+    accepted: std::io::Result<(TcpStream, std::net::SocketAddr)>,
+    slots: &Arc<Semaphore>,
+    health: &HealthHandle,
+) {
+    match accepted {
+        Ok((stream, _)) => spawn_control_conn(stream, slots, health),
+        Err(e) => warn!("control accept failed: {e}"),
+    }
+}
+
+fn spawn_control_conn(stream: TcpStream, slots: &Arc<Semaphore>, health: &HealthHandle) {
+    let Ok(permit) = slots.clone().try_acquire_owned() else {
+        drop(stream);
+        return;
+    };
+    let health = health.clone();
+    tokio::spawn(async move {
+        let _permit = permit;
+        if let Err(e) = handle_connection(stream, &health).await {
+            warn!("control connection failed: {e}");
+        }
+    });
 }
 
 async fn handle_connection(mut stream: TcpStream, health: &HealthHandle) -> Result<()> {
@@ -160,24 +170,25 @@ enum ParseResult<'a> {
 }
 
 fn parse_get_path(request: &str) -> ParseResult<'_> {
-    let line = match request.lines().next() {
-        Some(line) => line,
-        None => return ParseResult::Invalid,
+    let Some(line) = request.lines().next() else {
+        return ParseResult::Invalid;
     };
+    parse_request_line(line)
+}
+
+fn parse_request_line(line: &str) -> ParseResult<'_> {
     let mut parts = line.split_whitespace();
-    let method = match parts.next() {
-        Some(method) => method,
-        None => return ParseResult::Invalid,
-    };
-    let target = match parts.next() {
-        Some(target) => target,
-        None => return ParseResult::Invalid,
+    let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
+        return ParseResult::Invalid;
     };
     if !method.eq_ignore_ascii_case("GET") {
         return ParseResult::NotGet;
     }
-    let path = target.split('?').next().unwrap_or(target);
-    ParseResult::Get(path)
+    ParseResult::Get(path_without_query(target))
+}
+
+fn path_without_query(target: &str) -> &str {
+    target.split('?').next().unwrap_or(target)
 }
 
 fn http_response(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
