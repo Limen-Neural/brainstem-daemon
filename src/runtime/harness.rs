@@ -264,53 +264,8 @@ impl RuntimeHarness {
     /// starts only after this returns `Ok` with `health == Live`.
     pub fn boot(&mut self) -> Result<()> {
         self.health = Health::Starting;
-        self.fail_point(FaultPoint::Before(Boundary::Initialize))?;
-
-        self.core = FakeCore::new();
-        self.channel_open = true;
-        self.published.clear();
-        self.metrics.clear();
-
-        self.fail_point(FaultPoint::After(Boundary::Initialize))?;
-        self.fail_point(FaultPoint::Before(Boundary::CheckpointValidation))?;
-
-        if self.injector.take(FaultPoint::MalformedCheckpoint) {
-            self.health = Health::CheckpointInvalid;
-            self.restart_outcome = Some(RestartOutcome::RejectedInvalid);
-            self.live = false;
-            bail!("malformed checkpoint");
-        }
-
-        match self.store.load() {
-            Ok(None) => {
-                self.durable = DurableState::fresh();
-                self.session_id = 1;
-                self.durable.last_session_id = 1;
-                self.store.persist(&self.durable)?;
-                self.incomplete_prior = false;
-                self.restart_outcome = Some(RestartOutcome::FreshStart);
-            }
-            Ok(Some(mut state)) => {
-                let inflight = state.inflight.take();
-                self.incomplete_prior = inflight.is_some();
-                self.session_id = state.last_session_id + 1;
-                state.last_session_id = self.session_id;
-                self.store.persist(&state)?;
-                self.durable = state;
-                self.restart_outcome = Some(if self.incomplete_prior {
-                    RestartOutcome::RecoveredIncomplete
-                } else {
-                    RestartOutcome::RecoveredClean
-                });
-            }
-            Err(err) => {
-                self.health = Health::CheckpointInvalid;
-                self.restart_outcome = Some(RestartOutcome::RejectedInvalid);
-                self.live = false;
-                return Err(err);
-            }
-        }
-
+        self.initialize()?;
+        self.validate_checkpoint()?;
         self.fail_point(FaultPoint::After(Boundary::CheckpointValidation))?;
         self.health = Health::Live;
         self.live = true;
@@ -321,6 +276,77 @@ impl RuntimeHarness {
 
     /// One live tick. Refuses to run if boot did not enter `Live`.
     pub fn run_tick(&mut self) -> Result<TickResult> {
+        self.begin_tick()?;
+        let packet = match self.ingress()? {
+            Some(packet) => packet,
+            None => return Ok(TickResult::NoIngress),
+        };
+        if packet.seq <= self.durable.committed_ingress_seq {
+            self.skipped_replays += 1;
+            return Ok(TickResult::SkippedReplay);
+        }
+        let (tick_seq, spike_ids) = self.execute_tick(&packet)?;
+        self.publish_metrics(tick_seq, packet.seq, spike_ids)?;
+        Ok(TickResult::Committed)
+    }
+
+    fn initialize(&mut self) -> Result<()> {
+        self.fail_point(FaultPoint::Before(Boundary::Initialize))?;
+        self.core = FakeCore::new();
+        self.channel_open = true;
+        self.published.clear();
+        self.metrics.clear();
+        self.fail_point(FaultPoint::After(Boundary::Initialize))
+    }
+
+    fn validate_checkpoint(&mut self) -> Result<()> {
+        self.fail_point(FaultPoint::Before(Boundary::CheckpointValidation))?;
+        if self.injector.take(FaultPoint::MalformedCheckpoint) {
+            self.reject_checkpoint();
+            bail!("malformed checkpoint");
+        }
+        match self.store.load() {
+            Ok(None) => self.start_fresh_session(),
+            Ok(Some(state)) => self.recover_session(state),
+            Err(err) => {
+                self.reject_checkpoint();
+                Err(err)
+            }
+        }
+    }
+
+    fn start_fresh_session(&mut self) -> Result<()> {
+        self.durable = DurableState::fresh();
+        self.session_id = 1;
+        self.durable.last_session_id = 1;
+        self.store.persist(&self.durable)?;
+        self.incomplete_prior = false;
+        self.restart_outcome = Some(RestartOutcome::FreshStart);
+        Ok(())
+    }
+
+    fn recover_session(&mut self, mut state: DurableState) -> Result<()> {
+        let inflight = state.inflight.take();
+        self.incomplete_prior = inflight.is_some();
+        self.session_id = state.last_session_id + 1;
+        state.last_session_id = self.session_id;
+        self.store.persist(&state)?;
+        self.durable = state;
+        self.restart_outcome = Some(if self.incomplete_prior {
+            RestartOutcome::RecoveredIncomplete
+        } else {
+            RestartOutcome::RecoveredClean
+        });
+        Ok(())
+    }
+
+    fn reject_checkpoint(&mut self) {
+        self.health = Health::CheckpointInvalid;
+        self.restart_outcome = Some(RestartOutcome::RejectedInvalid);
+        self.live = false;
+    }
+
+    fn begin_tick(&mut self) -> Result<()> {
         if !self.live {
             bail!("tick loop has not started");
         }
@@ -329,19 +355,11 @@ impl RuntimeHarness {
             bail!("bounded step limit {MAX_STEPS} exceeded");
         }
         self.clock.advance(TICK_PERIOD_NS);
+        Ok(())
+    }
 
-        let packet = match self.ingress()? {
-            Some(packet) => packet,
-            None => return Ok(TickResult::NoIngress),
-        };
-
-        if packet.seq <= self.durable.committed_ingress_seq {
-            self.skipped_replays += 1;
-            return Ok(TickResult::SkippedReplay);
-        }
-
+    fn execute_tick(&mut self, packet: &SequencedIngress) -> Result<(u64, Vec<u16>)> {
         self.fail_point(FaultPoint::Before(Boundary::TickExecute))?;
-
         let tick_seq = self.durable.committed_tick_seq + 1;
         self.durable.inflight = Some(InflightRecord {
             session_id: self.session_id,
@@ -349,14 +367,21 @@ impl RuntimeHarness {
             ingress_seq: packet.seq,
         });
         self.store.persist(&self.durable)?;
-
         if self.injector.take(FaultPoint::CoreStepError) {
             self.apply_fault(FaultPoint::CoreStepError);
             bail!("core-step error");
         }
         let spike_ids = self.core.step(&packet.stimuli)?;
         self.fail_point(FaultPoint::After(Boundary::TickExecute))?;
+        Ok((tick_seq, spike_ids))
+    }
 
+    fn publish_metrics(
+        &mut self,
+        tick_seq: u64,
+        ingress_seq: u64,
+        spike_ids: Vec<u16>,
+    ) -> Result<()> {
         self.fail_point(FaultPoint::Before(Boundary::MetricPublish))?;
         if self.injector.take(FaultPoint::BackpressureTimeout) {
             self.clock.advance(BACKPRESSURE_BUDGET_NS);
@@ -367,11 +392,10 @@ impl RuntimeHarness {
             self.health = Health::Degraded;
             bail!("closed publish channel");
         }
-
         let output = CommittedOutput {
             session_id: self.session_id,
             tick_seq,
-            ingress_seq: packet.seq,
+            ingress_seq,
             spike_ids,
             time_ns: self.clock.now_ns(),
         };
@@ -381,14 +405,11 @@ impl RuntimeHarness {
             ingress_seq: output.ingress_seq,
         });
         self.published.push(output);
-
         self.durable.committed_tick_seq = tick_seq;
-        self.durable.committed_ingress_seq = packet.seq;
+        self.durable.committed_ingress_seq = ingress_seq;
         self.durable.inflight = None;
         self.store.persist(&self.durable)?;
-
-        self.fail_point(FaultPoint::After(Boundary::MetricPublish))?;
-        Ok(TickResult::Committed)
+        self.fail_point(FaultPoint::After(Boundary::MetricPublish))
     }
 
     pub fn shutdown(&mut self) -> Result<()> {

@@ -56,6 +56,12 @@ impl DurableState {
 
     /// Return an error if this blob must not enter the live tick loop.
     pub fn validate(&self) -> Result<()> {
+        self.validate_identity()?;
+        self.validate_session()?;
+        self.validate_inflight()
+    }
+
+    fn validate_identity(&self) -> Result<()> {
         if self.schema_version != DURABLE_SCHEMA_VERSION {
             bail!(
                 "unsupported durable schema {} (expected {DURABLE_SCHEMA_VERSION})",
@@ -68,6 +74,10 @@ impl DurableState {
         {
             bail!("invalid checkpoint id {:?}", self.checkpoint_id);
         }
+        Ok(())
+    }
+
+    fn validate_session(&self) -> Result<()> {
         if self.last_session_id == 0
             && (self.committed_tick_seq != 0
                 || self.committed_ingress_seq != 0
@@ -75,24 +85,29 @@ impl DurableState {
         {
             bail!("session 0 cannot hold committed or inflight work");
         }
-        if let Some(inf) = &self.inflight {
-            if inf.tick_seq != self.committed_tick_seq + 1 {
-                bail!(
-                    "inflight tick {} is not committed+1 ({})",
-                    inf.tick_seq,
-                    self.committed_tick_seq
-                );
-            }
-            if inf.session_id == 0 || inf.session_id > self.last_session_id {
-                bail!(
-                    "inflight session {} is out of range for last_session_id {}",
-                    inf.session_id,
-                    self.last_session_id
-                );
-            }
-            if inf.ingress_seq == 0 {
-                bail!("inflight ingress seq must be > 0");
-            }
+        Ok(())
+    }
+
+    fn validate_inflight(&self) -> Result<()> {
+        let Some(inf) = &self.inflight else {
+            return Ok(());
+        };
+        if inf.tick_seq != self.committed_tick_seq + 1 {
+            bail!(
+                "inflight tick {} is not committed+1 ({})",
+                inf.tick_seq,
+                self.committed_tick_seq
+            );
+        }
+        if inf.session_id == 0 || inf.session_id > self.last_session_id {
+            bail!(
+                "inflight session {} is out of range for last_session_id {}",
+                inf.session_id,
+                self.last_session_id
+            );
+        }
+        if inf.ingress_seq == 0 {
+            bail!("inflight ingress seq must be > 0");
         }
         Ok(())
     }

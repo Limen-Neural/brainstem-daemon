@@ -136,74 +136,90 @@ pub struct ExpectedOutcome {
 /// Shutdown faults run one successful tick first, so they publish once.
 pub fn expected_outcome(point: FaultPoint) -> ExpectedOutcome {
     match point {
-        FaultPoint::Before(Boundary::Initialize)
-        | FaultPoint::After(Boundary::Initialize)
-        | FaultPoint::Before(Boundary::CheckpointValidation) => ExpectedOutcome {
-            terminal_health: Health::Faulted,
-            restart: RestartOutcome::FreshStart,
-            published_before_crash: 0,
-            live_loop_entered: false,
-        },
-        FaultPoint::After(Boundary::CheckpointValidation) => ExpectedOutcome {
-            terminal_health: Health::Faulted,
-            restart: RestartOutcome::RecoveredClean,
-            published_before_crash: 0,
-            live_loop_entered: false,
-        },
+        FaultPoint::Before(boundary) => before_boundary(boundary),
+        FaultPoint::After(boundary) => after_boundary(boundary),
         FaultPoint::MalformedCheckpoint => ExpectedOutcome {
             terminal_health: Health::CheckpointInvalid,
             restart: RestartOutcome::RejectedInvalid,
             published_before_crash: 0,
             live_loop_entered: false,
         },
-        FaultPoint::Before(Boundary::Ingress)
-        | FaultPoint::After(Boundary::Ingress)
-        | FaultPoint::ClosedChannel => ExpectedOutcome {
-            terminal_health: Health::Degraded,
-            restart: RestartOutcome::RecoveredClean,
+        FaultPoint::CoreStepError => incomplete_tick(Health::Faulted),
+        FaultPoint::ClosedChannel => ingress_degraded(),
+        FaultPoint::BackpressureTimeout => incomplete_tick(Health::Degraded),
+        FaultPoint::InterruptedShutdown => shutdown_incomplete(),
+    }
+}
+
+fn before_boundary(boundary: Boundary) -> ExpectedOutcome {
+    match boundary {
+        Boundary::Initialize | Boundary::CheckpointValidation => ExpectedOutcome {
+            terminal_health: Health::Faulted,
+            restart: RestartOutcome::FreshStart,
             published_before_crash: 0,
-            live_loop_entered: true,
+            live_loop_entered: false,
         },
-        FaultPoint::Before(Boundary::TickExecute) => ExpectedOutcome {
+        Boundary::Ingress => ingress_degraded(),
+        Boundary::TickExecute => ExpectedOutcome {
             terminal_health: Health::Faulted,
             restart: RestartOutcome::RecoveredClean,
             published_before_crash: 0,
             live_loop_entered: true,
         },
-        FaultPoint::After(Boundary::TickExecute)
-        | FaultPoint::CoreStepError
-        | FaultPoint::Before(Boundary::MetricPublish)
-        | FaultPoint::BackpressureTimeout => ExpectedOutcome {
-            terminal_health: match point {
-                FaultPoint::Before(Boundary::MetricPublish) | FaultPoint::BackpressureTimeout => {
-                    Health::Degraded
-                }
-                _ => Health::Faulted,
-            },
-            restart: RestartOutcome::RecoveredIncomplete,
+        Boundary::MetricPublish => incomplete_tick(Health::Degraded),
+        Boundary::Shutdown => shutdown_incomplete(),
+    }
+}
+
+fn after_boundary(boundary: Boundary) -> ExpectedOutcome {
+    match boundary {
+        Boundary::Initialize => ExpectedOutcome {
+            terminal_health: Health::Faulted,
+            restart: RestartOutcome::FreshStart,
             published_before_crash: 0,
-            live_loop_entered: true,
+            live_loop_entered: false,
         },
-        FaultPoint::After(Boundary::MetricPublish) => ExpectedOutcome {
+        Boundary::CheckpointValidation => ExpectedOutcome {
+            terminal_health: Health::Faulted,
+            restart: RestartOutcome::RecoveredClean,
+            published_before_crash: 0,
+            live_loop_entered: false,
+        },
+        Boundary::Ingress => ingress_degraded(),
+        Boundary::TickExecute => incomplete_tick(Health::Faulted),
+        Boundary::MetricPublish | Boundary::Shutdown => ExpectedOutcome {
             terminal_health: Health::Faulted,
             restart: RestartOutcome::RecoveredClean,
             published_before_crash: 1,
             live_loop_entered: true,
         },
-        FaultPoint::Before(Boundary::Shutdown) | FaultPoint::InterruptedShutdown => {
-            ExpectedOutcome {
-                terminal_health: Health::IncompleteShutdown,
-                restart: RestartOutcome::RecoveredClean,
-                published_before_crash: 1,
-                live_loop_entered: true,
-            }
-        }
-        FaultPoint::After(Boundary::Shutdown) => ExpectedOutcome {
-            terminal_health: Health::Faulted,
-            restart: RestartOutcome::RecoveredClean,
-            published_before_crash: 1,
-            live_loop_entered: true,
-        },
+    }
+}
+
+fn ingress_degraded() -> ExpectedOutcome {
+    ExpectedOutcome {
+        terminal_health: Health::Degraded,
+        restart: RestartOutcome::RecoveredClean,
+        published_before_crash: 0,
+        live_loop_entered: true,
+    }
+}
+
+fn incomplete_tick(terminal_health: Health) -> ExpectedOutcome {
+    ExpectedOutcome {
+        terminal_health,
+        restart: RestartOutcome::RecoveredIncomplete,
+        published_before_crash: 0,
+        live_loop_entered: true,
+    }
+}
+
+fn shutdown_incomplete() -> ExpectedOutcome {
+    ExpectedOutcome {
+        terminal_health: Health::IncompleteShutdown,
+        restart: RestartOutcome::RecoveredClean,
+        published_before_crash: 1,
+        live_loop_entered: true,
     }
 }
 
@@ -222,6 +238,38 @@ mod tests {
     }
 
     fn drive(seed: u64, point: FaultPoint) -> Result<DriveReport> {
+        let first = run_injected_session(seed, point)?;
+        let terminal_health = first.health();
+        let live_loop_entered = first.live_loop_entered();
+        let published_before_crash = first.published().len() as u64;
+        let metrics_before_crash = first.metrics().len() as u64;
+        let inflight_at_crash = first.durable().inflight.clone();
+        let committed_tick_seq = first.durable().committed_tick_seq;
+        let committed_ingress_seq = first.durable().committed_ingress_seq;
+        let last_session_id = first.durable().last_session_id;
+        let restarted = boot_restart(
+            seed,
+            first.into_store(),
+            committed_tick_seq,
+            committed_ingress_seq,
+            last_session_id,
+        )?;
+        Ok(DriveReport {
+            terminal_health,
+            restart: restarted
+                .restart_outcome()
+                .expect("boot always records a restart outcome"),
+            published_before_crash,
+            metrics_before_crash,
+            live_loop_entered,
+            inflight_at_crash,
+            last_session_id,
+            restart_session_id: restarted.session_id(),
+            incomplete_prior: restarted.incomplete_prior(),
+        })
+    }
+
+    fn run_injected_session(seed: u64, point: FaultPoint) -> Result<RuntimeHarness> {
         let mut first = match point {
             FaultPoint::MalformedCheckpoint => RuntimeHarness::builder(seed)
                 .store(DurableStore::malformed(b"{not-a-checkpoint"))
@@ -240,23 +288,21 @@ mod tests {
         } else if boot.is_ok() && first.is_live() {
             let _ = first.run_tick();
         }
+        Ok(first)
+    }
 
-        let terminal_health = first.health();
-        let live_loop_entered = first.live_loop_entered();
-        let published_before_crash = first.published().len() as u64;
-        let metrics_before_crash = first.metrics().len() as u64;
-        let inflight_at_crash = first.durable().inflight.clone();
-        let committed_tick_seq = first.durable().committed_tick_seq;
-        let committed_ingress_seq = first.durable().committed_ingress_seq;
-        let last_session_id = first.durable().last_session_id;
-        let store = first.into_store();
-
+    fn boot_restart(
+        seed: u64,
+        store: DurableStore,
+        committed_tick_seq: u64,
+        committed_ingress_seq: u64,
+        last_session_id: u64,
+    ) -> Result<RuntimeHarness> {
         let mut restarted = RuntimeHarness::builder(seed).store(store).build();
         let restart_boot = restarted.boot();
         let restart = restarted
             .restart_outcome()
             .expect("boot always records a restart outcome");
-
         if restart == RestartOutcome::RejectedInvalid {
             assert!(restart_boot.is_err());
             assert!(!restarted.is_live());
@@ -274,18 +320,7 @@ mod tests {
                 committed_ingress_seq
             );
         }
-
-        Ok(DriveReport {
-            terminal_health,
-            restart,
-            published_before_crash,
-            metrics_before_crash,
-            live_loop_entered,
-            inflight_at_crash,
-            last_session_id,
-            restart_session_id: restarted.session_id(),
-            incomplete_prior: restarted.incomplete_prior(),
-        })
+        Ok(restarted)
     }
 
     struct DriveReport {
@@ -308,93 +343,120 @@ mod tests {
                 let report = drive(seed, point).unwrap_or_else(|err| {
                     panic!("seed={seed} point={point:?} failed: {err:#}");
                 });
-                assert_eq!(
-                    report.terminal_health, expected.terminal_health,
-                    "health seed={seed} point={point:?}"
-                );
-                assert_eq!(
-                    report.restart, expected.restart,
-                    "restart seed={seed} point={point:?}"
-                );
-                assert_eq!(
-                    report.published_before_crash, expected.published_before_crash,
-                    "published seed={seed} point={point:?}"
-                );
-                assert_eq!(
-                    report.metrics_before_crash, expected.published_before_crash,
-                    "metrics must match committed publishes seed={seed} point={point:?}"
-                );
-                assert_eq!(
-                    report.live_loop_entered, expected.live_loop_entered,
-                    "live loop seed={seed} point={point:?}"
-                );
-                assert_eq!(
-                    report.incomplete_prior,
-                    expected.restart == RestartOutcome::RecoveredIncomplete,
-                    "incomplete prior seed={seed} point={point:?}"
-                );
-                if expected.restart != RestartOutcome::RejectedInvalid {
-                    assert_eq!(
-                        report.restart_session_id,
-                        report.last_session_id + 1,
-                        "monotonic session seed={seed} point={point:?}"
-                    );
-                }
-                if expected.restart == RestartOutcome::RecoveredIncomplete {
-                    assert!(
-                        report.inflight_at_crash.is_some(),
-                        "inflight missing seed={seed} point={point:?}"
-                    );
-                    assert!(report.restart_session_id > report.last_session_id);
-                } else {
-                    assert!(
-                        report.inflight_at_crash.is_none(),
-                        "unexpected inflight seed={seed} point={point:?}"
-                    );
-                }
+                assert_report_matches_oracle(seed, point, &report, expected);
             }
+        }
+    }
+
+    fn assert_report_matches_oracle(
+        seed: u64,
+        point: FaultPoint,
+        report: &DriveReport,
+        expected: ExpectedOutcome,
+    ) {
+        assert_eq!(
+            report.terminal_health, expected.terminal_health,
+            "health seed={seed} point={point:?}"
+        );
+        assert_eq!(
+            report.restart, expected.restart,
+            "restart seed={seed} point={point:?}"
+        );
+        assert_eq!(
+            report.published_before_crash, expected.published_before_crash,
+            "published seed={seed} point={point:?}"
+        );
+        assert_eq!(
+            report.metrics_before_crash, expected.published_before_crash,
+            "metrics must match committed publishes seed={seed} point={point:?}"
+        );
+        assert_eq!(
+            report.live_loop_entered, expected.live_loop_entered,
+            "live loop seed={seed} point={point:?}"
+        );
+        assert_eq!(
+            report.incomplete_prior,
+            expected.restart == RestartOutcome::RecoveredIncomplete,
+            "incomplete prior seed={seed} point={point:?}"
+        );
+        assert_session_and_inflight(seed, point, report, expected);
+    }
+
+    fn assert_session_and_inflight(
+        seed: u64,
+        point: FaultPoint,
+        report: &DriveReport,
+        expected: ExpectedOutcome,
+    ) {
+        if expected.restart != RestartOutcome::RejectedInvalid {
+            assert_eq!(
+                report.restart_session_id,
+                report.last_session_id + 1,
+                "monotonic session seed={seed} point={point:?}"
+            );
+        }
+        if expected.restart == RestartOutcome::RecoveredIncomplete {
+            assert!(
+                report.inflight_at_crash.is_some(),
+                "inflight missing seed={seed} point={point:?}"
+            );
+            assert!(report.restart_session_id > report.last_session_id);
+        } else {
+            assert!(
+                report.inflight_at_crash.is_none(),
+                "unexpected inflight seed={seed} point={point:?}"
+            );
         }
     }
 
     #[test]
     fn invalid_durable_state_fails_before_live_tick_loop() {
         for &seed in FAULT_SEEDS {
-            let fixtures: Vec<DurableStore> = vec![
-                DurableStore::malformed(b"{not-json"),
-                DurableStore::malformed(b"BSDK0\n{}"),
-                DurableStore::malformed({
-                    let mut raw = b"BSDK1\n".to_vec();
-                    raw.extend(
-                        serde_json::to_vec(&serde_json::json!({
-                            "schema_version": 1,
-                            "checkpoint_id": "",
-                            "last_session_id": 1,
-                            "committed_tick_seq": 0,
-                            "committed_ingress_seq": 0,
-                            "inflight": null
-                        }))
-                        .unwrap(),
-                    );
-                    raw
-                }),
-            ];
-            for store in fixtures {
-                let mut h = RuntimeHarness::builder(seed).store(store).build();
-                let err = h.boot().unwrap_err();
-                assert!(
-                    h.health() == Health::CheckpointInvalid,
-                    "seed={seed} health={:?} err={err}",
-                    h.health()
-                );
-                assert!(!h.is_live());
-                assert!(!h.live_loop_entered());
-                assert_eq!(h.restart_outcome(), Some(RestartOutcome::RejectedInvalid));
-                assert!(
-                    h.run_tick().is_err(),
-                    "tick loop must refuse to start seed={seed}"
-                );
+            for store in invalid_store_fixtures() {
+                assert_boot_rejects_invalid(seed, store);
             }
         }
+    }
+
+    fn invalid_store_fixtures() -> Vec<DurableStore> {
+        vec![
+            DurableStore::malformed(b"{not-json"),
+            DurableStore::malformed(b"BSDK0\n{}"),
+            DurableStore::malformed(empty_checkpoint_blob()),
+        ]
+    }
+
+    fn empty_checkpoint_blob() -> Vec<u8> {
+        let mut raw = b"BSDK1\n".to_vec();
+        raw.extend(
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "checkpoint_id": "",
+                "last_session_id": 1,
+                "committed_tick_seq": 0,
+                "committed_ingress_seq": 0,
+                "inflight": null
+            }))
+            .unwrap(),
+        );
+        raw
+    }
+
+    fn assert_boot_rejects_invalid(seed: u64, store: DurableStore) {
+        let mut h = RuntimeHarness::builder(seed).store(store).build();
+        let err = h.boot().unwrap_err();
+        assert!(
+            h.health() == Health::CheckpointInvalid,
+            "seed={seed} health={:?} err={err}",
+            h.health()
+        );
+        assert!(!h.is_live());
+        assert!(!h.live_loop_entered());
+        assert_eq!(h.restart_outcome(), Some(RestartOutcome::RejectedInvalid));
+        assert!(
+            h.run_tick().is_err(),
+            "tick loop must refuse to start seed={seed}"
+        );
     }
 
     #[test]
