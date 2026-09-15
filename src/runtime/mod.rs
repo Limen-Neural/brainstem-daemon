@@ -558,6 +558,7 @@ mod tests {
     #[test]
     fn harness_is_synchronous_step_bounded_and_leaves_no_background_tasks() {
         let mut h = RuntimeHarness::builder(42).build();
+        let start_ns = h.clock().now_ns();
         h.boot().unwrap();
         for _ in 0..8 {
             let _ = h.run_tick().unwrap();
@@ -566,7 +567,7 @@ mod tests {
         assert!(h.steps_taken() <= MAX_STEPS);
         assert_eq!(h.health(), Health::Stopped);
         assert!(!h.channel_open());
-        assert!(h.clock().now_ns() >= TICK_PERIOD_NS * 8);
+        assert_eq!(h.clock().now_ns(), start_ns + TICK_PERIOD_NS * 8);
     }
 
     #[test]
