@@ -2,7 +2,10 @@
 
 Supervisors should treat **liveness** and **readiness** as independent. A live
 `brainstem-daemon` process has a health reporter; it is ready only after
-stimulus-source initialization and checkpoint validation have succeeded.
+`StimulusSource::initialize` succeeds. Until [`LIM-1133`](https://linear.app/rpd-34/issue/LIM-1133),
+that successful `initialize` is also the checkpoint-validation stand-in: the
+daemon applies `CheckpointValidated` immediately afterward. There is no
+separate digest/weight check in this release.
 
 This repository had no HTTP/metrics server before this surface. When
 `control_bind` is set, `BrainstemDaemon::run` starts **one** listener:
@@ -26,15 +29,20 @@ waiting on the tick loop's backend or `SpikingNetwork::step`.
 | From | Event | To | live | ready | Notes |
 |---|---|---|---|---|---|
 | (unstarted) | `ProcessStarted` | `starting` | true | false | Construction. Live does not imply ready. |
-| `starting` | `InitializationCompleted` | `loading_checkpoint` | true | false | `initialize()` succeeded; checkpoint still required. |
+| `starting` | `InitializationCompleted` | `loading_checkpoint` | true | false | `initialize()` succeeded. Live daemon then applies the checkpoint stand-in (next row). |
 | `starting` | `InitializationFailed` | `fatal` | true | false | Sticky. Detail is JSON-only, never a metric label. |
-| `loading_checkpoint` | `CheckpointValidated` | `running` | true | true | Ready only after this gate. |
+| `loading_checkpoint` | `CheckpointValidated` | `running` | true | true | Ready only after this gate. Until LIM-1133 the daemon emits this right after `initialize`. |
 | `loading_checkpoint` | `CheckpointRejected` | `fatal` | true | false | Sticky. |
 | `running` | clock ≥ `stale_after` without ingress | `degraded` | true | true | Reason `stale_input`. Ready stays true. |
 | `degraded` (stale) | `IngressObserved` | `running` (if no other reasons) | true | true | Ticks without ingress do **not** clear stale. |
 | `running` | queue fill ≥ `overload_high` | `degraded` | true | true | Reason `overload`. |
 | `degraded` (overload) | fill ≤ `overload_low` | `running` (if no other reasons) | true | true | Hysteresis: mid-band does not recover. |
 | `running` / `degraded` | `BeginDrain` | `draining` | true | false | SIGTERM/SIGINT. Does not return to ready. |
+
+After `BeginDrain`, `BrainstemDaemon::run` stops the control listener. External
+`/readyz` probes may get connection refused rather than `503`. In-process
+`HealthHandle::snapshot()` still reports `phase: draining`. There is no probe
+grace period.
 | any non-fatal | `Fatal` / init or checkpoint failure | `fatal` | true | false | Subsequent validate/tick/drain cannot restore ready. |
 
 Recoverable reasons (`stale_input`, `overload`) are independent: clearing one

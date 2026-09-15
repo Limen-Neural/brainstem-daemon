@@ -42,7 +42,11 @@ impl HealthHandle {
 
     /// Never waits. Returns `None` if a writer currently holds the lock.
     pub fn try_snapshot(&self) -> Option<HealthSnapshot> {
-        self.inner.try_read().ok().map(|guard| guard.snapshot())
+        match self.inner.try_read() {
+            Ok(guard) => Some(guard.snapshot()),
+            Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner().snapshot()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        }
     }
 
     #[cfg(test)]

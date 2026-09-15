@@ -21,6 +21,7 @@ use tracing::{info, warn};
 use crate::health::{HealthHandle, HealthSnapshot};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 const MAX_CONTROL_CONNS: usize = 32;
 
 pub async fn serve(
@@ -57,7 +58,9 @@ pub async fn serve_listener(
                 }
             }
             accepted = listener.accept() => {
-                spawn_accepted(accepted, &slots, &health);
+                if !spawn_accepted(accepted, &slots, &health) {
+                    tokio::time::sleep(ACCEPT_BACKOFF).await;
+                }
             }
         }
     }
@@ -80,10 +83,16 @@ fn spawn_accepted(
     accepted: std::io::Result<(TcpStream, std::net::SocketAddr)>,
     slots: &Arc<Semaphore>,
     health: &HealthHandle,
-) {
+) -> bool {
     match accepted {
-        Ok((stream, _)) => spawn_control_conn(stream, slots, health),
-        Err(e) => warn!("control accept failed: {e}"),
+        Ok((stream, _)) => {
+            spawn_control_conn(stream, slots, health);
+            true
+        }
+        Err(e) => {
+            warn!("control accept failed: {e}");
+            false
+        }
     }
 }
 

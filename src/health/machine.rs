@@ -43,7 +43,11 @@ impl HealthLimits {
                 overload_low: low,
             }
         } else {
-            Self::default()
+            Self {
+                stale_after: self.stale_after,
+                overload_high: 0.90,
+                overload_low: 0.70,
+            }
         }
     }
 }

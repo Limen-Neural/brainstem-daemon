@@ -447,3 +447,16 @@ fn non_finite_overload_limits_are_sanitized() {
     });
     assert!(machine.snapshot().queue_pressure.overloaded);
 }
+
+#[test]
+fn inverted_overload_limits_keep_stale_after() {
+    let limits = HealthLimits {
+        stale_after: Duration::from_millis(100),
+        overload_high: 0.50,
+        overload_low: 0.90,
+    }
+    .sanitized();
+    assert_eq!(limits.stale_after, Duration::from_millis(100));
+    assert_eq!(limits.overload_high, 0.90);
+    assert_eq!(limits.overload_low, 0.70);
+}
