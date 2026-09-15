@@ -77,7 +77,6 @@ fn spawn_accepted(
 
 fn spawn_control_conn(stream: TcpStream, slots: &Arc<Semaphore>, health: &HealthHandle) {
     let Ok(permit) = slots.clone().try_acquire_owned() else {
-        drop(stream);
         return;
     };
     let health = health.clone();
