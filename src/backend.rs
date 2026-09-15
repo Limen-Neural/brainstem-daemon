@@ -15,12 +15,19 @@
 
 use anyhow::Result;
 
+/// Length of the neuromodulator tail appended after the stimulus prefix.
+///
+/// Order matches `neuromod` 0.5+: dopamine, serotonin, acetylcholine,
+/// norepinephrine. Do not invent a parallel in-tree modulator struct.
+pub const NEUROMODULATOR_COUNT: usize = 4;
+
 /// Packet returned by a `StimulusSource` for one tick.
 #[derive(Debug, Clone, Default)]
 pub struct IngressPacket {
     /// The core stimulus vector (the "readout" part expected by the network).
     pub stimuli: Vec<f32>,
-    /// Optional raw modulator values (e.g. [dopamine, cortisol, acetylcholine, tempo, ...]).
+    /// Optional raw modulator values in [`NEUROMODULATOR_COUNT`] order
+    /// (dopamine, serotonin, acetylcholine, norepinephrine).
     /// When `None`, the caller should use defaults (see `decode_inputs`).
     pub modulators: Option<Vec<f32>>,
 }
@@ -182,7 +189,8 @@ mod zmq_impl {
         }
 
         /// Construct with known channel count so `next_ingress` can split
-        /// stimulus prefix from appended neuromodulator tail (4 floats).
+        /// stimulus prefix from appended neuromodulator tail
+        /// ([`NEUROMODULATOR_COUNT`] floats: DA / 5-HT / ACh / NE).
         ///
         /// The default `new()` uses `channels=0`, which means the entire readout
         /// is passed as stimuli and no modulators are extracted. Library users
@@ -201,8 +209,8 @@ mod zmq_impl {
             let ch = self.channels;
             if ch > 0 && readout.len() > ch {
                 let stimuli = readout[..ch].to_vec();
-                let modulators = if readout.len() >= ch + 4 {
-                    Some(readout[ch..ch + 4].to_vec())
+                let modulators = if readout.len() >= ch + NEUROMODULATOR_COUNT {
+                    Some(readout[ch..ch + NEUROMODULATOR_COUNT].to_vec())
                 } else {
                     None
                 };

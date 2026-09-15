@@ -15,7 +15,8 @@ use tokio::time;
 use tracing::{error, info, warn};
 
 use crate::backend::{
-    BackendPair, IngressPacket, SpikeEvent as LocalSpikeEvent, SpikeSink, StimulusSource,
+    BackendPair, IngressPacket, NEUROMODULATOR_COUNT, SpikeEvent as LocalSpikeEvent, SpikeSink,
+    StimulusSource,
 };
 use crate::registry::{ServiceConfig, ServiceRegistry};
 
@@ -139,6 +140,8 @@ impl BrainstemDaemon {
         let mut ticker = time::interval(tick_duration);
         ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
+        // Blank `neuromod` 0.5.x network (crates.io). Checkpoint restore is #41;
+        // that work must deserialize this crate's `SpikingNetwork` (no in-tree fork).
         let mut network =
             SpikingNetwork::with_dimensions(cfg.lif_count, cfg.izh_count, cfg.channels);
         let mut stimuli = vec![0.0; cfg.channels];
@@ -343,13 +346,12 @@ fn decode_inputs(packet: &IngressPacket, stimuli: &mut [f32]) -> NeuroModulators
     }
 
     match packet.modulators.as_ref() {
-        Some(mods) if mods.len() >= 4 => {
+        Some(mods) if mods.len() >= NEUROMODULATOR_COUNT => {
             return NeuroModulators {
                 dopamine: mods[0],
-                cortisol: mods[1],
+                serotonin: mods[1],
                 acetylcholine: mods[2],
-                tempo: mods[3],
-                aux_dopamine: 0.0,
+                norepinephrine: mods[3],
             };
         }
         _ => {}
@@ -375,6 +377,7 @@ pub(crate) fn run_tick_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::CollectingSpikeSink;
     use crate::registry::ServiceConfig;
 
     fn sample_config() -> DaemonConfig {
@@ -433,9 +436,28 @@ mod tests {
         let mut stimuli = vec![0.0; 4];
         let mods = decode_inputs(&packet, &mut stimuli);
         assert_eq!(mods.dopamine, 0.5);
-        assert_eq!(mods.cortisol, 0.6);
+        assert_eq!(mods.serotonin, 0.6);
         assert_eq!(mods.acetylcholine, 0.7);
-        assert_eq!(mods.tempo, 0.8);
+        assert_eq!(mods.norepinephrine, 0.8);
+    }
+
+    #[test]
+    fn decode_inputs_ignores_extra_modulator_tail() {
+        let packet = IngressPacket {
+            stimuli: vec![0.0; 2],
+            modulators: Some(vec![0.1, 0.2, 0.3, 0.4, 0.9]),
+        };
+        let mut stimuli = vec![0.0; 2];
+        let mods = decode_inputs(&packet, &mut stimuli);
+        assert_eq!(
+            mods,
+            NeuroModulators {
+                dopamine: 0.1,
+                serotonin: 0.2,
+                acetylcholine: 0.3,
+                norepinephrine: 0.4,
+            }
+        );
     }
 
     #[test]
@@ -499,8 +521,6 @@ mod tests {
 
     #[test]
     fn stub_backend_basic_tick() {
-        use crate::backend::CollectingSpikeSink;
-
         let mut source = crate::backend::StubStimulusSource;
         let mut sink = CollectingSpikeSink::new();
         let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
@@ -518,6 +538,134 @@ mod tests {
 
         // Sink should have received one (possibly empty) batch
         assert_eq!(sink.emitted.len(), 1);
+    }
+
+    struct ScriptedStimulusSource {
+        packet: IngressPacket,
+    }
+
+    impl StimulusSource for ScriptedStimulusSource {
+        fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
+            Ok(Some(self.packet.clone()))
+        }
+
+        fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn tick_once(packet: IngressPacket, network: &mut SpikingNetwork) -> CollectingSpikeSink {
+        let mut source = ScriptedStimulusSource { packet };
+        let mut sink = CollectingSpikeSink::new();
+        let mut stimuli = vec![0.0; network.num_channels];
+        let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+        run_tick_for_test(
+            &mut source,
+            network,
+            &mut sink,
+            &mut stimuli,
+            &mut spike_buf,
+        );
+        sink
+    }
+
+    #[test]
+    fn tick_applies_neuromod_05_modulator_snapshot() {
+        let mut network = SpikingNetwork::with_dimensions(2, 1, 2);
+        let packet = IngressPacket {
+            stimuli: vec![0.0; 2],
+            modulators: Some(vec![0.5, 0.25, 0.8, 0.1]),
+        };
+
+        let sink = tick_once(packet, &mut network);
+
+        assert_eq!(sink.emitted.len(), 1);
+        assert_eq!(network.global_step, 1);
+        assert_eq!(
+            network.modulators,
+            NeuroModulators {
+                dopamine: 0.5,
+                serotonin: 0.25,
+                acetylcholine: 0.8,
+                norepinephrine: 0.1,
+            }
+        );
+        // Engine assigns LIF decay from acetylcholine: 0.15 - 0.05 * ACh.
+        assert!(
+            network
+                .neurons
+                .iter()
+                .all(|n| (n.decay_rate - 0.11).abs() < 1e-6)
+        );
+    }
+
+    #[test]
+    fn tick_defaults_modulators_when_ingress_omits_them() {
+        let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
+        let packet = IngressPacket {
+            stimuli: vec![0.2, 0.3],
+            modulators: None,
+        };
+
+        let sink = tick_once(packet, &mut network);
+
+        assert_eq!(sink.emitted.len(), 1);
+        assert_eq!(network.modulators, NeuroModulators::default());
+        assert!(
+            network
+                .neurons
+                .iter()
+                .all(|n| (n.decay_rate - 0.15).abs() < 1e-6)
+        );
+    }
+
+    #[test]
+    fn tick_loop_emits_one_batch_per_step() {
+        let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
+        let packet = IngressPacket {
+            stimuli: vec![0.4, 0.1],
+            modulators: Some(vec![0.0, 0.0, 0.0, 0.0]),
+        };
+
+        let mut source = ScriptedStimulusSource { packet };
+        let mut sink = CollectingSpikeSink::new();
+        let mut stimuli = vec![0.0; 2];
+        let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+
+        for _ in 0..3 {
+            run_tick_for_test(
+                &mut source,
+                &mut network,
+                &mut sink,
+                &mut stimuli,
+                &mut spike_buf,
+            );
+        }
+
+        assert_eq!(sink.emitted.len(), 3);
+        assert_eq!(network.global_step, 3);
+    }
+
+    #[test]
+    fn spiking_network_serde_matches_neuromod_05_contract() {
+        // #41 checkpoint loading must use this crates.io `neuromod` 0.5.x shape.
+        // 0.6 adds `stdp_config` / `eligibility`; do not fork those fields here.
+        let network = SpikingNetwork::with_dimensions(2, 1, 2);
+        let json = serde_json::to_value(&network).expect("serialize blank network");
+
+        assert!(json.get("stdp_config").is_none());
+        assert!(json.get("neurons").and_then(|n| n.get(0)).is_some());
+        assert!(
+            json["neurons"][0].get("eligibility").is_none(),
+            "0.5.x LIF neurons have no eligibility traces"
+        );
+
+        let restored: SpikingNetwork =
+            serde_json::from_value(json).expect("deserialize neuromod 0.5 network");
+        assert_eq!(restored.num_channels, 2);
+        assert_eq!(restored.neurons.len(), 2);
+        assert_eq!(restored.iz_neurons.len(), 1);
+        assert_eq!(restored.modulators, NeuroModulators::default());
     }
 
     // Sends a real SIGTERM to this test process, so it's `#[ignore]`d by default:

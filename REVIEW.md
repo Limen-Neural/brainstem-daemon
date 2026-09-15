@@ -8,6 +8,20 @@ This file is the local checklist. GitHub Actions runs the stub commands on
 Linux, macOS, and Windows, and the optional `corpus-ipc` job on Linux
 only. See [`docs/ci.md`](docs/ci.md).
 
+## MSRV pin rule
+
+`Cargo.toml` `rust-version`, `rust-toolchain.toml` `channel`, and every
+`toolchain:` string in `.github/workflows/ci.yml` must stay **identical**
+(currently **1.98.1**). `Dockerfile` `FROM rust:` tags and
+`.devin/blueprint.yaml` rustup pins must match too.
+
+To bump MSRV:
+
+1. Set the new version in `Cargo.toml`, `rust-toolchain.toml`, `ci.yml`,
+   `Dockerfile`, `.devin/blueprint.yaml`, `README.md`, and `AGENTS.md`.
+2. Run the mandatory stub commands below on that toolchain.
+3. Do not bump only one pin.
+
 ## When to run
 
 - Before every push that changes `src/`, `Cargo.toml`, or CI
