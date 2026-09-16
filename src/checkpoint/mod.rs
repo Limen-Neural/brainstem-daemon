@@ -197,8 +197,9 @@ struct SidecarNeuron {
     threshold: f64,
     last_spike: bool,
     weights: Vec<f64>,
-    /// Sidecar readout row. neuromod 0.4 has no readout matrix; values are
-    /// validated as finite and then ignored.
+    /// Sidecar readout row. neuromod 0.4 has no readout matrix, so a sidecar
+    /// carrying `output_weights` is rejected at load time (fail closed)
+    /// rather than silently dropping trained readout weights.
     #[serde(default)]
     output_weights: Option<Vec<f64>>,
 }
@@ -237,6 +238,7 @@ fn validate_live_document(
     sidecar_path: &Path,
 ) -> Result<()> {
     validate_schema(document)?;
+    reject_output_weights(document)?;
     if let Some(hub_path) = find_hub_config(sidecar_path) {
         validate_hub_config(&hub_path, document)?;
     }
@@ -260,6 +262,24 @@ fn validate_schema(document: &SidecarDocument) -> Result<()> {
         && encoder.is_empty()
     {
         bail!("invalid Spikenaut sidecar: `encoder` is empty");
+    }
+    Ok(())
+}
+
+/// Fail closed on sidecars that carry `output_weights`.
+///
+/// neuromod 0.4 has no readout matrix, so these values could never be
+/// restored; accepting them would silently drop trained readout weights
+/// while live mode reports a successful load. Reject loudly instead.
+fn reject_output_weights(document: &SidecarDocument) -> Result<()> {
+    for (index, neuron) in document.neurons.iter().enumerate() {
+        if neuron.output_weights.is_some() {
+            bail!(
+                "invalid Spikenaut sidecar: neuron {index} carries `output_weights`, which this \
+                 daemon cannot restore (neuromod 0.4 has no readout matrix); refusing to load \
+                 rather than silently dropping trained readout weights"
+            );
+        }
     }
     Ok(())
 }
@@ -372,11 +392,8 @@ fn validate_finite_parameters(document: &SidecarDocument) -> Result<()> {
         for (column, &weight) in neuron.weights.iter().enumerate() {
             require_finite(weight, &format!("neuron {index} weight {column}"))?;
         }
-        if let Some(outputs) = neuron.output_weights.as_ref() {
-            for (column, &weight) in outputs.iter().enumerate() {
-                require_finite(weight, &format!("neuron {index} output_weight {column}"))?;
-            }
-        }
+        // Note: `output_weights` are rejected outright by `reject_output_weights`
+        // before this runs, so no finite-check for them is needed here.
     }
     Ok(())
 }
