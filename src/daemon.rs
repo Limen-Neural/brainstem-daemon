@@ -730,8 +730,10 @@ channels = 16
             source: None,
             frozen_lineage: None,
         };
-        let err = take_restored_network(&cfg, Some((network, provenance)))
-            .expect_err("live mode must reject a blank simulation pair");
+        let err = match take_restored_network(&cfg, Some((network, provenance))) {
+            Ok(_) => panic!("live mode must reject a blank simulation pair"),
+            Err(err) => err,
+        };
         assert!(
             err.to_string().contains("validated Spikenaut checkpoint"),
             "unexpected error: {err}"
@@ -753,8 +755,10 @@ channels = 16
             source: None,
             frozen_lineage: None,
         };
-        let err = take_restored_network(&cfg, Some((network, provenance)))
-            .expect_err("live mode must reject mismatched dimensions");
+        let err = match take_restored_network(&cfg, Some((network, provenance))) {
+            Ok(_) => panic!("live mode must reject mismatched dimensions"),
+            Err(err) => err,
+        };
         assert!(
             err.to_string().contains("dimensions"),
             "unexpected error: {err}"
