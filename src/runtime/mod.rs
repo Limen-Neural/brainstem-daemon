@@ -3,10 +3,10 @@
 
 //! Deterministic restart and fault-injection contract for the runtime.
 //!
-//! The live `BrainstemDaemon` tick loop still uses wall-clock `tokio` time and
-//! constructs a blank `SpikingNetwork`. This module is the CPU-only harness
-//! that pins restart semantics until that loop is migrated (real Spikenaut
-//! checkpoint loading is [LIM-1133] / GH#41).
+//! The live `BrainstemDaemon` tick loop still uses wall-clock `tokio` time.
+//! Live mode restores Distill sidecar checkpoints (LIM-1133); this module is a
+//! CPU-only fake-clock / fake-core harness that pins restart and fault-recovery
+//! semantics independently of that path.
 //!
 //! # Durable vs volatile
 //!
