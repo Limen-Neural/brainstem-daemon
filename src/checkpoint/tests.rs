@@ -103,7 +103,10 @@ fn live_loads_valid_sidecar_and_records_provenance() {
 }
 
 #[test]
-fn live_accepts_sidecar_output_weights_without_restoring_them() {
+fn live_rejects_sidecar_with_output_weights() {
+    // Fail closed: neuromod 0.6.0 has no Distill readout matrix, so a sidecar
+    // carrying `output_weights` must be rejected loudly rather than silently
+    // dropping trained readout weights on a "successful" load.
     let dir = unique_dir();
     let json = r#"{
             "source": "spikenaut_julia",
@@ -130,8 +133,60 @@ fn live_accepts_sidecar_output_weights_without_restoring_them() {
         }"#;
     let path = write_json(&dir, "snn_model.json", json);
     let cfg = live_config(path, 2, 2);
-    let (network, _) = restore_network(&cfg).expect("output_weights are sidecar readout");
+    let err = restore_failed(&cfg);
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("output_weights"),
+        "rejection must name the offending field, got: {msg}"
+    );
+    assert!(
+        msg.contains("cannot restore"),
+        "rejection must say why, got: {msg}"
+    );
+}
+
+#[test]
+fn live_rejects_sidecar_with_null_output_weights() {
+    // `"output_weights": null` must not deserialize as "field omitted";
+    // fail-closed treats any present key as unrestorable readout state.
+    let dir = unique_dir();
+    let json = r#"{
+            "source": "spikenaut_julia",
+            "encoder": "v3_state_telemetry",
+            "q88": "signed",
+            "neurons": [
+                {
+                    "decay_rate": 0.85,
+                    "membrane_potential": 0.1,
+                    "threshold": 1.0,
+                    "last_spike": false,
+                    "weights": [0.5, -0.25],
+                    "output_weights": null
+                }
+            ]
+        }"#;
+    let path = write_json(&dir, "snn_model.json", json);
+    let cfg = live_config(path, 1, 2);
+    let err = restore_failed(&cfg);
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("output_weights"),
+        "null output_weights must still be rejected, got: {msg}"
+    );
+}
+
+#[test]
+fn live_loads_legacy_sidecar_omitting_output_weights() {
+    // Older checkpoints predate the `output_weights` field entirely; the
+    // serde default must keep loading them after fail-closed was added.
+    let dir = unique_dir();
+    let path = write_json(&dir, "snn_model.json", &valid_sidecar_json());
+    let cfg = live_config(path, 2, 2);
+    let (network, _) =
+        restore_network(&cfg).expect("legacy checkpoint without output_weights loads");
+    assert_eq!(network.neurons.len(), 2);
     assert!((network.neurons[0].weights[0] - 0.5).abs() < 1e-6);
+    assert!((network.neurons[1].weights[1] - 0.75).abs() < 1e-6);
 }
 
 #[test]

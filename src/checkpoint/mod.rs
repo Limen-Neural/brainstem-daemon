@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use neuromod::{RmStdpConfig, SpikingNetwork};
 use serde::Deserialize;
+use serde::de::IgnoredAny;
 use sha2::{Digest, Sha256};
 
 use crate::daemon::{DaemonConfig, RuntimeMode};
@@ -198,11 +199,33 @@ struct SidecarNeuron {
     threshold: f64,
     last_spike: bool,
     weights: Vec<f64>,
-    /// Sidecar readout row. neuromod 0.6.0 has no Distill readout matrix;
-    /// values are validated as finite and then ignored (fail-closed rejection
-    /// of this field is stacked on PR #57).
-    #[serde(default)]
-    output_weights: Option<Vec<f64>>,
+    /// Sidecar readout row. neuromod 0.6.0 has no Distill readout matrix, so a
+    /// sidecar carrying `output_weights` (including explicit `null`) is
+    /// rejected at load time (fail closed) rather than silently dropping
+    /// trained readout weights. Legacy sidecars that omit the key still load.
+    #[serde(default, deserialize_with = "deserialize_output_weights_field")]
+    output_weights: OutputWeightsField,
+}
+
+/// Presence of the sidecar `output_weights` key.
+///
+/// `Option<Vec<f64>>` would treat `"output_weights": null` as `None`, which
+/// would accept a sidecar that still names the unsupported field. Missing
+/// (legacy Distill JSON) is `Absent`; any present value is `Present`.
+#[derive(Debug, Default)]
+enum OutputWeightsField {
+    #[default]
+    Absent,
+    Present,
+}
+
+fn deserialize_output_weights_field<'de, D>(deserializer: D) -> Result<OutputWeightsField, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Invoked only when the JSON key is present, including explicit null.
+    let _ = Option::<IgnoredAny>::deserialize(deserializer)?;
+    Ok(OutputWeightsField::Present)
 }
 
 #[derive(Debug, Deserialize)]
@@ -239,6 +262,7 @@ fn validate_live_document(
     sidecar_path: &Path,
 ) -> Result<()> {
     validate_schema(document)?;
+    reject_output_weights(document)?;
     if let Some(hub_path) = find_hub_config(sidecar_path) {
         validate_hub_config(&hub_path, document)?;
     }
@@ -262,6 +286,25 @@ fn validate_schema(document: &SidecarDocument) -> Result<()> {
         && encoder.is_empty()
     {
         bail!("invalid Spikenaut sidecar: `encoder` is empty");
+    }
+    Ok(())
+}
+
+/// Fail closed on sidecars that carry `output_weights`.
+///
+/// neuromod 0.6.0 has no Distill readout matrix, so these values could never
+/// be restored; accepting them would silently drop trained readout weights
+/// while live mode reports a successful load. Reject loudly instead,
+/// including `"output_weights": null` (the key is present even if empty).
+fn reject_output_weights(document: &SidecarDocument) -> Result<()> {
+    for (index, neuron) in document.neurons.iter().enumerate() {
+        if matches!(neuron.output_weights, OutputWeightsField::Present) {
+            bail!(
+                "invalid Spikenaut sidecar: neuron {index} carries `output_weights`, which this \
+                 daemon cannot restore (neuromod 0.6.0 has no readout matrix); refusing to load \
+                 rather than silently dropping trained readout weights"
+            );
+        }
     }
     Ok(())
 }
@@ -374,11 +417,8 @@ fn validate_finite_parameters(document: &SidecarDocument) -> Result<()> {
         for (column, &weight) in neuron.weights.iter().enumerate() {
             require_finite(weight, &format!("neuron {index} weight {column}"))?;
         }
-        if let Some(outputs) = neuron.output_weights.as_ref() {
-            for (column, &weight) in outputs.iter().enumerate() {
-                require_finite(weight, &format!("neuron {index} output_weight {column}"))?;
-            }
-        }
+        // Note: `output_weights` are rejected outright by `reject_output_weights`
+        // before this runs, so no finite-check for them is needed here.
     }
     Ok(())
 }

@@ -182,12 +182,14 @@ ONLY THEN start live ticks
 
 | `runtime_mode` | Network at tick start | `model_path` |
 |---|---|---|
-| `live` (default) | Distill sidecar `snn_model.json` restored into `neuromod::SpikingNetwork`. Startup **fails closed** on a missing, corrupt, dimension-mismatched, non-finite, or blank artifact. FPGA Q8.8 `.mem` dumps are rejected. | Required: a sidecar JSON file, a Hugging Face `config.json`, or a directory containing `snn_model.json` / `dataset/merged_v2/snn_model.json` |
+| `live` (default) | Distill sidecar `snn_model.json` restored into `neuromod::SpikingNetwork`. Startup **fails closed** on a missing, corrupt, dimension-mismatched, non-finite, or blank artifact, and on any sidecar that carries `output_weights` (including explicit `null`). FPGA Q8.8 `.mem` dumps are rejected. | Required: a sidecar JSON file, a Hugging Face `config.json`, or a directory containing `snn_model.json` / `dataset/merged_v2/snn_model.json` |
 | `simulation` | Blank `SpikingNetwork::with_dimensions(lif_count, izh_count, channels)` (zero input weights). Logs that this is **not** a loaded Spikenaut checkpoint. | Parsed but unused for restoration |
 
 Live mode never falls back to `with_dimensions()` after a failed load. A successful live start logs `schema_id`, `model_id`, source path, SHA-256, encoder, source, and lineage.
 
 The allowed software artifact is the Distill sidecar JSON published as Hugging Face [`rmems/Spikenaut-SNN`](https://huggingface.co/rmems/Spikenaut-SNN) (`dataset/merged_v2/snn_model.json`, plus optional hub `config.json`). That is the same document `Spikenaut-SNN` loads; this crate adapts it into crates.io `neuromod` **0.6.0** rather than inventing a new format or forking `stdp_config` / `eligibility`. The merged_v2 bank is 16 LIF × 16 input channels and has no Izhikevich cells, so live config must use `izh_count = 0`.
+
+`neuromod` 0.6.0 has no Distill readout matrix, so live restore **rejects** any present `output_weights` key rather than silently dropping trained readout weights. Legacy sidecars that omit the field still load. The currently published Hugging Face `dataset/merged_v2/snn_model.json` includes `output_weights` and will fail closed until Distill publishes a sidecar that omits that field.
 
 Live restore copies LIF weights, membrane, `last_spike`, `decay_rate`, and `threshold` (also seeding `base_threshold`) and sets `RmStdpConfig.reward_lr = 0` so dopamine-gated R-STDP cannot retrain the Distill matrix. `neuromod` 0.6.0 `SpikingNetwork::step` still assigns `decay_rate` from acetylcholine, blends `threshold` toward `0.05..=0.50`, and L1-renormalizes rows whose weights already sum above `1e-6`. Those are engine contracts; this crate does not fork `step`.
 
