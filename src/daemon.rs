@@ -19,6 +19,7 @@ use crate::backend::{
     StimulusSource,
 };
 use crate::checkpoint::{self, ModelProvenance};
+use crate::ingress::{BoundedIngress, IngressConfig};
 use crate::registry::{ServiceConfig, ServiceRegistry};
 
 /// Env var read by crates.io `corpus-ipc` 0.1 `ZmqIpcBackend::initialize`.
@@ -57,6 +58,12 @@ pub struct DaemonConfig {
     pub runtime_mode: RuntimeMode,
     #[serde(default)]
     pub services: Vec<ServiceConfig>,
+    /// Bounded per-class ingress. Omitted TOML keys (and an omitted `[ingress]`
+    /// section) keep [`IngressConfig::default`]. Rust struct literals still
+    /// need this field; use `IngressConfig::default()` or `..` with a complete
+    /// value. Serde defaults do not apply to struct literals.
+    #[serde(default)]
+    pub ingress: IngressConfig,
 }
 
 impl DaemonConfig {
@@ -90,6 +97,7 @@ pub struct BrainstemDaemon {
     config: DaemonConfig,
     registry: ServiceRegistry,
     backend: BackendPair,
+    ingress: BoundedIngress,
 }
 
 impl BrainstemDaemon {
@@ -134,12 +142,15 @@ impl BrainstemDaemon {
     pub fn try_with_backend(mut config: DaemonConfig, backend: BackendPair) -> Result<Self> {
         validate_neuron_count(&config)?;
 
+        config.ingress.validate()?;
+        let ingress = BoundedIngress::new(config.ingress.clone())?;
         let services = std::mem::take(&mut config.services);
         let registry = ServiceRegistry::from_configs(services);
         Ok(Self {
             config,
             registry,
             backend,
+            ingress,
         })
     }
 
@@ -154,6 +165,11 @@ impl BrainstemDaemon {
     /// replaced with a blank `with_dimensions()` network.
     pub fn restore_network(&self) -> Result<(SpikingNetwork, ModelProvenance)> {
         checkpoint::restore_network(&self.config)
+    }
+
+    /// Cloneable producer handle for in-process classified ingress.
+    pub fn ingress(&self) -> BoundedIngress {
+        self.ingress.clone()
     }
 
     /// Run the daemon until a termination signal is received.
@@ -182,8 +198,10 @@ impl BrainstemDaemon {
     async fn run_loop(self, restored: Option<(SpikingNetwork, ModelProvenance)>) -> Result<()> {
         let cfg = self.config;
         let mut backend = self.backend;
+        let ingress = self.ingress;
 
         if cfg.tick_rate_hz == 0 || cfg.tick_rate_hz > 1_000_000 {
+            ingress.shutdown();
             shutdown_backend(&mut backend);
             anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
         }
@@ -192,6 +210,7 @@ impl BrainstemDaemon {
         let (mut network, provenance) = match restored {
             Ok(pair) => pair,
             Err(err) => {
+                ingress.shutdown();
                 shutdown_backend(&mut backend);
                 return Err(err);
             }
@@ -217,10 +236,12 @@ impl BrainstemDaemon {
                         &mut *backend.sink,
                         &mut stimuli,
                         &mut spike_buf,
+                        &ingress,
                     );
                 }
                 _ = &mut shutdown => {
                     info!("Termination signal received, shutting down");
+                    ingress.shutdown();
                     break;
                 }
             }
@@ -405,23 +426,27 @@ fn run_tick(
     sink: &mut dyn SpikeSink,
     stimuli: &mut [f32],
     spike_buf: &mut Vec<LocalSpikeEvent>,
+    ingress: &BoundedIngress,
 ) {
-    let packet = match source.next_ingress() {
-        Ok(Some(p)) => p,
-        Ok(None) => {
-            // Per StimulusSource contract: None means skip ingress this tick but still
-            // advance the network with zeroed stimuli (maintains tick cadence).
-            // decode_inputs will zero-fill the stimuli buffer based on the empty readout.
-            IngressPacket {
-                stimuli: Vec::new(),
-                modulators: None,
-            }
-        }
+    let backend_packet = match source.next_ingress() {
+        Ok(Some(p)) => Some(p),
+        Ok(None) => None,
         Err(e) => {
             warn!("Failed to receive from stimulus source: {e}");
-            return;
+            None
         }
     };
+
+    // Admit through bounded class queues so a bursty backend cannot grow
+    // unbounded in-process, then drain control-first for this tick.
+    // `None` (skip or error) does not enqueue a placeholder that could evict
+    // in-process sensory. decode_inputs zero-fills when drain yields no stimuli.
+    if let Some(packet) = backend_packet {
+        ingress.admit_backend_packet(packet);
+    }
+    let drained = ingress.drain_for_tick();
+    observe_control_envelopes(&drained.control);
+    let packet = drained.into_packet();
 
     let modulators = decode_inputs(&packet, stimuli);
 
@@ -482,6 +507,22 @@ fn run_tick(
     }
 }
 
+/// Observe drained in-band control/safety envelopes.
+///
+/// LIM-1216 bounds and prioritizes this class so it cannot starve behind bulk
+/// telemetry. There is no network control actuator in this crate; OS
+/// `SIGINT`/`SIGTERM` remain the live shutdown path. Callers that inject
+/// control packets can inspect `DrainedTick.control` via `drain_for_tick`.
+fn observe_control_envelopes(packets: &[IngressPacket]) {
+    if packets.is_empty() {
+        return;
+    }
+    info!(
+        count = packets.len(),
+        "observed in-band control envelopes (no network actuator; OS signals remain shutdown)"
+    );
+}
+
 /// decode_inputs now takes an IngressPacket.
 /// When packet.modulators is None (the common stub path in PR A), we return defaults.
 /// This mirrors the previous "short readout" fallback behavior.
@@ -520,7 +561,8 @@ pub(crate) fn run_tick_for_test(
     stimuli: &mut [f32],
     spike_buf: &mut Vec<LocalSpikeEvent>,
 ) {
-    run_tick(source, network, sink, stimuli, spike_buf);
+    let ingress = BoundedIngress::new(IngressConfig::default()).expect("default ingress");
+    run_tick(source, network, sink, stimuli, spike_buf, &ingress);
 }
 
 #[cfg(test)]
@@ -544,7 +586,29 @@ mod tests {
                 ServiceConfig::named("telemetry"),
                 ServiceConfig::named("critic-ipc"),
             ],
+            ingress: IngressConfig::default(),
         }
+    }
+
+    fn tagged_packet(tag: f32) -> IngressPacket {
+        IngressPacket {
+            stimuli: vec![tag],
+            modulators: None,
+        }
+    }
+
+    fn write_config_toml(stem: &str, body: &str) -> PathBuf {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("daemon-test-toml");
+        std::fs::create_dir_all(&dir).expect("create test-toml dir");
+        let path = dir.join(format!(
+            "{stem}-{}-{:?}.toml",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, body).expect("write test toml");
+        path
     }
 
     #[test]
@@ -710,9 +774,72 @@ channels = 16
         cfg.izh_count = 0;
         cfg.model_path = PathBuf::from("/no/such/snn_model.json");
         let daemon = BrainstemDaemon::try_new(cfg).unwrap();
+        let ingress = daemon.ingress();
         let result = tokio::time::timeout(Duration::from_millis(500), daemon.run()).await;
         let inner = result.expect("run must return immediately rather than tick");
         assert!(inner.is_err());
+        assert!(
+            ingress.is_shutdown(),
+            "startup failure must close ingress so blocked producers do not wait out block_timeout_ms"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_shuts_down_ingress_when_tick_rate_invalid() {
+        let mut cfg = sample_config();
+        cfg.tick_rate_hz = 0;
+        let daemon = BrainstemDaemon::try_new(cfg).unwrap();
+        let ingress = daemon.ingress();
+        let result = tokio::time::timeout(Duration::from_millis(500), daemon.run()).await;
+        let inner = result.expect("run must return immediately rather than tick");
+        assert!(inner.is_err());
+        assert!(ingress.is_shutdown());
+    }
+
+    #[tokio::test]
+    async fn run_unblocks_waiting_producer_when_startup_fails() {
+        use crate::ingress::{EnqueueOutcome, MessageClass, OverflowPolicy};
+        use std::sync::mpsc;
+        use std::thread;
+
+        let mut cfg = sample_config();
+        cfg.runtime_mode = RuntimeMode::Live;
+        cfg.izh_count = 0;
+        cfg.model_path = PathBuf::from("/no/such/snn_model.json");
+        cfg.ingress.control_policy = OverflowPolicy::BlockTimeout;
+        cfg.ingress.control_capacity = 1;
+        cfg.ingress.block_timeout_ms = 60_000;
+        let daemon = BrainstemDaemon::try_new(cfg).unwrap();
+        let ingress = daemon.ingress();
+        assert!(
+            ingress
+                .enqueue(MessageClass::Control, tagged_packet(1.0))
+                .accepted()
+        );
+
+        let producer = ingress.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = tx.send(producer.enqueue(MessageClass::Control, tagged_packet(2.0)));
+        });
+
+        let started = std::time::Instant::now();
+        while ingress.metrics().control.producer_waits == 0 {
+            if started.elapsed() > Duration::from_secs(2) {
+                panic!("producer never entered block_timeout wait");
+            }
+            thread::yield_now();
+        }
+
+        let inner = tokio::time::timeout(Duration::from_millis(500), daemon.run())
+            .await
+            .expect("run must return immediately rather than tick");
+        assert!(inner.is_err());
+        let outcome = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("producer hung after failed startup");
+        assert_eq!(outcome, EnqueueOutcome::Shutdown);
+        assert!(ingress.is_shutdown());
     }
 
     #[test]
@@ -940,6 +1067,179 @@ channels = 16
             serde_json::from_value(json).expect("deserialize pre-0.6 JSON");
         assert_eq!(restored.stdp_config, neuromod::RmStdpConfig::default());
         assert!(restored.neurons.iter().all(|n| n.eligibility.is_empty()));
+    }
+
+    #[test]
+    fn daemon_rejects_zero_ingress_capacity() {
+        let mut cfg = sample_config();
+        cfg.ingress.sensory_capacity = 0;
+        let err = match BrainstemDaemon::try_with_backend(cfg, BackendPair::stub()) {
+            Ok(_) => panic!("expected zero ingress capacity to fail"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("sensory") && message.contains("capacity"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn config_defaults_ingress_when_section_omitted() {
+        let path = write_config_toml(
+            "ingress-omit",
+            r#"
+tick_rate_hz = 1000
+log_level = "info"
+spine_sub_port = 5555
+spine_pub_port = 5556
+model_path = "/tmp/model.mem"
+lif_count = 16
+izh_count = 5
+channels = 16
+"#,
+        );
+        let cfg = DaemonConfig::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(cfg.ingress, IngressConfig::default());
+    }
+
+    #[test]
+    fn config_parses_ingress_section() {
+        let path = write_config_toml(
+            "ingress-set",
+            r#"
+tick_rate_hz = 1000
+log_level = "info"
+spine_sub_port = 5555
+spine_pub_port = 5556
+model_path = "/tmp/model.mem"
+lif_count = 16
+izh_count = 5
+channels = 16
+
+[ingress]
+sensory_capacity = 2
+sensory_policy = "drop_oldest"
+reward_policy = "coalesce"
+control_policy = "block_timeout"
+telemetry_policy = "reject"
+block_timeout_ms = 0
+"#,
+        );
+        let cfg = DaemonConfig::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(cfg.ingress.sensory_capacity, 2);
+        assert_eq!(
+            cfg.ingress.sensory_policy,
+            crate::ingress::OverflowPolicy::DropOldest
+        );
+        assert_eq!(
+            cfg.ingress.reward_policy,
+            crate::ingress::OverflowPolicy::Coalesce
+        );
+        assert_eq!(
+            cfg.ingress.control_policy,
+            crate::ingress::OverflowPolicy::BlockTimeout
+        );
+        assert_eq!(
+            cfg.ingress.telemetry_policy,
+            crate::ingress::OverflowPolicy::Reject
+        );
+        assert_eq!(cfg.ingress.block_timeout_ms, 0);
+    }
+
+    #[test]
+    fn run_tick_drains_control_and_backend_sensory() {
+        use crate::backend::CollectingSpikeSink;
+        use crate::ingress::MessageClass;
+
+        let ingress = BoundedIngress::new(IngressConfig::tiny_fixture()).unwrap();
+        let _ = ingress.enqueue(
+            MessageClass::Control,
+            IngressPacket {
+                stimuli: vec![9.0],
+                modulators: None,
+            },
+        );
+
+        struct PacketSource;
+        impl StimulusSource for PacketSource {
+            fn next_ingress(&mut self) -> anyhow::Result<Option<IngressPacket>> {
+                Ok(Some(IngressPacket {
+                    stimuli: vec![0.1, 0.2],
+                    modulators: Some(vec![0.5, 0.0, 0.0, 0.0]),
+                }))
+            }
+
+            fn initialize(&mut self, _model_path: Option<&str>) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut source = PacketSource;
+        let mut sink = CollectingSpikeSink::new();
+        let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
+        let mut stimuli = vec![0.0; 2];
+        let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+        super::run_tick(
+            &mut source,
+            &mut network,
+            &mut sink,
+            &mut stimuli,
+            &mut spike_buf,
+            &ingress,
+        );
+
+        assert_eq!(stimuli, vec![0.1, 0.2]);
+        assert_eq!(ingress.metrics().control.depth, 0);
+        assert_eq!(ingress.metrics().sensory.depth, 0);
+        assert_eq!(ingress.metrics().reward.depth, 0);
+        assert_eq!(sink.emitted.len(), 1);
+    }
+
+    #[test]
+    fn run_tick_skips_backend_none_without_evicting_sensory() {
+        use crate::backend::CollectingSpikeSink;
+        use crate::ingress::MessageClass;
+
+        let ingress = BoundedIngress::new(IngressConfig::tiny_fixture()).unwrap();
+        let _ = ingress.enqueue(
+            MessageClass::Sensory,
+            IngressPacket {
+                stimuli: vec![0.3, 0.4],
+                modulators: None,
+            },
+        );
+
+        struct NoneSource;
+        impl StimulusSource for NoneSource {
+            fn next_ingress(&mut self) -> anyhow::Result<Option<IngressPacket>> {
+                Ok(None)
+            }
+
+            fn initialize(&mut self, _model_path: Option<&str>) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut source = NoneSource;
+        let mut sink = CollectingSpikeSink::new();
+        let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
+        let mut stimuli = vec![0.0; 2];
+        let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+        super::run_tick(
+            &mut source,
+            &mut network,
+            &mut sink,
+            &mut stimuli,
+            &mut spike_buf,
+            &ingress,
+        );
+
+        assert_eq!(stimuli, vec![0.3, 0.4]);
+        assert_eq!(ingress.metrics().sensory.depth, 0);
+        assert_eq!(sink.emitted.len(), 1);
     }
 
     // Sends a real SIGTERM to this test process, so it's `#[ignore]`d by default:

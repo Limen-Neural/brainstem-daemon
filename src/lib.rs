@@ -6,6 +6,7 @@
 pub mod backend;
 pub mod checkpoint;
 pub mod daemon;
+pub mod ingress;
 pub mod registry;
 
 // Re-export the new pluggable I/O surface (pub from day one).
@@ -14,3 +15,7 @@ pub use backend::{
 };
 pub use checkpoint::{ModelProvenance, restore_network};
 pub use daemon::RuntimeMode;
+pub use ingress::{
+    BoundedIngress, ClassMetrics, DrainedTick, EnqueueOutcome, IngressConfig, IngressMetrics,
+    MAX_BLOCK_TIMEOUT_MS, MAX_PAYLOAD_LEN, MAX_QUEUE_CAPACITY, MessageClass, OverflowPolicy,
+};
