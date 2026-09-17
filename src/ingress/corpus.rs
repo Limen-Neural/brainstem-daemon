@@ -130,6 +130,43 @@ pub fn accept_ipc_message(
     }
 }
 
+fn require_stimulus_schema(batch: &StimulusBatch) -> Result<(), IngressError> {
+    match batch.metadata.as_ref() {
+        Some(meta) => match meta.custom.get("schema") {
+            Some(schema) if schema == STIMULUS_SCHEMA => Ok(()),
+            Some(schema) => Err(IngressError::Schema(format!(
+                "unsupported schema '{schema}', expected {STIMULUS_SCHEMA}"
+            ))),
+            None => Err(IngressError::Schema(
+                "missing metadata.custom.schema".into(),
+            )),
+        },
+        None => Err(IngressError::Schema("missing batch metadata".into())),
+    }
+}
+
+fn reject_stale_or_future(
+    timestamp: u64,
+    now_ns: u64,
+    max_age: Option<Duration>,
+) -> Result<(), IngressError> {
+    let Some(max_age) = max_age else {
+        return Ok(());
+    };
+    if timestamp > now_ns {
+        return Err(IngressError::Future {
+            timestamp_ns: timestamp,
+            now_ns,
+        });
+    }
+    let max_age_ns = max_age.as_nanos() as u64;
+    let age_ns = now_ns - timestamp;
+    if age_ns > max_age_ns {
+        return Err(IngressError::Stale { age_ns, max_age_ns });
+    }
+    Ok(())
+}
+
 fn accept_stimulus_batch(
     batch: StimulusBatch,
     policy: &IngressPolicy,
@@ -138,47 +175,14 @@ fn accept_stimulus_batch(
     batch
         .validate()
         .map_err(|err| IngressError::Stimulus(err.to_string()))?;
-
-    match batch.metadata.as_ref() {
-        Some(meta) => match meta.custom.get("schema") {
-            Some(schema) if schema == STIMULUS_SCHEMA => {}
-            Some(schema) => {
-                return Err(IngressError::Schema(format!(
-                    "unsupported schema '{schema}', expected {STIMULUS_SCHEMA}"
-                )));
-            }
-            None => {
-                return Err(IngressError::Schema(
-                    "missing metadata.custom.schema".into(),
-                ));
-            }
-        },
-        None => {
-            return Err(IngressError::Schema("missing batch metadata".into()));
-        }
-    }
-
+    require_stimulus_schema(&batch)?;
     if policy.expected_channels != 0 && batch.values.len() != policy.expected_channels {
         return Err(IngressError::Width {
             expected: policy.expected_channels,
             got: batch.values.len(),
         });
     }
-
-    if let Some(max_age) = policy.max_age {
-        if batch.timestamp > now_ns {
-            return Err(IngressError::Future {
-                timestamp_ns: batch.timestamp,
-                now_ns,
-            });
-        }
-        let max_age_ns = max_age.as_nanos() as u64;
-        let age_ns = now_ns - batch.timestamp;
-        if age_ns > max_age_ns {
-            return Err(IngressError::Stale { age_ns, max_age_ns });
-        }
-    }
-
+    reject_stale_or_future(batch.timestamp, now_ns, policy.max_age)?;
     // Do not zero masked slots here. `valid_mask` is preserved so downstream
     // consumers can tell a producer 0.0 from a masked placeholder; the tick
     // loop applies the mask once in `decode_inputs`.

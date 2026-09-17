@@ -27,8 +27,12 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(prefix: &str) -> Self {
-        let dir =
-            std::env::temp_dir().join(format!("{prefix}-{}-{}", std::process::id(), now_ns()));
+        // Cargo sets CARGO_TARGET_TMPDIR for tests; fall back to this crate's
+        // target/ so fixtures never use the shared system temp directory.
+        let root = std::env::var_os("CARGO_TARGET_TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+        let dir = root.join(format!("{prefix}-{}-{}", std::process::id(), now_ns()));
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
     }
