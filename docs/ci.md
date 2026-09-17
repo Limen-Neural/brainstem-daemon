@@ -6,7 +6,7 @@ system `libzmq` is available.
 
 All jobs install **Rust 1.98.1** — the same string as `Cargo.toml`
 `rust-version` and `rust-toolchain.toml` `channel` (see REVIEW.md
-"MSRV pin rule").
+"MSRV (minimum supported Rust version) pin rule").
 
 ## Matrix
 

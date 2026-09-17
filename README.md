@@ -21,7 +21,7 @@ Headless spiking neural-network runtime written in Rust.
 ## Building
 
 Requires **Rust 1.98.1 only**. Keep every pin in [REVIEW.md](REVIEW.md)
-"MSRV pin rule" on that version — `rust-toolchain.toml` `channel`,
+"MSRV (minimum supported Rust version) pin rule" on that version — `rust-toolchain.toml` `channel`,
 `Cargo.toml` `rust-version`, `.github/workflows/ci.yml` `toolchain:`,
 `Dockerfile` `FROM rust:`, `.devin/blueprint.yaml` rustup, and the other
 version-bearing docs listed there (`README.md`, `AGENTS.md`, `docs/ci.md`,

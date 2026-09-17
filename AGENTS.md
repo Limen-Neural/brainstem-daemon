@@ -45,7 +45,7 @@ If a `--all-features` build fails because the C++ compiler cannot find a standar
 
 ## Cursor Cloud setup
 
-This repository is preconfigured on the Cursor Cloud virtual machine. The Rust toolchain is pinned to **1.98.1 only** via `rust-toolchain.toml` (keep `Cargo.toml` `rust-version` and CI `toolchain:` in lockstep; see REVIEW.md "MSRV pin rule"). At startup the environment runs `cargo fetch`.
+This repository is preconfigured on the Cursor Cloud virtual machine. The Rust toolchain is pinned to **1.98.1 only** via `rust-toolchain.toml` (keep `Cargo.toml` `rust-version` and CI `toolchain:` in lockstep; see REVIEW.md "MSRV (minimum supported Rust version) pin rule"). At startup the environment runs `cargo fetch`.
 
 ### Backend features
 

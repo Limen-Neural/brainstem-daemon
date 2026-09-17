@@ -8,7 +8,7 @@ This file is the local checklist. GitHub Actions runs the stub commands on
 Linux, macOS, and Windows, and the optional `corpus-ipc` job on Linux
 only. See [`docs/ci.md`](docs/ci.md).
 
-## MSRV pin rule
+## MSRV (minimum supported Rust version) pin rule
 
 `Cargo.toml` `rust-version`, `rust-toolchain.toml` `channel`, and every
 `toolchain:` string in `.github/workflows/ci.yml` must stay **identical**
