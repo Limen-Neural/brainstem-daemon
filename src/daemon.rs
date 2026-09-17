@@ -320,42 +320,16 @@ impl BrainstemDaemon {
                 }
             };
         stats.loaded_checkpoint = Some(provenance);
-
-        let mut stimuli = vec![0.0; cfg.channels];
-        let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
-
-        for _ in 0..ticks {
-            run_tick(
-                &mut *backend.source,
-                &mut network,
-                &mut *backend.sink,
-                &mut stimuli,
-                &mut spike_buf,
-                &ingress,
-                &mut TickReport {
-                    health: &health,
-                    stats: &mut stats,
-                },
-            );
-        }
-
-        let flush_err = backend
-            .sink
-            .flush()
-            .context("failed to flush spike sink")
-            .err();
-        let shutdown_err = backend
-            .source
-            .shutdown()
-            .context("failed to shut down stimulus source")
-            .err();
-        ingress.shutdown();
-        if let Some(err) = flush_err {
-            return Err(err);
-        }
-        if let Some(err) = shutdown_err {
-            return Err(err);
-        }
+        drive_ticks(
+            ticks,
+            &mut backend,
+            &mut network,
+            &ingress,
+            &health,
+            &mut stats,
+            cfg.channels,
+        );
+        finish_bounded_run(&mut backend, &ingress)?;
         Ok(stats)
     }
 }
@@ -370,6 +344,51 @@ fn shutdown_backend(backend: &mut BackendPair) {
     if let Err(e) = backend.source.shutdown() {
         warn!("Failed to shut down stimulus source: {e}");
     }
+}
+
+fn drive_ticks(
+    ticks: u64,
+    backend: &mut BackendPair,
+    network: &mut SpikingNetwork,
+    ingress: &BoundedIngress,
+    health: &HealthHandle,
+    stats: &mut RuntimeStats,
+    channels: usize,
+) {
+    let mut stimuli = vec![0.0; channels];
+    let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
+    for _ in 0..ticks {
+        run_tick(
+            &mut *backend.source,
+            network,
+            &mut *backend.sink,
+            &mut stimuli,
+            &mut spike_buf,
+            ingress,
+            &mut TickReport { health, stats },
+        );
+    }
+}
+
+fn finish_bounded_run(backend: &mut BackendPair, ingress: &BoundedIngress) -> Result<()> {
+    let flush_err = backend
+        .sink
+        .flush()
+        .context("failed to flush spike sink")
+        .err();
+    let shutdown_err = backend
+        .source
+        .shutdown()
+        .context("failed to shut down stimulus source")
+        .err();
+    ingress.shutdown();
+    if let Some(err) = flush_err {
+        return Err(err);
+    }
+    if let Some(err) = shutdown_err {
+        return Err(err);
+    }
+    Ok(())
 }
 
 /// Wait for a termination request: `SIGINT` (Ctrl-C) on every platform, plus
