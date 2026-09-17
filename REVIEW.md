@@ -46,13 +46,15 @@ cargo test --locked
 # Debian/Ubuntu
 sudo apt-get install -y libzmq3-dev
 
-cargo clippy --locked --all-targets --features corpus-ipc -- -D warnings
-cargo test --locked --features corpus-ipc
+# Published corpus-ipc 0.1 declares MSRV 1.98.1; pass --ignore-rust-version
+# when staying on this crate's 1.97.1 pin.
+cargo clippy --locked --all-targets --features corpus-ipc --ignore-rust-version -- -D warnings
+cargo test --locked --features corpus-ipc --ignore-rust-version
 
 # CI today uses --all-features (equivalent while corpus-ipc is the only feature)
-cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo build --locked --all-features
-cargo test --locked --all-features
+cargo clippy --locked --all-targets --all-features --ignore-rust-version -- -D warnings
+cargo build --locked --all-features --ignore-rust-version
+cargo test --locked --all-features --ignore-rust-version
 ```
 
 If a `--all-features` build fails because the C++ compiler cannot find a

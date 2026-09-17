@@ -10,7 +10,7 @@ system `libzmq` is available.
 |---|---|---|---|
 | `rustfmt` | `ubuntu-latest` | n/a | `cargo fmt --check` |
 | `stub` | `ubuntu-latest`, `macos-latest`, `windows-latest` | default (empty) | `cargo clippy --locked --all-targets -- -D warnings`, `cargo build --locked`, `cargo test --locked` |
-| `corpus-ipc` | `ubuntu-latest` | `--all-features` (the `corpus-ipc` feature, which enables the optional `zmq` dependency) | clippy, build, test |
+| `corpus-ipc` | `ubuntu-latest` | `--all-features --ignore-rust-version` (the `corpus-ipc` feature; published `corpus-ipc` 0.1 declares MSRV 1.98.1) | clippy, build, test |
 
 Default features are empty. Stub jobs do **not** install `libzmq` and do
 not pass `--features corpus-ipc`.

@@ -105,20 +105,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-corpus-ipc-
 
+      # Published corpus-ipc 0.1 declares MSRV 1.98.1; this job stays on the
+      # crate pin (1.97.1) and ignores the optional dep's rust-version.
       - name: Run clippy (all-features)
         env:
           CC: gcc
           CXX: g++
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features --ignore-rust-version -- -D warnings
 
       - name: Build (all-features)
         env:
           CC: gcc
           CXX: g++
-        run: cargo build --locked --all-features
+        run: cargo build --locked --all-features --ignore-rust-version
 
       - name: Test (all-features)
         env:
           CC: gcc
           CXX: g++
-        run: cargo test --locked --all-features
+        run: cargo test --locked --all-features --ignore-rust-version
