@@ -589,7 +589,9 @@ mod tests {
     }
 
     fn write_config_toml(stem: &str, body: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join("brainstem-daemon-test-toml");
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("daemon-test-toml");
         std::fs::create_dir_all(&dir).expect("create test-toml dir");
         let path = dir.join(format!(
             "{stem}-{}-{:?}.toml",
