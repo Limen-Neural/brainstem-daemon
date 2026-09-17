@@ -136,6 +136,7 @@ fn smoke_config(model_path: PathBuf) -> DaemonConfig {
         runtime_mode: RuntimeMode::Live,
         services: Vec::new(),
         ingress: IngressConfig::default(),
+        control_bind: None,
     }
 }
 

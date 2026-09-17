@@ -18,6 +18,7 @@ Headless spiking neural-network runtime written in Rust.
 - Live-mode restore of Distill sidecar `snn_model.json` before the tick loop (explicit `simulation` mode for blank networks)
 - Optional **ZeroMQ PUB/SUB** networking via `corpus-ipc`
 - Headless **`brainstem-daemon`** binary for background execution
+- Distinct **liveness / readiness / degraded / fatal** health snapshots (library handle plus optional `control_bind` listener)
 
 ---
 
@@ -99,6 +100,10 @@ runtime_mode   = "live"    # default when omitted; "simulation" is the only blan
 tick_rate_hz   = 1000      # loop frequency
 log_level      = "info"    # error|warn|info|debug|trace
 
+# Optional process control surface (unset = no extra socket; historical default).
+# Serves /livez, /readyz, /health, /metrics. See docs/health.md.
+# control_bind   = "127.0.0.1:9464"
+
 # ZMQ (still required in TOML; no-ops under the default stub backend)
 spine_sub_port = 5555      # stimuli in
 spine_pub_port = 5556      # spikes out
@@ -132,19 +137,21 @@ max_payload_len     = 4096
 
 Default Cargo features are empty (`default = []` in `Cargo.toml`). That path uses the in-memory **stub** backend (`StubStimulusSource` + `NoopSpikeSink`) and does **not** need ZeroMQ. The optional `corpus-ipc` feature (same as `--all-features` today) pulls `corpus-ipc` **from crates.io** (`0.1`, `features = ["zmq"]`) plus this crate's optional `zmq` dependency. Published `corpus-ipc` compiles libzmq via `zmq-sys` / `zeromq-src` (a C++ compiler is required; a system `libzmq` package is not). It does not vendor ZeroMQ as a git submodule.
 
-`DaemonConfig` deserialization is **not** feature-gated: `spine_sub_port`, `spine_pub_port`, and `model_path` are still required in TOML even on the stub path (`services` and `runtime_mode` are optional; `runtime_mode` defaults to `live`; `ingress` defaults to the bounded-queue table below). Effect at runtime depends on which backend is **wired** and on `runtime_mode`.
+`DaemonConfig` deserialization is **not** feature-gated: `spine_sub_port`, `spine_pub_port`, and `model_path` are still required in TOML even on the stub path (`services`, `runtime_mode`, `ingress`, and `control_bind` are optional; `runtime_mode` defaults to `live`; `ingress` defaults to the bounded-queue table below; `control_bind` unset = no extra socket). Effect at runtime depends on which backend is **wired** and on `runtime_mode`.
 
 #### Feature truth table
 
 | Cargo flags | Wired backend | `libzmq` | Binary (`brainstem-daemon`) | Library `BrainstemDaemon::new()` / `try_new()` |
 |---|---|---|---|---|
-| default / `--no-default-features` | stub | not required | no sockets; logs `🔌 Using stub backend` | stub |
+| default / `--no-default-features` | stub | not required | no backend sockets by default; `control_bind` opens the control listener; logs `🔌 Using stub backend` | stub |
 | `--features corpus-ipc` | ZMQ / `corpus-ipc` | required | SUB via env, PUB on `spine_pub_port`; logs `📡 Using ZMQ corpus-ipc backend` | **still stub** |
 | `--all-features` | same as `corpus-ipc` | required | same as `--features corpus-ipc` | **still stub** |
 
 Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`. Those always inject `BackendPair::stub()`. Only `src/bin/brainstem_daemon.rs` constructs `ZmqStimulusSource` + `ZmqSpikeSink` when `corpus-ipc` is on.
 
-Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. Call `StimulusSource::initialize(...)` on the source first (as the binary does). Neither constructor nor `run` calls `initialize`; skipping it makes ingress fail with `ZMQ stimulus source not initialized`.
+Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. `BrainstemDaemon::run` / `run_with_restored_network` / `run_for_ticks` call `StimulusSource::initialize` (the binary no longer initializes first, so the pinned ZMQ backend is not reconnected). A failing `initialize` marks health **fatal** and never becomes ready.
+
+Health snapshots, probe paths, and the transition table live in [`docs/health.md`](docs/health.md).
 
 #### Config keys and env vars
 
@@ -155,7 +162,8 @@ Library users who want live ZMQ must build that pair themselves under `#[cfg(fea
 | `tick_rate_hz` | used | used |
 | `log_level` | binary tracing init only; unused by `::new()` / `run` | binary tracing init only; unused by `::new()` / `run` |
 | `services` | used (`ServiceRegistry`) | used |
-| `ingress` | used (bounded class queues in the tick loop) | used (same queues wrap backend packets before the network step) |
+| `control_bind` | optional HTTP control surface; unset = no listener | same |
+| `ingress` | used (bounded class queues in the tick loop; health reports aggregate fill) | used (same queues wrap backend packets before the network step) |
 | `spine_sub_port` | parsed, **no-op** | sets `CORPUS_IPC_ZMQ_READOUT_IPC` to `tcp://127.0.0.1:<port>` (also sets legacy `SPIKENAUT_ZMQ_READOUT_IPC` for compatibility) |
 | `spine_pub_port` | parsed, **no-op** | binds ZMQ PUB `tcp://*:<port>` |
 | `model_path` | used in **live** mode (sidecar JSON); ignored in **simulation** (`StubStimulusSource::initialize` still ignores it) | same live/simulation gate, then passed literally to `initialize` (no `~` expansion); the ZMQ SUB source connects and ignores `_model_path` |

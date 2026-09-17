@@ -4,6 +4,7 @@
 //! Brainstem daemon runtime and config-driven service registry.
 
 use std::fs;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -11,6 +12,7 @@ use anyhow::{Context, Result, bail};
 use neuromod::{NeuroModulators, SpikingNetwork};
 use serde::Deserialize;
 use tokio::signal;
+use tokio::sync::watch;
 use tokio::time;
 use tracing::{error, info, warn};
 
@@ -19,7 +21,10 @@ use crate::backend::{
     StimulusSource,
 };
 use crate::checkpoint::{self, ModelProvenance};
-use crate::ingress::{BoundedIngress, IngressConfig};
+use crate::health::{
+    CheckpointIdentity, FatalCode, HealthEvent, HealthHandle, HealthLimits, HealthSnapshot,
+};
+use crate::ingress::{BoundedIngress, IngressConfig, MessageClass, OverflowPolicy};
 use crate::registry::{ServiceConfig, ServiceRegistry};
 
 /// Env var read by crates.io `corpus-ipc` 0.1 `ZmqIpcBackend::initialize`.
@@ -64,6 +69,12 @@ pub struct DaemonConfig {
     /// value. Serde defaults do not apply to struct literals.
     #[serde(default)]
     pub ingress: IngressConfig,
+    /// Optional `ip:port` for the process control surface (`/livez`, `/readyz`, `/health`, `/metrics`).
+    ///
+    /// Unset by default so existing configs keep opening no extra sockets. This is the
+    /// repository's only HTTP listener; do not add a second server beside it.
+    #[serde(default)]
+    pub control_bind: Option<String>,
 }
 
 impl DaemonConfig {
@@ -109,6 +120,7 @@ pub struct BrainstemDaemon {
     registry: ServiceRegistry,
     backend: BackendPair,
     ingress: BoundedIngress,
+    health: HealthHandle,
 }
 
 impl BrainstemDaemon {
@@ -162,6 +174,7 @@ impl BrainstemDaemon {
             registry,
             backend,
             ingress,
+            health: HealthHandle::started(HealthLimits::default()),
         })
     }
 
@@ -181,6 +194,16 @@ impl BrainstemDaemon {
     /// Cloneable producer handle for in-process classified ingress.
     pub fn ingress(&self) -> BoundedIngress {
         self.ingress.clone()
+    }
+
+    /// Clone the health handle (independent of the tick-loop backend lock).
+    pub fn health(&self) -> HealthHandle {
+        self.health.clone()
+    }
+
+    /// Current health snapshot. Does not wait on ingress or `SpikingNetwork::step`.
+    pub fn health_snapshot(&self) -> HealthSnapshot {
+        self.health.snapshot()
     }
 
     /// Run the daemon until a termination signal is received.
@@ -210,22 +233,41 @@ impl BrainstemDaemon {
         let cfg = self.config;
         let mut backend = self.backend;
         let ingress = self.ingress;
+        let health = self.health;
 
         if cfg.tick_rate_hz == 0 || cfg.tick_rate_hz > 1_000_000 {
-            ingress.shutdown();
-            shutdown_backend(&mut backend);
+            abort_startup(&ingress, &mut backend, None, None).await;
             anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
+        }
+
+        let (control_stop, control_task) =
+            match start_control(cfg.control_bind.as_deref(), health.clone()).await {
+                Ok(pair) => pair,
+                Err(err) => {
+                    abort_startup(&ingress, &mut backend, None, None).await;
+                    return Err(err);
+                }
+            };
+
+        if let Err(e) = initialize_source(&mut *backend.source, &cfg, &health) {
+            abort_startup(&ingress, &mut backend, control_stop, control_task).await;
+            return Err(e);
         }
 
         let restored = take_restored_network(&cfg, restored);
         let (mut network, provenance) = match restored {
             Ok(pair) => pair,
             Err(err) => {
-                ingress.shutdown();
-                shutdown_backend(&mut backend);
+                health.apply(HealthEvent::CheckpointRejected {
+                    detail: err.to_string(),
+                });
+                abort_startup(&ingress, &mut backend, control_stop, control_task).await;
                 return Err(err);
             }
         };
+        health.apply(HealthEvent::CheckpointValidated {
+            identity: checkpoint_identity(&provenance),
+        });
 
         log_model_provenance(&cfg, &provenance);
 
@@ -249,17 +291,20 @@ impl BrainstemDaemon {
                         &mut stimuli,
                         &mut spike_buf,
                         &ingress,
+                        &health,
                         &mut stats,
                     );
                 }
                 _ = &mut shutdown => {
                     info!("Termination signal received, shutting down");
+                    health.apply(HealthEvent::BeginDrain);
                     ingress.shutdown();
                     break;
                 }
             }
         }
 
+        stop_control(control_stop, control_task).await;
         shutdown_backend(&mut backend);
         Ok(())
     }
@@ -267,22 +312,37 @@ impl BrainstemDaemon {
     /// Drive a bounded number of ticks without waiting for a termination signal.
     ///
     /// Used by the CPU-only Thalamic → corpus-ipc → Brainstem smoke harness.
-    /// Source shutdown always runs, even when sink flush fails.
+    /// Calls [`StimulusSource::initialize`] (same as [`Self::run`]) so a ZMQ
+    /// source is connected once. Source shutdown always runs, even when sink
+    /// flush fails. Does not bind `control_bind`.
     pub fn run_for_ticks(self, ticks: u64) -> Result<RuntimeStats> {
         let cfg = self.config;
         let mut backend = self.backend;
         let ingress = self.ingress;
+        let health = self.health;
         let mut stats = RuntimeStats::default();
+
+        if let Err(e) = initialize_source(&mut *backend.source, &cfg, &health) {
+            ingress.shutdown();
+            shutdown_backend(&mut backend);
+            return Err(e);
+        }
 
         let restored = match take_restored_network(&cfg, None) {
             Ok(pair) => pair,
             Err(err) => {
+                health.apply(HealthEvent::CheckpointRejected {
+                    detail: err.to_string(),
+                });
                 ingress.shutdown();
                 shutdown_backend(&mut backend);
                 return Err(err);
             }
         };
         let (mut network, provenance) = restored;
+        health.apply(HealthEvent::CheckpointValidated {
+            identity: checkpoint_identity(&provenance),
+        });
         log_model_provenance(&cfg, &provenance);
         stats.loaded_checkpoint = Some(provenance);
 
@@ -297,6 +357,7 @@ impl BrainstemDaemon {
                 &mut stimuli,
                 &mut spike_buf,
                 &ingress,
+                &health,
                 &mut stats,
             );
         }
@@ -377,6 +438,121 @@ async fn shutdown_signal() {
 /// wires a real backend. This is the intended temporary state.
 fn init_runtime_default() -> BackendPair {
     BackendPair::stub()
+}
+
+async fn abort_startup(
+    ingress: &BoundedIngress,
+    backend: &mut BackendPair,
+    control_stop: Option<watch::Sender<bool>>,
+    control_task: Option<tokio::task::JoinHandle<()>>,
+) {
+    ingress.shutdown();
+    stop_control(control_stop, control_task).await;
+    shutdown_backend(backend);
+}
+
+async fn start_control(
+    bind: Option<&str>,
+    health: HealthHandle,
+) -> Result<(
+    Option<watch::Sender<bool>>,
+    Option<tokio::task::JoinHandle<()>>,
+)> {
+    let Some(bind) = bind else {
+        return Ok((None, None));
+    };
+    let listener = bind_control(bind).await?;
+    Ok(spawn_control_task(listener, health))
+}
+
+async fn bind_control(bind: &str) -> Result<tokio::net::TcpListener> {
+    let addr: SocketAddr = bind
+        .parse()
+        .with_context(|| format!("invalid control_bind {bind}"))?;
+    tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("failed to bind control surface on {addr}"))
+}
+
+fn spawn_control_task(
+    listener: tokio::net::TcpListener,
+    health: HealthHandle,
+) -> (
+    Option<watch::Sender<bool>>,
+    Option<tokio::task::JoinHandle<()>>,
+) {
+    let (tx, rx) = watch::channel(false);
+    let task = tokio::spawn(async move {
+        if let Err(e) = crate::control::serve_listener(listener, health, rx).await {
+            warn!("control surface stopped: {e}");
+        }
+    });
+    (Some(tx), Some(task))
+}
+
+async fn stop_control(
+    stop: Option<watch::Sender<bool>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+) {
+    if let Some(tx) = stop {
+        let _ = tx.send(true);
+    }
+    if let Some(task) = task {
+        let _ = task.await;
+    }
+}
+
+fn initialize_source(
+    source: &mut dyn StimulusSource,
+    cfg: &DaemonConfig,
+    health: &HealthHandle,
+) -> Result<()> {
+    let model_path = cfg.model_path.to_string_lossy();
+    if let Err(e) = source.initialize(Some(model_path.as_ref())) {
+        health.apply(HealthEvent::InitializationFailed {
+            detail: e.to_string(),
+        });
+        error!("Stimulus source initialization failed: {e}");
+        return Err(e).context("failed to initialize stimulus source");
+    }
+    health.apply(HealthEvent::InitializationCompleted);
+    Ok(())
+}
+
+fn checkpoint_identity(provenance: &ModelProvenance) -> CheckpointIdentity {
+    let digest = if provenance.content_sha256 == "none" {
+        None
+    } else {
+        Some(provenance.content_sha256.clone())
+    };
+    CheckpointIdentity {
+        id: provenance.model_id.clone(),
+        digest,
+    }
+}
+
+fn packet_carries_input(packet: &IngressPacket) -> bool {
+    !packet.stimuli.is_empty()
+        || packet
+            .modulators
+            .as_ref()
+            .is_some_and(|mods| !mods.is_empty())
+}
+
+fn apply_queue_pressure(health: &HealthHandle, ingress: &BoundedIngress) {
+    let metrics = ingress.metrics();
+    let cfg = ingress.config();
+    let mut depth = 0u64;
+    let mut capacity = 0u64;
+    for class in MessageClass::ALL {
+        depth += u64::try_from(metrics.class(class).depth).unwrap_or(u64::MAX);
+        let cap = match cfg.policy(class) {
+            OverflowPolicy::Coalesce => 1,
+            _ => cfg.capacity(class),
+        };
+        capacity += u64::try_from(cap).unwrap_or(u64::MAX);
+    }
+    health.apply(HealthEvent::QueuePressure { depth, capacity });
 }
 
 fn log_model_provenance(config: &DaemonConfig, provenance: &ModelProvenance) {
@@ -497,6 +673,7 @@ fn run_tick(
     stimuli: &mut [f32],
     spike_buf: &mut Vec<LocalSpikeEvent>,
     ingress: &BoundedIngress,
+    health: &HealthHandle,
     stats: &mut RuntimeStats,
 ) {
     let backend_packet = match source.next_ingress() {
@@ -508,6 +685,10 @@ fn run_tick(
             None
         }
     };
+
+    if backend_packet.as_ref().is_some_and(packet_carries_input) {
+        health.apply(HealthEvent::IngressObserved);
+    }
 
     // Admit through bounded class queues so a bursty backend cannot grow
     // unbounded in-process, then drain control-first for this tick.
@@ -526,6 +707,7 @@ fn run_tick(
     let drained = ingress.drain_for_tick();
     observe_control_envelopes(&drained.control);
     let packet = drained.into_packet();
+    apply_queue_pressure(health, ingress);
 
     let modulators = decode_inputs(&packet, stimuli);
 
@@ -537,6 +719,10 @@ fn run_tick(
         Ok(spikes) => spikes,
         Err(e) => {
             error!("Network step failed: {e}");
+            health.apply(HealthEvent::Fatal {
+                code: FatalCode::Unspecified,
+                detail: e.to_string(),
+            });
             return;
         }
     };
@@ -574,6 +760,7 @@ fn run_tick(
     if spike_buf.is_empty() && !spike_ids.is_empty() {
         // Had spikes from network but all IDs were out of u16 range (dropped).
         // Nothing valid to publish; skip to avoid empty batch for dropped case.
+        health.apply(HealthEvent::TickSucceeded);
         return;
     }
 
@@ -584,7 +771,13 @@ fn run_tick(
     //   expectations (CollectingSpikeSink) and wire behavior stable.
     if let Err(e) = sink.emit(spike_buf, now) {
         warn!("Failed to emit spikes: {e}");
+        health.apply(HealthEvent::Fatal {
+            code: FatalCode::Unspecified,
+            detail: e.to_string(),
+        });
+        return;
     }
+    health.apply(HealthEvent::TickSucceeded);
 }
 
 /// Observe drained in-band control/safety envelopes.
@@ -649,6 +842,7 @@ pub(crate) fn run_tick_for_test(
     spike_buf: &mut Vec<LocalSpikeEvent>,
 ) {
     let ingress = BoundedIngress::new(IngressConfig::default()).expect("default ingress");
+    let health = HealthHandle::started(HealthLimits::default());
     run_tick(
         source,
         network,
@@ -656,6 +850,7 @@ pub(crate) fn run_tick_for_test(
         stimuli,
         spike_buf,
         &ingress,
+        &health,
         &mut RuntimeStats::default(),
     );
 }
@@ -682,6 +877,7 @@ mod tests {
                 ServiceConfig::named("critic-ipc"),
             ],
             ingress: IngressConfig::default(),
+            control_bind: None,
         }
     }
 
@@ -713,6 +909,35 @@ mod tests {
         assert_eq!(daemon.registry().len(), 2);
         assert!(daemon.registry().contains("telemetry"));
         assert!(daemon.registry().contains("critic-ipc"));
+    }
+
+    #[test]
+    fn daemon_is_live_not_ready_before_run() {
+        let daemon = BrainstemDaemon::new(sample_config());
+        let snap = daemon.health_snapshot();
+        assert!(snap.live);
+        assert!(!snap.ready);
+        assert_eq!(snap.phase, crate::health::HealthPhase::Starting);
+        assert!(!snap.reasons.is_empty());
+    }
+
+    #[test]
+    fn config_parses_optional_control_bind() {
+        let cfg: DaemonConfig = toml::from_str(
+            r#"
+tick_rate_hz = 1000
+log_level = "info"
+spine_sub_port = 5555
+spine_pub_port = 5556
+model_path = "/tmp/model.mem"
+lif_count = 1
+izh_count = 0
+channels = 1
+control_bind = "127.0.0.1:9464"
+"#,
+        )
+        .expect("toml");
+        assert_eq!(cfg.control_bind.as_deref(), Some("127.0.0.1:9464"));
     }
 
     #[test]
@@ -1014,18 +1239,35 @@ channels = 16
         let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
         let mut stimuli = vec![0.0; 2];
         let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+        let ingress = BoundedIngress::new(IngressConfig::default()).expect("default ingress");
+        let health = HealthHandle::started(HealthLimits::default());
 
-        // Prime one tick
-        run_tick_for_test(
+        run_tick(
             &mut source,
             &mut network,
             &mut sink,
             &mut stimuli,
             &mut spike_buf,
+            &ingress,
+            &health,
+            &mut RuntimeStats::default(),
         );
 
-        // Sink should have received one (possibly empty) batch
         assert_eq!(sink.emitted.len(), 1);
+        let snap = health.snapshot();
+        assert!(snap.live);
+        assert!(
+            snap.last_successful_tick_ms.is_some(),
+            "a successful network step must update last_successful_tick"
+        );
+        assert!(
+            !snap.input_freshness.stale,
+            "stale only applies after checkpoint validation"
+        );
+        assert!(
+            snap.input_freshness.age_ms.is_none(),
+            "empty stub packets must not count as ingress"
+        );
     }
 
     struct ScriptedStimulusSource {
@@ -1302,6 +1544,7 @@ block_timeout_ms = 0
         let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
         let mut stimuli = vec![0.0; 2];
         let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+        let health = HealthHandle::started(HealthLimits::default());
         super::run_tick(
             &mut source,
             &mut network,
@@ -1309,6 +1552,7 @@ block_timeout_ms = 0
             &mut stimuli,
             &mut spike_buf,
             &ingress,
+            &health,
             &mut RuntimeStats::default(),
         );
 
@@ -1350,6 +1594,7 @@ block_timeout_ms = 0
         let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
         let mut stimuli = vec![0.0; 2];
         let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+        let health = HealthHandle::started(HealthLimits::default());
         super::run_tick(
             &mut source,
             &mut network,
@@ -1357,6 +1602,7 @@ block_timeout_ms = 0
             &mut stimuli,
             &mut spike_buf,
             &ingress,
+            &health,
             &mut RuntimeStats::default(),
         );
 
