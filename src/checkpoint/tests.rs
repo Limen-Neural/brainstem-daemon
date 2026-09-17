@@ -36,6 +36,7 @@ fn live_config(model_path: PathBuf, lif: usize, channels: usize) -> DaemonConfig
         services: vec![ServiceConfig::named("telemetry")],
         runtime_mode: RuntimeMode::Live,
         ingress: IngressConfig::default(),
+        control_bind: None,
     }
 }
 
@@ -395,6 +396,7 @@ fn simulation_uses_blank_with_dimensions_and_does_not_claim_spikenaut() {
         services: Vec::new(),
         runtime_mode: RuntimeMode::Simulation,
         ingress: IngressConfig::default(),
+        control_bind: None,
     };
     let (network, provenance) = restore_network(&cfg).expect("simulation");
     assert_eq!(network.neurons.len(), 4);

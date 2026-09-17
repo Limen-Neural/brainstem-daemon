@@ -12,8 +12,6 @@ use brainstem_daemon::daemon::{BrainstemDaemon, DaemonConfig};
 use brainstem_daemon::daemon::{CORPUS_IPC_READOUT_ENV, LEGACY_SPIKENAUT_READOUT_ENV};
 
 use anyhow::Context;
-#[cfg(feature = "corpus-ipc")]
-use brainstem_daemon::StimulusSource;
 use clap::Parser;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -83,18 +81,14 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
         // Build a real ZMQ pair (binary is responsible for the SUB endpoint via env).
         // We still need to create the PUB side here because the default `new()` path
         // is intentionally conservative.
-        let mut source = brainstem_daemon::backend::ZmqStimulusSource::with_channels(cfg.channels);
+        let source = brainstem_daemon::backend::ZmqStimulusSource::with_channels(cfg.channels);
 
-        // Pass the model path through for the ZMQ backend handshake. SNN
-        // restoration is owned by `restore_network` /
+        // `BrainstemDaemon::run` owns `StimulusSource::initialize` so the pinned
+        // ZMQ backend is not reconnected here (repeat initialize replaces the SUB
+        // socket). SNN restoration is owned by `restore_network` /
         // `BrainstemDaemon::run_with_restored_network`, not by
         // `ZmqIpcBackend::initialize` (published corpus-ipc 0.1 still names
         // the argument `_model_path` and ignores it).
-
-        let model_path = cfg.model_path.to_string_lossy();
-        source
-            .initialize(Some(model_path.as_ref()))
-            .map_err(|e| anyhow::anyhow!("failed to initialize ZMQ stimulus source: {e}"))?;
 
         let zmq_context = zmq::Context::new();
         let pub_socket = zmq_context
