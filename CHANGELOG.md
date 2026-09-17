@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `snn_model.json` (Hugging Face `rmems/Spikenaut-SNN`) before the tick loop.
   Provenance (path, SHA-256, schema id, encoder, lineage) is logged. Startup
   fails closed on missing, corrupt, dimension-mismatched, non-finite, or
-  blank checkpoints. FPGA Q8.8 `.mem` dumps are rejected.
+  blank checkpoints, and on sidecars that carry `output_weights`. FPGA Q8.8
+  `.mem` dumps are rejected.
 - Explicit `runtime_mode = "simulation"` for blank `with_dimensions()`
   networks; it cannot masquerade as a loaded Spikenaut checkpoint.
 - crates.io package metadata: `readme`, `homepage`, `documentation`,
@@ -76,6 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed / Cleaned
 
+- Live restore rejects Distill sidecars that carry `output_weights` (including
+  explicit `null`) instead of validating then silently dropping the readout
+  row. neuromod 0.6.0 has no Distill readout matrix; legacy sidecars that omit
+  the field still load.
 - Live restore rejects Distill values that are finite as `f64` but overflow `f32`, and requires Distill `source = "spikenaut_julia"`. The binary restores once before sockets and reuses that network for the tick loop. Live mode sets `RmStdpConfig.reward_lr = 0` so dopamine-gated R-STDP cannot retrain Distill weights; `neuromod` 0.6.0 `step` still owns decay/threshold/L1-renorm as engine contracts.
 - Removed unconditional dependency on `corpus-ipc` git crate and system `libzmq` for core builds and tests.
 
