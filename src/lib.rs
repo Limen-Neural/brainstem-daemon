@@ -8,6 +8,7 @@ pub mod checkpoint;
 pub mod daemon;
 pub mod ingress;
 pub mod registry;
+pub mod runtime;
 
 // Re-export the new pluggable I/O surface (pub from day one).
 pub use backend::{
