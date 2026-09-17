@@ -42,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cortisol → `norepinephrine`; `tempo` has no analogue (`serotonin` stays
   default `0.0`).
 - Optional `corpus-ipc` CI/local commands pass `--ignore-rust-version` so the
-  1.97.1 pin can compile published `corpus-ipc` 0.1 (MSRV 1.98.1).
+  1.97.1 pin can compile published `corpus-ipc` 0.1 (minimum supported Rust version 1.98.1).
 - Relicense from GPL-3.0 to dual MIT/Apache-2.0.
 - Add SPDX license identifiers to all source files.
 - Refactor `soma-daemon` binary into a thin wrapper over `BrainstemDaemon`.

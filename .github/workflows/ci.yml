@@ -105,7 +105,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-corpus-ipc-
 
-      # Published corpus-ipc 0.1 declares MSRV 1.98.1; this job stays on the
+      # Published corpus-ipc 0.1 declares rust-version 1.98.1; this job stays on the
       # crate pin (1.97.1) and ignores the optional dep's rust-version.
       - name: Run clippy (all-features)
         env:

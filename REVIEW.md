@@ -23,7 +23,7 @@ The optional `corpus-ipc` feature (same as `--all-features` today) compiles
 ZeroMQ via `zmq-sys` / `zeromq-src` (needs a C++ compiler). Install
 `libzmq3-dev` on Debian/Ubuntu if you prefer a system library, and use
 Rust 1.98.1 (or `--ignore-rust-version`) because published `corpus-ipc`
-0.1 declares that MSRV.
+0.1 declares that minimum supported Rust version (MSRV).
 
 See README [Backends (temporary)](README.md#backends-temporary) for the
 feature → backend → config-key truth table (including env vars that are
@@ -46,7 +46,7 @@ cargo test --locked
 # Debian/Ubuntu
 sudo apt-get install -y libzmq3-dev
 
-# Published corpus-ipc 0.1 declares MSRV 1.98.1; pass --ignore-rust-version
+# Published corpus-ipc 0.1 declares minimum supported Rust version (MSRV) 1.98.1; pass --ignore-rust-version
 # when staying on this crate's 1.97.1 pin.
 cargo clippy --locked --all-targets --features corpus-ipc --ignore-rust-version -- -D warnings
 cargo test --locked --features corpus-ipc --ignore-rust-version

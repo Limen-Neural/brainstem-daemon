@@ -42,7 +42,7 @@ The optional `corpus-ipc` feature depends on the published `corpus-ipc` crate (`
 
 ## Building
 
-Requires **Rust 1.97.1** (`rust-toolchain.toml`) for the default stub crate. Enabling `--features corpus-ipc` also compiles published `corpus-ipc` 0.1, whose MSRV is **1.98.1** — use that toolchain (or `cargo … --ignore-rust-version`) for the feature build.
+Requires **Rust 1.97.1** (`rust-toolchain.toml`) for the default stub crate. Enabling `--features corpus-ipc` also compiles published `corpus-ipc` 0.1, whose minimum supported Rust version (MSRV) is **1.98.1**. Use that toolchain (or `cargo … --ignore-rust-version`) for the feature build.
 
 ```bash
 # Release build, default stub backend (no libzmq)
