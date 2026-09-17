@@ -291,8 +291,10 @@ impl BrainstemDaemon {
                         &mut stimuli,
                         &mut spike_buf,
                         &ingress,
-                        &health,
-                        &mut stats,
+                        &mut TickReport {
+                            health: &health,
+                            stats: &mut stats,
+                        },
                     );
                 }
                 _ = &mut shutdown => {
@@ -357,8 +359,10 @@ impl BrainstemDaemon {
                 &mut stimuli,
                 &mut spike_buf,
                 &ingress,
-                &health,
-                &mut stats,
+                &mut TickReport {
+                    health: &health,
+                    stats: &mut stats,
+                },
             );
         }
 
@@ -666,6 +670,12 @@ fn validate_restored_pair(
 
 // Trait-based tick loop (works with or without corpus-ipc feature)
 
+/// Health reporter plus smoke counters updated together on every tick.
+struct TickReport<'a> {
+    health: &'a HealthHandle,
+    stats: &'a mut RuntimeStats,
+}
+
 fn run_tick(
     source: &mut dyn StimulusSource,
     network: &mut SpikingNetwork,
@@ -673,9 +683,9 @@ fn run_tick(
     stimuli: &mut [f32],
     spike_buf: &mut Vec<LocalSpikeEvent>,
     ingress: &BoundedIngress,
-    health: &HealthHandle,
-    stats: &mut RuntimeStats,
+    report: &mut TickReport<'_>,
 ) {
+    let TickReport { health, stats } = report;
     let backend_packet = match source.next_ingress() {
         Ok(Some(p)) => Some(p),
         Ok(None) => None,
@@ -850,8 +860,10 @@ pub(crate) fn run_tick_for_test(
         stimuli,
         spike_buf,
         &ingress,
-        &health,
-        &mut RuntimeStats::default(),
+        &mut TickReport {
+            health: &health,
+            stats: &mut RuntimeStats::default(),
+        },
     );
 }
 
@@ -1249,8 +1261,10 @@ channels = 16
             &mut stimuli,
             &mut spike_buf,
             &ingress,
-            &health,
-            &mut RuntimeStats::default(),
+            &mut TickReport {
+                health: &health,
+                stats: &mut RuntimeStats::default(),
+            },
         );
 
         assert_eq!(sink.emitted.len(), 1);
@@ -1552,8 +1566,10 @@ block_timeout_ms = 0
             &mut stimuli,
             &mut spike_buf,
             &ingress,
-            &health,
-            &mut RuntimeStats::default(),
+            &mut super::TickReport {
+                health: &health,
+                stats: &mut RuntimeStats::default(),
+            },
         );
 
         assert_eq!(stimuli, vec![0.1, 0.2]);
@@ -1602,8 +1618,10 @@ block_timeout_ms = 0
             &mut stimuli,
             &mut spike_buf,
             &ingress,
-            &health,
-            &mut RuntimeStats::default(),
+            &mut super::TickReport {
+                health: &health,
+                stats: &mut RuntimeStats::default(),
+            },
         );
 
         assert_eq!(stimuli, vec![0.3, 0.4]);
