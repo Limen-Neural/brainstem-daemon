@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::daemon::DaemonConfig;
+use crate::ingress::IngressConfig;
 use crate::registry::ServiceConfig;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -34,6 +35,7 @@ fn live_config(model_path: PathBuf, lif: usize, channels: usize) -> DaemonConfig
         channels,
         services: vec![ServiceConfig::named("telemetry")],
         runtime_mode: RuntimeMode::Live,
+        ingress: IngressConfig::default(),
     }
 }
 
@@ -392,6 +394,7 @@ fn simulation_uses_blank_with_dimensions_and_does_not_claim_spikenaut() {
         channels: 8,
         services: Vec::new(),
         runtime_mode: RuntimeMode::Simulation,
+        ingress: IngressConfig::default(),
     };
     let (network, provenance) = restore_network(&cfg).expect("simulation");
     assert_eq!(network.neurons.len(), 4);
