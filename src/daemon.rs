@@ -249,27 +249,13 @@ impl BrainstemDaemon {
                 }
             };
 
-        if let Err(e) = initialize_source(&mut *backend.source, &cfg, &health) {
-            abort_startup(&ingress, &mut backend, control_stop, control_task).await;
-            return Err(e);
-        }
-
-        let restored = take_restored_network(&cfg, restored);
-        let (mut network, provenance) = match restored {
+        let (mut network, _) = match boot_network(&mut *backend.source, &cfg, &health, restored) {
             Ok(pair) => pair,
             Err(err) => {
-                health.apply(HealthEvent::CheckpointRejected {
-                    detail: err.to_string(),
-                });
                 abort_startup(&ingress, &mut backend, control_stop, control_task).await;
                 return Err(err);
             }
         };
-        health.apply(HealthEvent::CheckpointValidated {
-            identity: checkpoint_identity(&provenance),
-        });
-
-        log_model_provenance(&cfg, &provenance);
 
         let tick_duration = Duration::from_nanos(1_000_000_000 / u64::from(cfg.tick_rate_hz));
         let mut ticker = time::interval(tick_duration);
@@ -324,28 +310,15 @@ impl BrainstemDaemon {
         let health = self.health;
         let mut stats = RuntimeStats::default();
 
-        if let Err(e) = initialize_source(&mut *backend.source, &cfg, &health) {
-            ingress.shutdown();
-            shutdown_backend(&mut backend);
-            return Err(e);
-        }
-
-        let restored = match take_restored_network(&cfg, None) {
-            Ok(pair) => pair,
-            Err(err) => {
-                health.apply(HealthEvent::CheckpointRejected {
-                    detail: err.to_string(),
-                });
-                ingress.shutdown();
-                shutdown_backend(&mut backend);
-                return Err(err);
-            }
-        };
-        let (mut network, provenance) = restored;
-        health.apply(HealthEvent::CheckpointValidated {
-            identity: checkpoint_identity(&provenance),
-        });
-        log_model_provenance(&cfg, &provenance);
+        let (mut network, provenance) =
+            match boot_network(&mut *backend.source, &cfg, &health, None) {
+                Ok(pair) => pair,
+                Err(err) => {
+                    ingress.shutdown();
+                    shutdown_backend(&mut backend);
+                    return Err(err);
+                }
+            };
         stats.loaded_checkpoint = Some(provenance);
 
         let mut stimuli = vec![0.0; cfg.channels];
@@ -521,6 +494,29 @@ fn initialize_source(
     }
     health.apply(HealthEvent::InitializationCompleted);
     Ok(())
+}
+
+fn boot_network(
+    source: &mut dyn StimulusSource,
+    cfg: &DaemonConfig,
+    health: &HealthHandle,
+    restored: Option<(SpikingNetwork, ModelProvenance)>,
+) -> Result<(SpikingNetwork, ModelProvenance)> {
+    initialize_source(source, cfg, health)?;
+    let (network, provenance) = match take_restored_network(cfg, restored) {
+        Ok(pair) => pair,
+        Err(err) => {
+            health.apply(HealthEvent::CheckpointRejected {
+                detail: err.to_string(),
+            });
+            return Err(err);
+        }
+    };
+    health.apply(HealthEvent::CheckpointValidated {
+        identity: checkpoint_identity(&provenance),
+    });
+    log_model_provenance(cfg, &provenance);
+    Ok((network, provenance))
 }
 
 fn checkpoint_identity(provenance: &ModelProvenance) -> CheckpointIdentity {
