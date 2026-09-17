@@ -72,6 +72,11 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
 
     info!("Loaded config from {}", config_path.display());
 
+    // Fail closed on the model *before* opening sockets. The restored network is
+    // passed into `run_with_restored_network` so the sidecar is not read twice.
+    let (network, provenance) = brainstem_daemon::restore_network(&cfg)
+        .context("invalid or missing Spikenaut checkpoint")?;
+
     // Choose backend explicitly so we can log the mode.
     #[cfg(feature = "corpus-ipc")]
     let pair = {
@@ -80,8 +85,11 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
         // is intentionally conservative.
         let mut source = brainstem_daemon::backend::ZmqStimulusSource::with_channels(cfg.channels);
 
-        // Pass the model path through (was dropped before). crates.io
-        // ZmqIpcBackend::initialize takes `_model_path` and currently ignores it.
+        // Pass the model path through for the ZMQ backend handshake. SNN
+        // restoration is owned by `restore_network` /
+        // `BrainstemDaemon::run_with_restored_network`, not by
+        // `ZmqIpcBackend::initialize` (published corpus-ipc 0.1 still names
+        // the argument `_model_path` and ignores it).
 
         let model_path = cfg.model_path.to_string_lossy();
         source
@@ -114,5 +122,5 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
 
     let daemon = BrainstemDaemon::try_with_backend(cfg, pair)
         .context("invalid daemon configuration: reduce lif_count and/or izh_count")?;
-    daemon.run().await
+    daemon.run_with_restored_network(network, provenance).await
 }

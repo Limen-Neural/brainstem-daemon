@@ -4,6 +4,7 @@
 //! Brainstem daemon library: config-driven service registry and runtime.
 
 pub mod backend;
+pub mod checkpoint;
 pub mod daemon;
 pub mod registry;
 
@@ -11,3 +12,5 @@ pub mod registry;
 pub use backend::{
     BackendPair, IngressPacket, NEUROMODULATOR_COUNT, SpikeEvent, SpikeSink, StimulusSource,
 };
+pub use checkpoint::{ModelProvenance, restore_network};
+pub use daemon::RuntimeMode;
