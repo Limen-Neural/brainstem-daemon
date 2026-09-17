@@ -43,7 +43,8 @@ The optional `corpus-ipc` feature depends on the published `corpus-ipc` crate (`
 ## Building
 
 Requires **Rust 1.98.1 only**. Do not use other toolchains.
-Keep every pin in [REVIEW.md](REVIEW.md) "MSRV pin rule" on that version:
+Keep every pin in [REVIEW.md](REVIEW.md)
+"MSRV (minimum supported Rust version) pin rule" on that version:
 `rust-toolchain.toml`, `Cargo.toml`, CI `toolchain:`, `Dockerfile`,
 `.devin/blueprint.yaml`, and the docs listed there.
 It matches published `corpus-ipc` 0.1 and the rest of the Spikenaut stack.
