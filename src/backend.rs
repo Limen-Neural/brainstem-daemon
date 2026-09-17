@@ -17,7 +17,7 @@ use anyhow::Result;
 
 /// Length of the neuromodulator tail appended after the stimulus prefix.
 ///
-/// Order matches `neuromod` 0.5+: dopamine, serotonin, acetylcholine,
+/// Order matches `neuromod` 0.6: dopamine, serotonin, acetylcholine,
 /// norepinephrine. Do not invent a parallel in-tree modulator struct.
 pub const NEUROMODULATOR_COUNT: usize = 4;
 

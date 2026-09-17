@@ -140,7 +140,7 @@ impl BrainstemDaemon {
         let mut ticker = time::interval(tick_duration);
         ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
-        // Blank `neuromod` 0.5.x network (crates.io). Checkpoint restore is #41;
+        // Blank `neuromod` 0.6.0 network (crates.io). Checkpoint restore is #41;
         // that work must deserialize this crate's `SpikingNetwork` (no in-tree fork).
         let mut network =
             SpikingNetwork::with_dimensions(cfg.lif_count, cfg.izh_count, cfg.channels);
@@ -280,10 +280,12 @@ fn run_tick(
 
     // Note: decode_inputs already zero-fills any remaining channels when packet.stimuli is shorter.
 
+    // `step` is the thread-local RNG wrapper around 0.6 `step_with_rng`.
+    // The generator is not stored on the network and is not checkpointed.
     let spike_ids = match network.step(stimuli, &modulators) {
         Ok(spikes) => spikes,
         Err(e) => {
-            error!("Network step failed: {e:?}");
+            error!("Network step failed: {e}");
             return;
         }
     };
@@ -570,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn tick_applies_neuromod_05_modulator_snapshot() {
+    fn tick_applies_neuromod_06_modulator_snapshot() {
         let mut network = SpikingNetwork::with_dimensions(2, 1, 2);
         let packet = IngressPacket {
             stimuli: vec![0.0; 2],
@@ -647,25 +649,54 @@ mod tests {
     }
 
     #[test]
-    fn spiking_network_serde_matches_neuromod_05_contract() {
-        // #41 checkpoint loading must use this crates.io `neuromod` 0.5.x shape.
-        // 0.6 adds `stdp_config` / `eligibility`; do not fork those fields here.
+    fn spiking_network_serde_matches_neuromod_06_contract() {
+        // #41 checkpoint loading must use this crates.io `neuromod` 0.6.0 shape.
+        // Do not fork `stdp_config` / `eligibility` in-tree.
         let network = SpikingNetwork::with_dimensions(2, 1, 2);
         let json = serde_json::to_value(&network).expect("serialize blank network");
 
-        assert!(json.get("stdp_config").is_none());
+        assert!(json.get("stdp_config").is_some());
+        assert_eq!(json["stdp_config"]["tau_eligibility"], 50.0);
+        assert_eq!(json["stdp_config"]["reward_lr"], 0.05);
+        assert_eq!(json["stdp_config"]["w_min"], 0.0);
+        assert_eq!(json["stdp_config"]["w_max"], 2.0);
         assert!(json.get("neurons").and_then(|n| n.get(0)).is_some());
-        assert!(
-            json["neurons"][0].get("eligibility").is_none(),
-            "0.5.x LIF neurons have no eligibility traces"
-        );
+        let eligibility = json["neurons"][0]
+            .get("eligibility")
+            .and_then(|e| e.as_array())
+            .expect("0.6.0 LIF neurons serialize eligibility traces");
+        assert_eq!(eligibility.len(), 2);
+        assert_eq!(eligibility[0]["value"], 0.0);
+        assert_eq!(eligibility[0]["tau"], 50.0);
 
         let restored: SpikingNetwork =
-            serde_json::from_value(json).expect("deserialize neuromod 0.5 network");
+            serde_json::from_value(json).expect("deserialize neuromod 0.6 network");
         assert_eq!(restored.num_channels, 2);
         assert_eq!(restored.neurons.len(), 2);
         assert_eq!(restored.iz_neurons.len(), 1);
         assert_eq!(restored.modulators, NeuroModulators::default());
+        assert_eq!(restored.stdp_config, neuromod::RmStdpConfig::default());
+        assert_eq!(restored.neurons[0].eligibility.len(), 2);
+    }
+
+    #[test]
+    fn pre_0_6_checkpoint_json_still_deserializes() {
+        // 0.6.0 JSON self-describing formats default missing R-STDP fields.
+        let network = SpikingNetwork::with_dimensions(2, 1, 2);
+        let mut json = serde_json::to_value(&network).expect("serialize blank network");
+        let object = json.as_object_mut().expect("network is a JSON object");
+        object.remove("stdp_config");
+        for neuron in object["neurons"].as_array_mut().expect("neurons array") {
+            neuron
+                .as_object_mut()
+                .expect("neuron object")
+                .remove("eligibility");
+        }
+
+        let restored: SpikingNetwork =
+            serde_json::from_value(json).expect("deserialize pre-0.6 JSON");
+        assert_eq!(restored.stdp_config, neuromod::RmStdpConfig::default());
+        assert!(restored.neurons.iter().all(|n| n.eligibility.is_empty()));
     }
 
     // Sends a real SIGTERM to this test process, so it's `#[ignore]`d by default:

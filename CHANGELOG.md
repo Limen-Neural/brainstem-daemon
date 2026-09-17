@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Tick-loop regression tests for `neuromod` 0.5 modulator snapshots, default
-  ingress fallback, and the 0.5.x `SpikingNetwork` serde contract used by
-  checkpoint loading (#41).
+- Tick-loop regression tests for `neuromod` 0.6 modulator snapshots, default
+  ingress fallback, and the 0.6.0 `SpikingNetwork` serde contract
+  (`stdp_config` / `eligibility`) used by checkpoint loading (#41).
 - GitHub Actions CI matrix: stub build/test/clippy on Linux, macOS, and
   Windows; rustfmt and optional `corpus-ipc` / libzmq jobs on Linux only
   (`docs/ci.md`).
@@ -30,10 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Upgrade `neuromod` from 0.4.0 to crates.io **0.5.2** (pre-1.0 range
-  `>=0.5.2, <0.6.0`). Ingress modulators map to dopamine / serotonin /
+- Upgrade `neuromod` from 0.4.0 to crates.io **0.6.0** (pre-1.0 range
+  `>=0.6.0, <0.7.0`). Ingress modulators map to dopamine / serotonin /
   acetylcholine / norepinephrine; `cortisol`, `tempo`, and `aux_dopamine`
-  were removed upstream.
+  were removed upstream. The tick loop still calls `SpikingNetwork::step`
+  (0.6 thread-local wrapper around `step_with_rng`). Checkpoints now carry
+  engine-wired R-STDP (`stdp_config` / per-LIF `eligibility`).
 - Align MSRV and toolchain pins to **Rust 1.98.1** (`Cargo.toml`,
   `rust-toolchain.toml`, CI, `Dockerfile`, `AGENTS.md`, `README.md`,
   `.devin/blueprint.yaml`) to match the Spikenaut software stack.
