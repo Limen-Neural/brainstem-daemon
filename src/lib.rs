@@ -4,14 +4,24 @@
 //! Brainstem daemon library: config-driven service registry and runtime.
 
 pub mod backend;
+pub mod checkpoint;
 pub mod control;
 pub mod daemon;
 pub mod health;
+pub mod ingress;
 pub mod registry;
 
 // Re-export the new pluggable I/O surface (pub from day one).
-pub use backend::{BackendPair, IngressPacket, SpikeEvent, SpikeSink, StimulusSource};
+pub use backend::{
+    BackendPair, IngressPacket, NEUROMODULATOR_COUNT, SpikeEvent, SpikeSink, StimulusSource,
+};
+pub use checkpoint::{ModelProvenance, restore_network};
+pub use daemon::RuntimeMode;
 pub use health::{
     CheckpointIdentity, FakeClock, FatalCode, HealthEvent, HealthHandle, HealthLimits,
     HealthMachine, HealthPhase, HealthSnapshot, ReasonCode, SystemClock,
+};
+pub use ingress::{
+    BoundedIngress, ClassMetrics, DrainedTick, EnqueueOutcome, IngressConfig, IngressMetrics,
+    MAX_BLOCK_TIMEOUT_MS, MAX_PAYLOAD_LEN, MAX_QUEUE_CAPACITY, MessageClass, OverflowPolicy,
 };

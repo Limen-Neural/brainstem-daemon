@@ -83,7 +83,7 @@ impl FatalCode {
     }
 }
 
-/// Identity of the loaded checkpoint. Digest may be absent until real validation lands.
+/// Identity of the loaded checkpoint. Live mode uses the sidecar SHA-256; simulation uses `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckpointIdentity {
     pub id: String,
@@ -172,23 +172,23 @@ fn write_runtime_gauges(out: &mut String, snap: &HealthSnapshot) {
         "1 if this process has entered a sticky fatal state.",
         u8::from(snap.fatal.is_some()),
     );
-    push_gauge(
+    push_optional_gauge(
         out,
         "brainstem_last_successful_tick_ms",
-        "Milliseconds from process start until the last successful tick (not tick age).",
-        snap.last_successful_tick_ms.unwrap_or(0),
+        "Milliseconds from process start until the last successful tick (not tick age); NaN if none yet.",
+        snap.last_successful_tick_ms,
     );
-    push_gauge(
+    push_optional_gauge(
         out,
         "brainstem_tick_age_ms",
-        "Milliseconds since the last successful tick; 0 if none yet.",
-        snap.tick_age_ms.unwrap_or(0),
+        "Milliseconds since the last successful tick; NaN if none yet.",
+        snap.tick_age_ms,
     );
-    push_gauge(
+    push_optional_gauge(
         out,
         "brainstem_input_age_ms",
-        "Age of last ingress (or checkpoint, if none) in milliseconds.",
-        snap.input_freshness.age_ms.unwrap_or(0),
+        "Age of last ingress (or checkpoint, if none) in milliseconds; NaN if none yet.",
+        snap.input_freshness.age_ms,
     );
     push_gauge(
         out,
@@ -202,6 +202,13 @@ fn write_runtime_gauges(out: &mut String, snap: &HealthSnapshot) {
         "Ingress queue capacity.",
         snap.queue_pressure.capacity,
     );
+}
+
+fn push_optional_gauge(out: &mut String, name: &str, help: &str, value: Option<u64>) {
+    match value {
+        Some(v) => push_gauge(out, name, help, v),
+        None => push_gauge(out, name, help, "NaN"),
+    }
 }
 
 fn push_gauge(out: &mut String, name: &str, help: &str, value: impl std::fmt::Display) {

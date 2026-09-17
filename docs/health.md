@@ -2,10 +2,10 @@
 
 Supervisors should treat **liveness** and **readiness** as independent. A live
 `brainstem-daemon` process has a health reporter; it is ready only after
-`StimulusSource::initialize` succeeds. Until [`LIM-1133`](https://linear.app/rpd-34/issue/LIM-1133),
-that successful `initialize` is also the checkpoint-validation stand-in: the
-daemon applies `CheckpointValidated` immediately afterward. There is no
-separate digest/weight check in this release.
+`StimulusSource::initialize` succeeds **and** a checkpoint is validated
+(`restore_network` in live mode, or the explicit simulation blank network).
+Live mode uses the Distill sidecar SHA-256 as `checkpoint.digest`. Simulation
+mode reports `digest: null`.
 
 This repository had no HTTP/metrics server before this surface. When
 `control_bind` is set, `BrainstemDaemon::run` starts **one** listener:
@@ -22,7 +22,8 @@ Do not add a second control server beside this one.
 
 Library embedders can also clone [`HealthHandle`](../src/health/handle.rs) from
 `BrainstemDaemon::health()` and call `snapshot()` / `try_snapshot()` without
-waiting on the tick loop's backend or `SpikingNetwork::step`.
+waiting on the tick loop's backend or `SpikingNetwork::step`. Control probes
+use `try_snapshot()` so they never wait on an in-flight `apply`.
 
 ## Transition table
 
@@ -30,13 +31,13 @@ waiting on the tick loop's backend or `SpikingNetwork::step`.
 |---|---|---|---|---|---|
 | (unstarted) | `ProcessStarted` | `starting` | true | false | Construction. Live does not imply ready. |
 | (unstarted) | init/checkpoint success or failure | (unstarted) | false | false | Ignored until `ProcessStarted`; the fatal transition below applies only after `ProcessStarted`. |
-| `starting` | `InitializationCompleted` | `loading_checkpoint` | true | false | `initialize()` succeeded. Live daemon then applies the checkpoint stand-in (next row). |
+| `starting` | `InitializationCompleted` | `loading_checkpoint` | true | false | `initialize()` succeeded. Checkpoint restore is a separate gate. |
 | `starting` | `InitializationFailed` | `fatal` | true | false | Sticky. Detail is JSON-only, never a metric label. |
-| `loading_checkpoint` | `CheckpointValidated` | `running` | true | true | Ready only after this gate. Until LIM-1133 the daemon emits this right after `initialize`. |
+| `loading_checkpoint` | `CheckpointValidated` | `running` | true | true | Ready only after this gate. Live identity is sidecar `model_id` plus SHA-256. |
 | `loading_checkpoint` | `CheckpointRejected` | `fatal` | true | false | Sticky. |
 | `running` | clock ≥ `stale_after` without ingress | `degraded` | true | true | Reason `stale_input`. Ready stays true. |
-| `degraded` (stale) | `IngressObserved` | `running` (if no other reasons) | true | true | Ticks without ingress do **not** clear stale. |
-| `running` | queue fill ≥ `overload_high` | `degraded` | true | true | Reason `overload`. |
+| `degraded` (stale) | `IngressObserved` | `running` (if no other reasons) | true | true | Ticks without ingress do **not** clear stale. Empty stub packets do not count. |
+| `running` | queue fill ≥ `overload_high` | `degraded` | true | true | Reason `overload`. Fill is the aggregate of the four bounded ingress classes. |
 | `degraded` (overload) | fill ≤ `overload_low` | `running` (if no other reasons) | true | true | Hysteresis: mid-band does not recover. |
 | `running` / `degraded` | `BeginDrain` | `draining` | true | false | SIGTERM/SIGINT. Does not return to ready. |
 | any started non-fatal | `Fatal` / init or checkpoint failure | `fatal` | true | false | Subsequent validate/tick/drain cannot restore ready. Unstarted init/checkpoint failures stay ignored. |
@@ -49,23 +50,22 @@ connections get a short `503` (`busy`); further accepts are closed immediately.
 The same `503` is used when a snapshot read would block on an in-flight `apply`.
 
 Recoverable reasons (`stale_input`, `overload`) are independent: clearing one
-leaves the other. `capacity == 0` means “no queue instrumented” (LIM-1216) and
-never counts as overload.
+leaves the other. `capacity == 0` means “no queue instrumented” and never
+counts as overload. After LIM-1216 the tick loop reports the sum of the four
+class depths and capacities.
 
 Fatal and draining are sticky for **this process**. A new process starts in
 `starting` again.
 
-## Checkpoint stand-in
+## Checkpoint identity
 
-[`LIM-1133`](https://linear.app/rpd-34/issue/LIM-1133) will load and digest a
-real Spikenaut checkpoint. Until then, a successful `StimulusSource::initialize`
-is treated as the checkpoint gate. The snapshot identity is the `model_path`
-file name (not the full path) with `digest: null`.
+Live mode copies [`ModelProvenance::model_id`](../src/checkpoint/mod.rs) and
+the sidecar SHA-256 into `checkpoint`. Simulation mode uses
+`id = "simulation/blank"` and `digest: null`.
 
 ## Example snapshots
 
-Healthy (ready to consume events). Until LIM-1133 the live daemon stand-in uses
-`"digest": null`.
+Healthy (ready to consume events) after a live sidecar restore:
 
 ```json
 {
@@ -75,9 +75,9 @@ Healthy (ready to consume events). Until LIM-1133 the live daemon stand-in uses
   "reasons": [],
   "last_successful_tick_ms": 0,
   "tick_age_ms": 0,
-  "checkpoint": { "id": "soma16", "digest": null },
+  "checkpoint": { "id": "spikenaut-snn:soma16", "digest": "abc123" },
   "input_freshness": { "age_ms": 0, "stale": false },
-  "queue_pressure": { "depth": 0, "capacity": 0, "ratio": null, "overloaded": false },
+  "queue_pressure": { "depth": 0, "capacity": 216, "ratio": 0.0, "overloaded": false },
   "fatal": null,
   "observed_at_ms": 0
 }
@@ -93,7 +93,7 @@ Degraded (still ready; supervisors should not bounce the process):
   "reasons": ["stale_input", "overload"],
   "last_successful_tick_ms": 0,
   "tick_age_ms": 0,
-  "checkpoint": { "id": "soma16", "digest": null },
+  "checkpoint": { "id": "spikenaut-snn:soma16", "digest": "abc123" },
   "input_freshness": { "age_ms": 100, "stale": true },
   "queue_pressure": { "depth": 95, "capacity": 100, "ratio": 0.95, "overloaded": true },
   "fatal": null,
@@ -121,4 +121,6 @@ Fatal (never returns to ready in this process):
 
 `fatal.detail` belongs in JSON/logs. Prometheus `/metrics` exposes
 `brainstem_fatal 1` and `brainstem_phase{phase="fatal"} 1` without the detail
-string.
+string. Optional gauges (`last_successful_tick_ms`, `tick_age_ms`,
+`input_age_ms`) emit `NaN` when the observation is missing so supervisors do
+not treat startup as a tick at time zero.
