@@ -8,4 +8,6 @@ pub mod daemon;
 pub mod registry;
 
 // Re-export the new pluggable I/O surface (pub from day one).
-pub use backend::{BackendPair, IngressPacket, SpikeEvent, SpikeSink, StimulusSource};
+pub use backend::{
+    BackendPair, IngressPacket, NEUROMODULATOR_COUNT, SpikeEvent, SpikeSink, StimulusSource,
+};
