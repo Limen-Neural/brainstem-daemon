@@ -110,8 +110,12 @@ impl DurableState {
                 self.last_session_id
             );
         }
-        if inf.ingress_seq == 0 {
-            bail!("inflight ingress seq must be > 0");
+        if inf.ingress_seq <= self.committed_ingress_seq {
+            bail!(
+                "inflight ingress seq {} must exceed committed ingress seq {}",
+                inf.ingress_seq,
+                self.committed_ingress_seq
+            );
         }
         Ok(())
     }
@@ -252,6 +256,24 @@ mod tests {
         let err = state.validate().unwrap_err().to_string();
         assert!(
             err.contains("must equal last_session_id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn inflight_ingress_must_exceed_committed_ingress() {
+        let mut state = DurableState::fresh();
+        state.last_session_id = 1;
+        state.committed_tick_seq = 3;
+        state.committed_ingress_seq = 7;
+        state.inflight = Some(InflightRecord {
+            session_id: 1,
+            tick_seq: 4,
+            ingress_seq: 7,
+        });
+        let err = state.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("must exceed committed ingress seq"),
             "unexpected error: {err}"
         );
     }

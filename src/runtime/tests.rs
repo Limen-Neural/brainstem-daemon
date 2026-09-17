@@ -201,6 +201,7 @@ fn invalid_store_fixtures() -> Vec<DurableStore> {
         DurableStore::malformed(b"{not-json"),
         DurableStore::malformed(b"BSDK0\n{}"),
         DurableStore::malformed(empty_checkpoint_blob()),
+        DurableStore::malformed(committed_inflight_blob()),
     ]
 }
 
@@ -214,6 +215,26 @@ fn empty_checkpoint_blob() -> Vec<u8> {
             "committed_tick_seq": 0,
             "committed_ingress_seq": 0,
             "inflight": null
+        }))
+        .unwrap(),
+    );
+    raw
+}
+
+fn committed_inflight_blob() -> Vec<u8> {
+    let mut raw = b"BSDK1\n".to_vec();
+    raw.extend(
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "checkpoint_id": "fake-core-v1",
+            "last_session_id": 1,
+            "committed_tick_seq": 3,
+            "committed_ingress_seq": 7,
+            "inflight": {
+                "session_id": 1,
+                "tick_seq": 4,
+                "ingress_seq": 7
+            }
         }))
         .unwrap(),
     );
