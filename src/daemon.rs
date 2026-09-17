@@ -655,19 +655,18 @@ mod tests {
         let network = SpikingNetwork::with_dimensions(2, 1, 2);
         let json = serde_json::to_value(&network).expect("serialize blank network");
 
-        assert!(json.get("stdp_config").is_some());
-        assert_eq!(json["stdp_config"]["tau_eligibility"], 50.0);
-        assert_eq!(json["stdp_config"]["reward_lr"], 0.05);
-        assert_eq!(json["stdp_config"]["w_min"], 0.0);
-        assert_eq!(json["stdp_config"]["w_max"], 2.0);
+        let default_stdp =
+            serde_json::to_value(neuromod::RmStdpConfig::default()).expect("serialize stdp_config");
+        assert_eq!(json.get("stdp_config"), Some(&default_stdp));
         assert!(json.get("neurons").and_then(|n| n.get(0)).is_some());
         let eligibility = json["neurons"][0]
             .get("eligibility")
             .and_then(|e| e.as_array())
             .expect("0.6.0 LIF neurons serialize eligibility traces");
         assert_eq!(eligibility.len(), 2);
-        assert_eq!(eligibility[0]["value"], 0.0);
-        assert_eq!(eligibility[0]["tau"], 50.0);
+        let blank_trace = serde_json::to_value(neuromod::EligibilityTrace::default())
+            .expect("serialize eligibility trace");
+        assert_eq!(eligibility[0], blank_trace);
 
         let restored: SpikingNetwork =
             serde_json::from_value(json).expect("deserialize neuromod 0.6 network");
