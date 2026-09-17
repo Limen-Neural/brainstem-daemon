@@ -337,9 +337,15 @@ fn run_tick(
     }
 }
 
-/// decode_inputs now takes an IngressPacket.
-/// When packet.modulators is None (the common stub path in PR A), we return defaults.
-/// This mirrors the previous "short readout" fallback behavior.
+/// Decode stimuli plus a `neuromod` 0.6 modulator snapshot from an
+/// [`IngressPacket`].
+///
+/// `packet.modulators` is already in 0.6 order (dopamine, serotonin,
+/// acetylcholine, norepinephrine). The `corpus-ipc` ZMQ adapter converts
+/// the corpus-ipc 0.1 Nero tail before this function sees it, so cortisol/tempo
+/// are never copied onto serotonin/norepinephrine here.
+/// When `packet.modulators` is `None` (the common stub path in PR A), we
+/// return defaults. This mirrors the previous "short readout" fallback.
 fn decode_inputs(packet: &IngressPacket, stimuli: &mut [f32]) -> NeuroModulators {
     let readout = &packet.stimuli;
     let channels = stimuli.len();

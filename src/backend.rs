@@ -19,6 +19,10 @@ use anyhow::Result;
 ///
 /// Order matches `neuromod` 0.6: dopamine, serotonin, acetylcholine,
 /// norepinephrine. Do not invent a parallel in-tree modulator struct.
+///
+/// The optional `corpus-ipc` ZMQ adapter converts the 0.1 Nero tail
+/// (dopamine, cortisol, acetylcholine, tempo) into this order before
+/// filling [`IngressPacket::modulators`].
 pub const NEUROMODULATOR_COUNT: usize = 4;
 
 /// Packet returned by a `StimulusSource` for one tick.
@@ -188,8 +192,8 @@ mod zmq_impl {
         }
 
         /// Construct with known channel count so `next_ingress` can split
-        /// stimulus prefix from appended neuromodulator tail
-        /// ([`NEUROMODULATOR_COUNT`] floats: DA / 5-HT / ACh / NE).
+        /// stimulus prefix from the pinned Nero neuromodulator tail
+        /// ([`NEUROMODULATOR_COUNT`] floats: DA / cortisol / ACh / tempo).
         ///
         /// The default `new()` uses `channels=0`, which means the entire readout
         /// is passed as stimuli and no modulators are extracted. Library users
@@ -202,27 +206,57 @@ mod zmq_impl {
         }
     }
 
+    /// Split a `ZmqIpcBackend` readout into stimuli + modulators.
+    ///
+    /// The ZMQ packet is an untyped `f32` vector. This crate's convention is:
+    /// first `channels` floats are stimuli; the next four are the Nero tail
+    /// documented by published `corpus-ipc` 0.1 `NeuromodulatorSnapshot`
+    /// (dopamine, cortisol, acetylcholine, tempo). That snapshot type is not
+    /// parsed here; only the positional layout is preserved.
+    fn split_zmq_readout(readout: Vec<f32>, channels: usize) -> IngressPacket {
+        if channels > 0 && readout.len() > channels {
+            let stimuli = readout[..channels].to_vec();
+            let modulators = if readout.len() >= channels + NEUROMODULATOR_COUNT {
+                Some(pinned_nero_tail_to_v06(
+                    &readout[channels..channels + NEUROMODULATOR_COUNT],
+                ))
+            } else {
+                None
+            };
+            IngressPacket {
+                stimuli,
+                modulators,
+            }
+        } else {
+            IngressPacket {
+                stimuli: readout,
+                modulators: None,
+            }
+        }
+    }
+
+    /// Convert the corpus-ipc 0.1 Nero 4-float tail onto `neuromod` 0.6
+    /// [`IngressPacket`] order (dopamine, serotonin, acetylcholine,
+    /// norepinephrine).
+    ///
+    /// Cortisol and tempo have no 0.6 analogue. Leave serotonin /
+    /// norepinephrine at `NeuroModulators::default()` rather than treating
+    /// cortisol as 5-HT or tempo as NE.
+    fn pinned_nero_tail_to_v06(tail: &[f32]) -> Vec<f32> {
+        debug_assert!(tail.len() >= NEUROMODULATOR_COUNT);
+        let defaults = neuromod::NeuroModulators::default();
+        vec![
+            tail[0],
+            defaults.serotonin,
+            tail[2],
+            defaults.norepinephrine,
+        ]
+    }
+
     impl StimulusSource for ZmqStimulusSource {
         fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
             let readout = self.inner.process_batch(&[])?;
-            let ch = self.channels;
-            if ch > 0 && readout.len() > ch {
-                let stimuli = readout[..ch].to_vec();
-                let modulators = if readout.len() >= ch + NEUROMODULATOR_COUNT {
-                    Some(readout[ch..ch + NEUROMODULATOR_COUNT].to_vec())
-                } else {
-                    None
-                };
-                Ok(Some(IngressPacket {
-                    stimuli,
-                    modulators,
-                }))
-            } else {
-                Ok(Some(IngressPacket {
-                    stimuli: readout,
-                    modulators: None,
-                }))
-            }
+            Ok(Some(split_zmq_readout(readout, self.channels)))
         }
 
         fn initialize(&mut self, model_path: Option<&str>) -> Result<()> {
@@ -294,6 +328,42 @@ mod zmq_impl {
                 .map_err(|_| anyhow::anyhow!("ZMQ socket mutex poisoned"))?;
             guard.socket.send(payload, 0)?;
             Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn zmq_tail_forwards_da_ach_and_drops_cortisol_tempo() {
+            let defaults = neuromod::NeuroModulators::default();
+            // readout = [stim0, stim1, DA, cortisol, ACh, tempo]
+            let packet = split_zmq_readout(vec![1.0, 2.0, 0.5, 0.9, 0.3, 1.5], 2);
+            assert_eq!(packet.stimuli, vec![1.0, 2.0]);
+            let mods = packet
+                .modulators
+                .expect("full Nero tail should produce modulators");
+            assert_eq!(mods[0], 0.5);
+            assert_eq!(mods[1], defaults.serotonin);
+            assert_eq!(mods[2], 0.3);
+            assert_eq!(mods[3], defaults.norepinephrine);
+            assert_ne!(mods[1], 0.9, "cortisol must not be copied onto serotonin");
+            assert_ne!(mods[3], 1.5, "tempo must not be copied onto norepinephrine");
+        }
+
+        #[test]
+        fn zmq_short_tail_omits_modulators() {
+            let packet = split_zmq_readout(vec![1.0, 2.0, 0.5], 2);
+            assert_eq!(packet.stimuli, vec![1.0, 2.0]);
+            assert!(packet.modulators.is_none());
+        }
+
+        #[test]
+        fn zmq_zero_channels_passes_whole_readout_as_stimuli() {
+            let packet = split_zmq_readout(vec![0.1, 0.2, 0.3, 0.4], 0);
+            assert_eq!(packet.stimuli, vec![0.1, 0.2, 0.3, 0.4]);
+            assert!(packet.modulators.is_none());
         }
     }
 }

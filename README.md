@@ -42,11 +42,11 @@ The optional `corpus-ipc` feature depends on the published `corpus-ipc` crate (`
 
 ## Building
 
-Requires **Rust 1.98.1 only**. That version is the single source of truth
-across `rust-toolchain.toml` `channel`, `Cargo.toml` `rust-version`,
-`.github/workflows/ci.yml` `toolchain:`, and `Dockerfile` `FROM rust:`
-(see [REVIEW.md](REVIEW.md) "MSRV pin rule"). Do not use other toolchains.
-It matches published `corpus-ipc` 0.1 and the rest of the Spikenaut software stack.
+Requires **Rust 1.98.1 only**. Do not use other toolchains.
+Keep every pin in [REVIEW.md](REVIEW.md) "MSRV pin rule" on that version:
+`rust-toolchain.toml`, `Cargo.toml`, CI `toolchain:`, `Dockerfile`,
+`.devin/blueprint.yaml`, and the docs listed there.
+It matches published `corpus-ipc` 0.1 and the rest of the Spikenaut stack.
 
 ```bash
 # Release build, default stub backend (no libzmq)
@@ -256,7 +256,7 @@ restorecon -Rv ~/.config/soma
 
 ### Relationship to other projects
 
-- **`neuromod`** — crates.io **0.6.0** (`neuromod = "0.6.0"`; Cargo's pre-1.0 range stays on 0.6.z). The daemon configures dimensions and drives `SpikingNetwork::step` on every tick (`step` remains the thread-local RNG wrapper; `step_with_rng` is unused here). The optional 4-float ingress tail is dopamine, serotonin, acetylcholine, norepinephrine (unchanged from 0.5; `cortisol` / `tempo` / `aux_dopamine` are gone). Checkpoint loading ([#41](https://github.com/Limen-Neural/brainstem-daemon/issues/41)) must deserialize this crate's `SpikingNetwork` — 0.6.0 JSON includes `stdp_config` and per-LIF `eligibility`. Do not fork those types in-tree.
+- **`neuromod`** — crates.io **0.6.0** (`neuromod = "0.6.0"`; Cargo's pre-1.0 range stays on 0.6.z). The daemon configures dimensions and drives `SpikingNetwork::step` on every tick (`step` remains the thread-local RNG wrapper; `step_with_rng` is unused here). The library `IngressPacket` 4-float tail is dopamine, serotonin, acetylcholine, norepinephrine (unchanged from 0.5; `cortisol` / `tempo` / `aux_dopamine` are gone). With `--features corpus-ipc`, `ZmqStimulusSource` splits the untyped ZMQ readout using corpus-ipc 0.1 Nero order (dopamine, cortisol, acetylcholine, tempo) and converts explicitly: DA and ACh are forwarded; cortisol and tempo are dropped rather than remapped onto serotonin / norepinephrine. Checkpoint loading ([#41](https://github.com/Limen-Neural/brainstem-daemon/issues/41)) must deserialize this crate's `SpikingNetwork` — 0.6.0 JSON includes `stdp_config` and per-LIF `eligibility`. Do not fork those types in-tree.
 - **`limbic-critic`** — expected to send neuromodulator / critic signals over the `corpus-ipc` ingress channel when that feature is enabled. The daemon applies them but does not generate them. The default stub path does not open an ingress socket.
 - **`silicon-bridge`** — consumes the daemon's outbound spike stream (ZeroMQ PUB) when the `corpus-ipc` feature is enabled. The daemon does not know what silicon-bridge does with the spikes. The default stub sink is a no-op.
 - **`Spikenaut-Hardware`** — physical hardware coordination is out of scope; the daemon publishes logical spike events only.
