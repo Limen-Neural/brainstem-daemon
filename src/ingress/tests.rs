@@ -1,14 +1,29 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright 2026 Raul Montoya Cardenas
 
+use std::sync::mpsc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::backend::IngressPacket;
 
 use super::{
-    BoundedIngress, ClassMetrics, EnqueueOutcome, IngressConfig, MAX_QUEUE_CAPACITY, MessageClass,
-    OverflowPolicy,
+    BoundedIngress, ClassMetrics, EnqueueOutcome, IngressConfig, MAX_BLOCK_TIMEOUT_MS,
+    MAX_QUEUE_CAPACITY, MessageClass, OverflowPolicy,
 };
+
+fn wait_until(timeout: Duration, mut pred: impl FnMut() -> bool) -> bool {
+    let started = Instant::now();
+    loop {
+        if pred() {
+            return true;
+        }
+        if started.elapsed() >= timeout {
+            return pred();
+        }
+        thread::yield_now();
+    }
+}
 
 fn pkt(tag: f32) -> IngressPacket {
     IngressPacket {
@@ -213,9 +228,14 @@ fn try_enqueue_never_blocks_block_timeout_class() {
             .try_enqueue(MessageClass::Control, pkt(1.0))
             .accepted()
     );
+    let started = Instant::now();
     assert_eq!(
         ingress.try_enqueue(MessageClass::Control, pkt(2.0)),
         EnqueueOutcome::Rejected
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(50),
+        "try_enqueue must return without honoring block_timeout_ms"
     );
 }
 
@@ -229,13 +249,22 @@ fn shutdown_unblocks_waiting_producer() {
     assert!(ingress.enqueue(MessageClass::Control, pkt(1.0)).accepted());
 
     let producer = ingress.clone();
-    let handle = thread::spawn(move || producer.enqueue(MessageClass::Control, pkt(2.0)));
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let outcome = producer.enqueue(MessageClass::Control, pkt(2.0));
+        let _ = tx.send(outcome);
+    });
 
-    while ingress.metrics().control.producer_waits == 0 {
-        thread::yield_now();
-    }
+    assert!(
+        wait_until(Duration::from_secs(2), || {
+            ingress.metrics().control.producer_waits > 0
+        }),
+        "producer never entered block_timeout wait"
+    );
     ingress.shutdown();
-    let outcome = handle.join().expect("producer thread panicked");
+    let outcome = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("producer hung after shutdown");
     assert_eq!(outcome, EnqueueOutcome::Shutdown);
     assert!(ingress.is_shutdown());
 
@@ -245,6 +274,20 @@ fn shutdown_unblocks_waiting_producer() {
     );
     let m = ingress.metrics().control;
     assert!(m.shutdown_refused >= 1);
+}
+
+#[test]
+fn shutdown_rejects_every_class() {
+    let ingress = BoundedIngress::new(IngressConfig::tiny_fixture()).unwrap();
+    ingress.shutdown();
+    for class in MessageClass::ALL {
+        assert_eq!(
+            ingress.enqueue(class, pkt(1.0)),
+            EnqueueOutcome::Shutdown,
+            "{class:?} accepted after shutdown"
+        );
+    }
+    assert!(ingress.is_shutdown());
 }
 
 #[test]
@@ -314,6 +357,19 @@ fn capacity_above_max_is_rejected_at_construction() {
 }
 
 #[test]
+fn block_timeout_above_max_is_rejected_at_construction() {
+    let cfg = IngressConfig {
+        block_timeout_ms: MAX_BLOCK_TIMEOUT_MS + 1,
+        ..IngressConfig::default()
+    };
+    let err = BoundedIngress::new(cfg)
+        .err()
+        .expect("expected oversized block_timeout_ms to fail")
+        .to_string();
+    assert!(err.contains("MAX_BLOCK_TIMEOUT_MS"));
+}
+
+#[test]
 fn oversize_payload_is_rejected() {
     let mut cfg = IngressConfig::tiny_fixture();
     cfg.max_payload_len = 2;
@@ -349,5 +405,25 @@ fn admit_skips_empty_backend_placeholder() {
     let _ = ingress.enqueue(MessageClass::Sensory, pkt(7.0));
     ingress.admit_backend_packet(IngressPacket::default());
     assert_eq!(ingress.metrics().sensory.depth, 1);
+    assert_eq!(ingress.metrics().reward.depth, 0);
     assert_eq!(ingress.pop(MessageClass::Sensory).unwrap().stimuli[0], 7.0);
+}
+
+#[test]
+fn admit_empty_stimuli_still_enqueues_modulators() {
+    let ingress = BoundedIngress::new(IngressConfig::tiny_fixture()).unwrap();
+    ingress.admit_backend_packet(IngressPacket {
+        stimuli: Vec::new(),
+        modulators: Some(vec![1.0, 2.0, 3.0, 4.0]),
+    });
+    assert_eq!(ingress.metrics().sensory.depth, 0);
+    assert_eq!(ingress.metrics().reward.depth, 1);
+    assert_eq!(
+        ingress
+            .pop(MessageClass::Reward)
+            .unwrap()
+            .modulators
+            .unwrap()[0],
+        1.0
+    );
 }

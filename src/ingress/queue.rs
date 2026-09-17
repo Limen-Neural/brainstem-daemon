@@ -96,6 +96,11 @@ impl BoundedQueue {
         EnqueueOutcome::Shutdown
     }
 
+    pub(super) fn refuse_closed(&self) -> EnqueueOutcome {
+        let mut guard = self.lock();
+        self.refuse_shutdown(&mut guard)
+    }
+
     pub(super) fn push(&self, packet: IngressPacket, wait: WaitMode) -> EnqueueOutcome {
         if self.payload_too_large(&packet) {
             let mut guard = self.lock();
@@ -108,7 +113,8 @@ impl BoundedQueue {
         let deadline = match wait {
             WaitMode::Never => None,
             WaitMode::HonorPolicy if self.block_timeout.is_zero() => None,
-            WaitMode::HonorPolicy => Some(Instant::now() + self.block_timeout),
+            // checked_add: a Duration that overflows Instant must not panic.
+            WaitMode::HonorPolicy => Instant::now().checked_add(self.block_timeout),
         };
 
         let mut guard = self.lock();
@@ -230,10 +236,6 @@ impl BoundedQueue {
         guard.closed = true;
         self.not_full.notify_all();
         self.not_empty.notify_all();
-    }
-
-    pub(super) fn is_closed(&self) -> bool {
-        self.lock().closed
     }
 
     pub(super) fn metrics(&self) -> ClassMetrics {

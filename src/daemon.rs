@@ -58,7 +58,10 @@ pub struct DaemonConfig {
     pub runtime_mode: RuntimeMode,
     #[serde(default)]
     pub services: Vec<ServiceConfig>,
-    /// Bounded per-class ingress. Omitted keys keep the documented defaults.
+    /// Bounded per-class ingress. Omitted TOML keys (and an omitted `[ingress]`
+    /// section) keep [`IngressConfig::default`]. Rust struct literals still
+    /// need this field; use `IngressConfig::default()` or `..` with a complete
+    /// value. Serde defaults do not apply to struct literals.
     #[serde(default)]
     pub ingress: IngressConfig,
 }
@@ -440,12 +443,7 @@ fn run_tick(
         ingress.admit_backend_packet(packet);
     }
     let drained = ingress.drain_for_tick();
-    if !drained.control.is_empty() {
-        info!(
-            count = drained.control.len(),
-            "drained control-class ingress ahead of bulk"
-        );
-    }
+    observe_control_envelopes(&drained.control);
     let packet = drained.into_packet();
 
     let modulators = decode_inputs(&packet, stimuli);
@@ -505,6 +503,22 @@ fn run_tick(
     if let Err(e) = sink.emit(spike_buf, now) {
         warn!("Failed to emit spikes: {e}");
     }
+}
+
+/// Observe drained in-band control/safety envelopes.
+///
+/// LIM-1216 bounds and prioritizes this class so it cannot starve behind bulk
+/// telemetry. There is no network control actuator in this crate; OS
+/// `SIGINT`/`SIGTERM` remain the live shutdown path. Callers that inject
+/// control packets can inspect `DrainedTick.control` via `drain_for_tick`.
+fn observe_control_envelopes(packets: &[IngressPacket]) {
+    if packets.is_empty() {
+        return;
+    }
+    info!(
+        count = packets.len(),
+        "observed in-band control envelopes (no network actuator; OS signals remain shutdown)"
+    );
 }
 
 /// decode_inputs now takes an IngressPacket.
@@ -575,9 +589,7 @@ mod tests {
     }
 
     fn write_config_toml(stem: &str, body: &str) -> PathBuf {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("test-toml");
+        let dir = std::env::temp_dir().join("brainstem-daemon-test-toml");
         std::fs::create_dir_all(&dir).expect("create test-toml dir");
         let path = dir.join(format!(
             "{stem}-{}-{:?}.toml",

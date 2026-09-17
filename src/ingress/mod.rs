@@ -21,6 +21,7 @@ mod queue;
 mod tests;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -31,6 +32,9 @@ use queue::{BoundedQueue, WaitMode};
 
 /// Hard cap so a TOML typo cannot request an enormous `VecDeque`.
 pub const MAX_QUEUE_CAPACITY: usize = 16_384;
+
+/// Hard cap so `block_timeout` cannot overflow platform `Instant` addition.
+pub const MAX_BLOCK_TIMEOUT_MS: u64 = 86_400_000;
 
 /// Low-cardinality label set for ingress metrics (four values).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -236,9 +240,17 @@ impl IngressConfig {
     }
 
     /// Capacities must be in `1..=MAX_QUEUE_CAPACITY`. Payload length must be ≥ 1.
+    /// `block_timeout_ms` must be in `0..=MAX_BLOCK_TIMEOUT_MS`.
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.max_payload_len == 0 {
             anyhow::bail!("ingress max_payload_len must be >= 1");
+        }
+        if self.block_timeout_ms > MAX_BLOCK_TIMEOUT_MS {
+            anyhow::bail!(
+                "ingress block_timeout_ms {} exceeds MAX_BLOCK_TIMEOUT_MS ({})",
+                self.block_timeout_ms,
+                MAX_BLOCK_TIMEOUT_MS
+            );
         }
         for class in [
             MessageClass::Sensory,
@@ -330,6 +342,7 @@ impl DrainedTick {
 struct IngressShared {
     config: IngressConfig,
     queues: [BoundedQueue; 4],
+    shutting_down: AtomicBool,
 }
 
 /// Cloneable handle to the four bounded class queues.
@@ -361,6 +374,7 @@ impl BoundedIngress {
                     make(MessageClass::Telemetry),
                 ],
                 config,
+                shutting_down: AtomicBool::new(false),
             }),
         })
     }
@@ -373,9 +387,18 @@ impl BoundedIngress {
         &self.inner.queues[class.index()]
     }
 
+    fn push(&self, class: MessageClass, packet: IngressPacket, wait: WaitMode) -> EnqueueOutcome {
+        // Shared flag is set before any per-queue close so a producer racing
+        // shutdown cannot land on a still-open later class.
+        if self.inner.shutting_down.load(Ordering::Acquire) {
+            return self.queue(class).refuse_closed();
+        }
+        self.queue(class).push(packet, wait)
+    }
+
     /// Enqueue honoring the class policy, including `block_timeout` waits.
     pub fn enqueue(&self, class: MessageClass, packet: IngressPacket) -> EnqueueOutcome {
-        self.queue(class).push(packet, WaitMode::HonorPolicy)
+        self.push(class, packet, WaitMode::HonorPolicy)
     }
 
     /// Never wait. `block_timeout` queues reject immediately when full.
@@ -383,11 +406,12 @@ impl BoundedIngress {
     /// The tick loop uses this so admitting a backend packet cannot stall the
     /// 1 kHz cadence.
     pub fn try_enqueue(&self, class: MessageClass, packet: IngressPacket) -> EnqueueOutcome {
-        self.queue(class).push(packet, WaitMode::Never)
+        self.push(class, packet, WaitMode::Never)
     }
 
     /// Split a backend packet onto the sensory and reward queues.
-    /// Empty placeholders are skipped so they cannot evict real producer events.
+    /// Empty `stimuli` skip the sensory queue (they cannot evict in-process
+    /// sensory). Non-empty `modulators` are still admitted to the reward queue.
     pub fn admit_backend_packet(&self, packet: IngressPacket) {
         let IngressPacket {
             stimuli,
@@ -429,13 +453,14 @@ impl BoundedIngress {
 
     /// Unblock waiting producers and refuse further enqueue.
     pub fn shutdown(&self) {
+        self.inner.shutting_down.store(true, Ordering::Release);
         for q in &self.inner.queues {
             q.shutdown();
         }
     }
 
     pub fn is_shutdown(&self) -> bool {
-        self.inner.queues.iter().all(|q| q.is_closed())
+        self.inner.shutting_down.load(Ordering::Acquire)
     }
 
     pub fn metrics(&self) -> IngressMetrics {
