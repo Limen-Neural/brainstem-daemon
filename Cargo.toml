@@ -53,6 +53,10 @@ corpus-ipc = ["dep:corpus-ipc", "dep:zmq"]
 name = "brainstem-daemon"
 path = "src/bin/brainstem_daemon.rs"
 
+[[test]]
+name = "thalamic_brainstem_smoke"
+required-features = ["corpus-ipc"]
+
 # Cargo profiles (dev / release / release-with-debug / test / bench).
 # Keep settings conservative — no maximum-optimization knobs that over-promise
 # for a headless inference daemon. Aligned with the `neuromod` profile pattern.

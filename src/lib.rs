@@ -14,10 +14,11 @@ pub mod runtime;
 
 // Re-export the new pluggable I/O surface (pub from day one).
 pub use backend::{
-    BackendPair, IngressPacket, NEUROMODULATOR_COUNT, SpikeEvent, SpikeSink, StimulusSource,
+    BackendPair, CollectingSpikeSink, IngressPacket, NEUROMODULATOR_COUNT, SpikeEvent, SpikeSink,
+    StimulusSource,
 };
 pub use checkpoint::{ModelProvenance, restore_network};
-pub use daemon::RuntimeMode;
+pub use daemon::{BrainstemDaemon, DaemonConfig, RuntimeMode, RuntimeStats};
 pub use health::{
     CheckpointIdentity, FakeClock, FatalCode, HealthEvent, HealthHandle, HealthLimits,
     HealthMachine, HealthPhase, HealthSnapshot, ReasonCode, SystemClock,

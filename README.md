@@ -149,7 +149,7 @@ Default Cargo features are empty (`default = []` in `Cargo.toml`). That path use
 
 Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`. Those always inject `BackendPair::stub()`. Only `src/bin/brainstem_daemon.rs` constructs `ZmqStimulusSource` + `ZmqSpikeSink` when `corpus-ipc` is on.
 
-Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. `BrainstemDaemon::run` / `run_with_restored_network` is the sole caller of `StimulusSource::initialize` (the binary no longer initializes first, so the pinned ZMQ backend is not reconnected). A failing `initialize` marks health **fatal** and never becomes ready.
+Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. `BrainstemDaemon::run` / `run_with_restored_network` / `run_for_ticks` call `StimulusSource::initialize` (the binary no longer initializes first, so the pinned ZMQ backend is not reconnected). A failing `initialize` marks health **fatal** and never becomes ready.
 
 Health snapshots, probe paths, and the transition table live in [`docs/health.md`](docs/health.md).
 
@@ -166,20 +166,22 @@ Health snapshots, probe paths, and the transition table live in [`docs/health.md
 | `ingress` | used (bounded class queues in the tick loop; health reports aggregate fill) | used (same queues wrap backend packets before the network step) |
 | `spine_sub_port` | parsed, **no-op** | sets `CORPUS_IPC_ZMQ_READOUT_IPC` to `tcp://127.0.0.1:<port>` (also sets legacy `SPIKENAUT_ZMQ_READOUT_IPC` for compatibility) |
 | `spine_pub_port` | parsed, **no-op** | binds ZMQ PUB `tcp://*:<port>` |
-| `model_path` | used in **live** mode (sidecar JSON); ignored in **simulation** (`StubStimulusSource::initialize` still ignores it) | same live/simulation gate, then passed literally to `initialize` (no `~` expansion); published `ZmqIpcBackend` currently ignores `_model_path` |
+| `model_path` | used in **live** mode (sidecar JSON); ignored in **simulation** (`StubStimulusSource::initialize` still ignores it) | same live/simulation gate, then passed literally to `initialize` (no `~` expansion); the ZMQ SUB source connects and ignores `_model_path` |
 
 **Settings that only take effect with `corpus-ipc`** (the `brainstem-daemon` binary built `--features corpus-ipc`):
 
 - `spine_sub_port` (drives `CORPUS_IPC_ZMQ_READOUT_IPC`)
 - `spine_pub_port`
-- `CORPUS_IPC_ZMQ_READOUT_IPC` (const `CORPUS_IPC_READOUT_ENV`; this is what published `ZmqIpcBackend::initialize` reads)
+- `CORPUS_IPC_ZMQ_READOUT_IPC` (const `CORPUS_IPC_READOUT_ENV`; this is what `ZmqStimulusSource::initialize` reads when no explicit `connect` endpoint is set)
 
-**Passed through / set, but currently unused by published `corpus-ipc` 0.1:**
+**Passed through / set, but unused by the ZMQ SUB source after connect:**
 
 - `model_path` (literal filesystem path; `~` is not expanded; passed to `initialize`, which names the argument `_model_path` and does not consume it; live-mode restore consumes it before that handshake)
-- `SPIKENAUT_ZMQ_READOUT_IPC` (const `LEGACY_SPIKENAUT_READOUT_ENV`; the binary still sets this alongside `CORPUS_IPC_ZMQ_READOUT_IPC` for older tooling; published `corpus-ipc` does not read it)
+- `SPIKENAUT_ZMQ_READOUT_IPC` (const `LEGACY_SPIKENAUT_READOUT_ENV`; the binary still sets this alongside `CORPUS_IPC_ZMQ_READOUT_IPC` for older tooling)
 
 Under stub those ZMQ TOML keys are still parsed. The env vars are unset by the default binary. Nothing in this crate reads them without the `corpus-ipc` feature.
+
+ZMQ SUB ingress decodes unversioned JSON `IpcMessage` frames (`Stimuli` / `Neuromodulators`) through crates.io `corpus-ipc` 0.1 types. Width, schema token `corpus-ipc.stimulus.v1`, freshness, and future timestamps are rejected without stopping the tick loop. Modulation-only frames are drained in the same tick so they do not consume a sensory period.
 
 ### Runtime modes: simulation vs loaded Spikenaut
 
@@ -215,6 +217,16 @@ The allowed software artifact is the Distill sidecar JSON published as Hugging F
 `neuromod` 0.6.0 has no Distill readout matrix, so live restore **rejects** any present `output_weights` key rather than silently dropping trained readout weights. Legacy sidecars that omit the field still load. The currently published Hugging Face `dataset/merged_v2/snn_model.json` includes `output_weights` and will fail closed until Distill publishes a sidecar that omits that field.
 
 Live restore copies LIF weights, membrane, `last_spike`, `decay_rate`, and `threshold` (also seeding `base_threshold`) and sets `RmStdpConfig.reward_lr = 0` so dopamine-gated R-STDP cannot retrain the Distill matrix. `neuromod` 0.6.0 `SpikingNetwork::step` still assigns `decay_rate` from acetylcholine, blends `threshold` toward `0.05..=0.50`, and L1-renormalizes rows whose weights already sum above `1e-6`. Those are engine contracts; this crate does not fork `step`.
+
+### Thalamic → corpus-ipc → Brainstem smoke
+
+CPU-only integration coverage (no GPU) lives in `tests/thalamic_brainstem_smoke.rs` and is gated on `--features corpus-ipc` so default stub tests never need `libzmq`.
+
+The Thalamic fixture (`tests/fixtures/thalamic_producer.rs`) produces `IpcMessage::Stimuli(StimulusBatch)` from simulated telemetry. It does not import `neuromod` or own a `SpikingNetwork`. Brainstem restores a Distill sidecar JSON checkpoint before ticking, preserves `valid_mask` and `session_id` across the wire, and rejects incompatible schema/JSON loudly. A separate assertion keeps the fixture's safety flag healthy when Brainstem/transport is absent, and a later publish cannot clobber a thermal fault.
+
+```bash
+CC=gcc CXX=g++ cargo test --locked --features corpus-ipc --test thalamic_brainstem_smoke
+```
 
 Simulation is the deliberate test/dev path for a blank network. Do not use it as a stand-in for production Spikenaut.
 

@@ -29,6 +29,7 @@ fn pkt(tag: f32) -> IngressPacket {
     IngressPacket {
         stimuli: vec![tag],
         modulators: None,
+        ..Default::default()
     }
 }
 
@@ -36,6 +37,7 @@ fn reward_pkt(tag: f32) -> IngressPacket {
     IngressPacket {
         stimuli: Vec::new(),
         modulators: Some(vec![tag, 0.0, 0.0, 0.0]),
+        ..Default::default()
     }
 }
 
@@ -390,6 +392,7 @@ fn oversize_payload_is_rejected() {
     let big = IngressPacket {
         stimuli: vec![1.0, 2.0, 3.0],
         modulators: None,
+        ..Default::default()
     };
     assert_eq!(
         ingress.enqueue(MessageClass::Sensory, big),
@@ -405,6 +408,7 @@ fn admit_backend_packet_splits_stimuli_and_modulators() {
     ingress.admit_backend_packet(IngressPacket {
         stimuli: vec![0.5, 0.25],
         modulators: Some(vec![1.0, 2.0, 3.0, 4.0]),
+        ..Default::default()
     });
     let drained = ingress.drain_for_tick();
     let packet = drained.into_packet();
@@ -428,6 +432,7 @@ fn admit_empty_stimuli_still_enqueues_modulators() {
     ingress.admit_backend_packet(IngressPacket {
         stimuli: Vec::new(),
         modulators: Some(vec![1.0, 2.0, 3.0, 4.0]),
+        ..Default::default()
     });
     assert_eq!(ingress.metrics().sensory.depth, 0);
     assert_eq!(ingress.metrics().reward.depth, 1);

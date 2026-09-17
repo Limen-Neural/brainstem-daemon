@@ -17,7 +17,9 @@ All jobs install **Rust 1.98.1** — the same string as `Cargo.toml`
 | `corpus-ipc` | `ubuntu-latest` | `--all-features` (the `corpus-ipc` feature, which enables the optional `zmq` dependency) | clippy, build, test |
 
 Default features are empty. Stub jobs do **not** install `libzmq` and do
-not pass `--features corpus-ipc`.
+not pass `--features corpus-ipc`. The Thalamic → corpus-ipc → Brainstem
+integration smoke (`tests/thalamic_brainstem_smoke.rs`) is compiled only in
+the Linux `corpus-ipc` job (`required-features = ["corpus-ipc"]`).
 
 ## Skips
 

@@ -113,11 +113,16 @@ fn require_live_izh_count(config: &DaemonConfig) -> Result<()> {
 /// Accepts a JSON file, a Hugging Face hub `config.json`, or a directory
 /// containing `snn_model.json` or `dataset/merged_v2/snn_model.json`.
 pub fn resolve_sidecar_path(model_path: &Path) -> Result<PathBuf> {
-    if !model_path.exists() {
-        bail!(
+    match model_path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => bail!(
             "live mode cannot enter the tick loop: checkpoint not found at {}",
             model_path.display()
-        );
+        ),
+        Err(err) => bail!(
+            "live mode cannot enter the tick loop: failed to query checkpoint {}: {err}",
+            model_path.display()
+        ),
     }
 
     if model_path.is_dir() {

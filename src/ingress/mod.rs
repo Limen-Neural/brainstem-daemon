@@ -17,8 +17,16 @@
 
 mod queue;
 
+#[cfg(feature = "corpus-ipc")]
+mod corpus;
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "corpus-ipc")]
+pub use corpus::{
+    IngressError, IngressPolicy, STIMULUS_SCHEMA, accept_ipc_json, accept_ipc_message,
+};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -343,9 +351,15 @@ impl DrainedTick {
     /// control actuator. Callers must inspect `control` (the tick loop logs it)
     /// so those events are observed rather than starved behind bulk.
     pub fn into_packet(self) -> IngressPacket {
+        let sensory = self.sensory.unwrap_or_default();
         IngressPacket {
-            stimuli: self.sensory.map(|p| p.stimuli).unwrap_or_default(),
+            stimuli: sensory.stimuli,
             modulators: self.reward.and_then(|p| p.modulators),
+            valid_mask: sensory.valid_mask,
+            batch_id: sensory.batch_id,
+            timestamp_ns: sensory.timestamp_ns,
+            session_id: sensory.session_id,
+            rejected: sensory.rejected,
         }
     }
 }
@@ -427,6 +441,11 @@ impl BoundedIngress {
         let IngressPacket {
             stimuli,
             modulators,
+            valid_mask,
+            batch_id,
+            timestamp_ns,
+            session_id,
+            rejected,
         } = packet;
         if !stimuli.is_empty() {
             let _ = self.try_enqueue(
@@ -434,6 +453,11 @@ impl BoundedIngress {
                 IngressPacket {
                     stimuli,
                     modulators: None,
+                    valid_mask,
+                    batch_id,
+                    timestamp_ns,
+                    session_id,
+                    rejected,
                 },
             );
         }
@@ -443,6 +467,7 @@ impl BoundedIngress {
                 IngressPacket {
                     stimuli: Vec::new(),
                     modulators: Some(modulators),
+                    ..IngressPacket::default()
                 },
             );
         }

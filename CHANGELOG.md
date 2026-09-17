@@ -44,7 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `## Role and boundary matrix` documentation in `README.md`.
 - Local `StimulusSource` / `SpikeSink` traits + `IngressPacket` / `SpikeEvent` (owned by this crate).
 - `BackendPair` + `BackendPair::stub()` for pluggable I/O.
-- In-crate stub backend (`StubStimulusSource`, `NoopSpikeSink`, `CollectingSpikeSink` under `#[cfg(test)]` for our own tests; not re-exported for downstream test use).
+- In-crate stub backend (`StubStimulusSource`, `NoopSpikeSink`) plus a public
+  `CollectingSpikeSink` for tests and the Thalamic integration smoke harness.
+- CPU-only Thalamic → `corpus-ipc` → Brainstem smoke (`tests/thalamic_brainstem_smoke.rs`,
+  `required-features = ["corpus-ipc"]`). A Thalamic fixture with no `SpikingNetwork`
+  publishes typed `IpcMessage::Stimuli(StimulusBatch)` JSON; Brainstem loads a Distill
+  sidecar, validates schema/width/freshness/`valid_mask`, and ticks through
+  `BrainstemDaemon::run_for_ticks`.
+- Typed `corpus-ipc` ingress (`accept_ipc_json`): schema token
+  `corpus-ipc.stimulus.v1`, channel-width check (or unspecified-width when
+  `expected_channels = 0`), future-timestamp and max-age rejection, session_id
+  passthrough, and `RuntimeStats` accepted/rejected counters. Rejected frames
+  still advance the network. Modulation-only frames are drained in the same tick.
 - `BrainstemDaemon::with_backend(cfg, pair)` constructor for tests and custom backends.
 - Test coverage for the non-`corpus-ipc` (stub) path that runs under `--no-default-features`.
 - Graceful `SIGTERM` handling alongside the existing `SIGINT` (Ctrl-C): the tick loop now
@@ -61,11 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Switch optional `corpus-ipc` from a git pin to crates.io `0.1.0`
-  (`features = ["zmq"]`). ZMQ ingress uses published `ZmqIpcBackend` /
-  `IpcBackend::process_batch`; egress publishes unversioned
-  `IpcMessage::Spikes` JSON. The binary sets `CORPUS_IPC_ZMQ_READOUT_IPC`
-  (what 0.1 reads) and still sets `SPIKENAUT_ZMQ_READOUT_IPC` for older
-  tooling.
+  (`features = ["zmq"]`). ZMQ SUB ingress decodes unversioned JSON
+  `IpcMessage` (`Stimuli` / `Neuromodulators`) with crates.io types; egress
+  publishes unversioned `IpcMessage::Spikes` JSON. The binary sets
+  `CORPUS_IPC_ZMQ_READOUT_IPC` and still sets `SPIKENAUT_ZMQ_READOUT_IPC` for
+  older tooling.
 - Upgrade `neuromod` from 0.4.0 to crates.io **0.6.0** (pre-1.0 range
   `>=0.6.0, <0.7.0`). Ingress modulators map to dopamine / serotonin /
   acetylcholine / norepinephrine; `cortisol`, `tempo`, and `aux_dopamine`
