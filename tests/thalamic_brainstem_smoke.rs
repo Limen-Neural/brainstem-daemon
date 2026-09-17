@@ -9,12 +9,12 @@
 mod thalamic;
 
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
-use brainstem_daemon::checkpoint::{NetworkDims, write_nonblank_checkpoint};
-use brainstem_daemon::daemon::{BrainstemDaemon, DaemonConfig};
-use brainstem_daemon::ingress::{IngressPolicy, accept_ipc_json};
+use brainstem_daemon::daemon::{BrainstemDaemon, DaemonConfig, RuntimeMode};
+use brainstem_daemon::ingress::{IngressConfig, IngressPolicy, accept_ipc_json};
 use brainstem_daemon::{BackendPair, CollectingSpikeSink, IngressPacket, StimulusSource};
 use corpus_ipc::{IpcMessage, StimulusBatch};
 use thalamic::{StimulusTransport, ThalamicProducer};
@@ -22,6 +22,27 @@ use thalamic::{StimulusTransport, ThalamicProducer};
 const CHANNELS: usize = 4;
 const LIF: usize = 4;
 const IZH: usize = 0;
+
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new(prefix: &str) -> Self {
+        let dir =
+            std::env::temp_dir().join(format!("{prefix}-{}-{}", std::process::id(), now_ns()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 struct QueuedStimulusSource {
     packets: VecDeque<Result<IngressPacket, String>>,
@@ -52,15 +73,53 @@ impl StimulusTransport for CaptureTransport {
     }
 }
 
-fn smoke_dims() -> NetworkDims {
-    NetworkDims {
-        lif_count: LIF,
-        izh_count: IZH,
-        channels: CHANNELS,
-    }
+fn smoke_sidecar_json() -> String {
+    r#"{
+        "source": "spikenaut_julia",
+        "encoder": "v3_state_telemetry",
+        "q88": "signed",
+        "frozen_lineage": "thalamic-smoke",
+        "neurons": [
+            {
+                "decay_rate": 0.85,
+                "membrane_potential": 0.0,
+                "threshold": 0.02,
+                "last_spike": false,
+                "weights": [2.0, 0.12, 0.13, 0.14]
+            },
+            {
+                "decay_rate": 0.85,
+                "membrane_potential": 0.0,
+                "threshold": 0.02,
+                "last_spike": false,
+                "weights": [0.15, 0.16, 0.17, 0.18]
+            },
+            {
+                "decay_rate": 0.85,
+                "membrane_potential": 0.0,
+                "threshold": 0.02,
+                "last_spike": false,
+                "weights": [0.19, 0.20, 0.21, 0.22]
+            },
+            {
+                "decay_rate": 0.85,
+                "membrane_potential": 0.0,
+                "threshold": 0.02,
+                "last_spike": false,
+                "weights": [0.23, 0.24, 0.25, 0.26]
+            }
+        ]
+    }"#
+    .to_string()
 }
 
-fn smoke_config(model_path: std::path::PathBuf) -> DaemonConfig {
+fn write_smoke_sidecar(dir: &Path) -> PathBuf {
+    let path = dir.join("snn_model.json");
+    std::fs::write(&path, smoke_sidecar_json()).expect("write sidecar");
+    path
+}
+
+fn smoke_config(model_path: PathBuf) -> DaemonConfig {
     DaemonConfig {
         tick_rate_hz: 1000,
         log_level: "info".into(),
@@ -70,7 +129,9 @@ fn smoke_config(model_path: std::path::PathBuf) -> DaemonConfig {
         lif_count: LIF,
         izh_count: IZH,
         channels: CHANNELS,
+        runtime_mode: RuntimeMode::Live,
         services: Vec::new(),
+        ingress: IngressConfig::default(),
     }
 }
 
@@ -96,14 +157,8 @@ fn thalamic_fixture_has_no_spiking_network() {
 
 #[test]
 fn checkpoint_is_loaded_instead_of_blank_network() {
-    let dir = std::env::temp_dir().join(format!(
-        "brainstem-smoke-ckpt-{}-{}",
-        std::process::id(),
-        now_ns()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("smoke.json");
-    let identity = write_nonblank_checkpoint(&path, "smoke-thalamic-v1", smoke_dims()).unwrap();
+    let dir = TempDir::new("brainstem-smoke-ckpt");
+    let path = write_smoke_sidecar(dir.path());
 
     let source = QueuedStimulusSource {
         packets: VecDeque::new(),
@@ -113,27 +168,20 @@ fn checkpoint_is_loaded_instead_of_blank_network() {
         source: Box::new(source),
         sink: Box::new(sink),
     };
-    let stats = BrainstemDaemon::try_with_backend(smoke_config(path.clone()), pair)
+    let stats = BrainstemDaemon::try_with_backend(smoke_config(path), pair)
         .unwrap()
         .run_for_ticks(1)
         .unwrap();
 
     let loaded = stats.loaded_checkpoint.expect("checkpoint must be loaded");
-    assert_eq!(loaded.model_id, "smoke-thalamic-v1");
-    assert_eq!(loaded.fingerprint, identity.fingerprint);
-    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(loaded.model_id, "spikenaut-snn:thalamic-smoke");
+    assert_eq!(loaded.schema_id, "spikenaut-sidecar-json/v1");
 }
 
 #[test]
 fn typed_frame_crosses_ipc_and_produces_runtime_result() {
-    let dir = std::env::temp_dir().join(format!(
-        "brainstem-smoke-e2e-{}-{}",
-        std::process::id(),
-        now_ns()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("smoke.json");
-    write_nonblank_checkpoint(&path, "smoke-thalamic-v1", smoke_dims()).unwrap();
+    let dir = TempDir::new("brainstem-smoke-e2e");
+    let path = write_smoke_sidecar(dir.path());
 
     let mut thalamic = ThalamicProducer::new();
     let batch = thalamic.simulate_telemetry(42, CHANNELS);
@@ -148,6 +196,7 @@ fn typed_frame_crosses_ipc_and_produces_runtime_result() {
     let packet = accept_ipc_json(&transport.frames[0], &policy, now_ns()).unwrap();
     assert_eq!(packet.batch_id, Some(42));
     assert_eq!(packet.valid_mask, expected_mask);
+    assert_eq!(packet.session_id.as_deref(), Some("thalamic-smoke"));
 
     let source = QueuedStimulusSource {
         packets: VecDeque::from([Ok(packet)]),
@@ -167,7 +216,30 @@ fn typed_frame_crosses_ipc_and_produces_runtime_result() {
     assert_eq!(stats.last_batch_id, Some(42));
     assert_eq!(stats.last_valid_mask, expected_mask);
     assert!(stats.loaded_checkpoint.is_some());
-    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn rejected_frame_is_counted_without_stopping_the_loop() {
+    let dir = TempDir::new("brainstem-smoke-reject");
+    let path = write_smoke_sidecar(dir.path());
+    let source = QueuedStimulusSource {
+        packets: VecDeque::from([Ok(IngressPacket {
+            rejected: true,
+            ..IngressPacket::default()
+        })]),
+    };
+    let sink = CollectingSpikeSink::new();
+    let pair = BackendPair {
+        source: Box::new(source),
+        sink: Box::new(sink),
+    };
+    let stats = BrainstemDaemon::try_with_backend(smoke_config(path), pair)
+        .unwrap()
+        .run_for_ticks(1)
+        .unwrap();
+    assert_eq!(stats.ticks, 1);
+    assert_eq!(stats.rejected_batches, 1);
+    assert_eq!(stats.accepted_batches, 0);
 }
 
 #[test]
@@ -226,7 +298,13 @@ fn thalamic_stays_healthy_when_brainstem_unavailable() {
     assert_eq!(thalamic.publish_errors, 1);
     assert_eq!(thalamic.published, 0);
 
-    // Safety evaluation continues after the failed publish.
+    // A later successful-looking publish must not clobber a thermal fault.
+    thalamic.safety_tick(false);
+    let mut transport = CaptureTransport { frames: Vec::new() };
+    thalamic.publish(Some(&mut transport), &bytes);
+    assert!(!thalamic.safety_healthy);
+    assert_eq!(thalamic.published, 1);
+
     thalamic.safety_tick(true);
     assert!(thalamic.safety_healthy);
     let _still_producing = thalamic.simulate_telemetry(10, CHANNELS);

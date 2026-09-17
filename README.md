@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/Limen-Neural/brainstem-daemon/actions/workflows/ci.yml/badge.svg)](https://github.com/Limen-Neural/brainstem-daemon/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Crates.io](https://img.shields.io/crates/v/brainstem-daemon.svg)](https://crates.io/crates/brainstem-daemon)
+[![docs.rs](https://docs.rs/brainstem-daemon/badge.svg)](https://docs.rs/brainstem-daemon)
 
 Headless spiking neural-network runtime written in Rust.
 
@@ -13,20 +15,45 @@ Headless spiking neural-network runtime written in Rust.
 ## Features
 
 - Modular `neuromod::SpikingNetwork` core (CPU)
+- Live-mode restore of Distill sidecar `snn_model.json` before the tick loop (explicit `simulation` mode for blank networks)
 - Optional **ZeroMQ PUB/SUB** networking via `corpus-ipc`
 - Headless **`brainstem-daemon`** binary for background execution
 
 ---
 
+## Install
+
+From crates.io (binary):
+
+```bash
+cargo install brainstem-daemon
+# Optional ZeroMQ / corpus-ipc backend (needs a C/C++ toolchain; system libzmq is optional):
+cargo install brainstem-daemon --features corpus-ipc
+```
+
+As a library dependency (crates.io, not a git pin):
+
+```toml
+brainstem-daemon = "0.1"
+# Optional ZeroMQ backend:
+brainstem-daemon = { version = "0.1", features = ["corpus-ipc"] }
+```
+
+The optional `corpus-ipc` feature depends on the published `corpus-ipc` crate (`0.1`, `features = ["zmq"]`). The default path uses the in-memory stub backend and does not need ZeroMQ.
+
 ## Building
 
-Requires **Rust 1.98.1 only** (`rust-toolchain.toml`). Do not use other toolchains.
+Requires **Rust 1.98.1 only**. That version is the single source of truth
+across `rust-toolchain.toml` `channel`, `Cargo.toml` `rust-version`,
+`.github/workflows/ci.yml` `toolchain:`, and `Dockerfile` `FROM rust:`
+(see [REVIEW.md](REVIEW.md) "MSRV pin rule"). Do not use other toolchains.
+It matches published `corpus-ipc` 0.1 and the rest of the Spikenaut software stack.
 
 ```bash
 # Release build, default stub backend (no libzmq)
 cargo build --release --bin brainstem-daemon
 
-# Optional ZeroMQ / corpus-ipc backend (needs system libzmq)
+# Optional ZeroMQ / corpus-ipc backend
 cargo build --release --bin brainstem-daemon --features corpus-ipc
 ```
 
@@ -62,10 +89,11 @@ cargo bench                              # profile.bench (when benches exist)
 # ~/.config/soma/daemon.toml
 
 # Engine
-lif_count      = 16        # LIF neurons
-izh_count      = 5         # Izhikevich neurons
-channels       = 16        # expected input channels
-model_path     = "~/models/soma16.mem" # literal path; `~` is not expanded
+lif_count      = 16        # must match the checkpoint LIF count in live mode
+izh_count      = 0         # live Spikenaut sidecars are LIF-only
+channels       = 16        # must match checkpoint input width (ingress contract)
+model_path     = "/var/lib/soma/snn_model.json"  # Distill sidecar JSON; `~` is not expanded
+runtime_mode   = "live"    # default when omitted; "simulation" is the only blank-network path
 
 # Runtime
 tick_rate_hz   = 1000      # loop frequency
@@ -84,13 +112,27 @@ enabled = true
 [[services]]
 name = "critic-ipc"
 enabled = true
+
+# Bounded ingress (optional; defaults shown). Each class has its own
+# capacity and overflow policy so bulk telemetry cannot starve control.
+[ingress]
+sensory_capacity    = 64
+sensory_policy      = "drop_oldest"
+reward_capacity     = 8
+reward_policy       = "coalesce"
+control_capacity    = 16
+control_policy      = "block_timeout"
+telemetry_capacity  = 128
+telemetry_policy    = "drop_oldest"
+block_timeout_ms    = 5
+max_payload_len     = 4096
 ```
 
 ### Backends (temporary)
 
-Default Cargo features are empty (`default = []` in `Cargo.toml`). That path uses the in-memory **stub** backend (`StubStimulusSource` + `NoopSpikeSink`) and does **not** need `libzmq`. The optional `corpus-ipc` feature (same as `--all-features` today) pulls the `corpus-ipc` git dependency and links system ZeroMQ (`libzmq3-dev` on Debian/Ubuntu). It does not vendor ZeroMQ.
+Default Cargo features are empty (`default = []` in `Cargo.toml`). That path uses the in-memory **stub** backend (`StubStimulusSource` + `NoopSpikeSink`) and does **not** need ZeroMQ. The optional `corpus-ipc` feature (same as `--all-features` today) pulls `corpus-ipc` **from crates.io** (`0.1`, `features = ["zmq"]`) plus this crate's optional `zmq` dependency. Published `corpus-ipc` compiles libzmq via `zmq-sys` / `zeromq-src` (a C++ compiler is required; a system `libzmq` package is not). It does not vendor ZeroMQ as a git submodule.
 
-`DaemonConfig` deserialization is **not** feature-gated: `spine_sub_port`, `spine_pub_port`, and `model_path` are still required in TOML even on the stub path (`services` is the only optional field, defaulting to empty). Effect at runtime depends on which backend is **wired**.
+`DaemonConfig` deserialization is **not** feature-gated: `spine_sub_port`, `spine_pub_port`, and `model_path` are still required in TOML even on the stub path (`services` and `runtime_mode` are optional; `runtime_mode` defaults to `live`; `ingress` defaults to the bounded-queue table below). Effect at runtime depends on which backend is **wired** and on `runtime_mode`.
 
 #### Feature truth table
 
@@ -104,39 +146,105 @@ Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`
 
 Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. Call `StimulusSource::initialize(...)` on the source first (as the binary does). Neither constructor nor `run` calls `initialize`; skipping it makes ingress fail with `ZMQ stimulus source not initialized`.
 
-### Integration smoke (Thalamic → corpus-ipc → Brainstem)
-
-`tests/thalamic_brainstem_smoke.rs` is a CPU-only cross-contract harness (no GPU). It runs when the `corpus-ipc` feature is enabled:
-
-```bash
-cargo test --locked --features corpus-ipc --test thalamic_brainstem_smoke
-```
-
-The Thalamic fixture (`tests/fixtures/thalamic_producer.rs`) produces `IpcMessage::Stimuli(StimulusBatch)` from simulated telemetry. It does not import `neuromod` or own a `SpikingNetwork`. Brainstem loads an explicit JSON checkpoint (`write_nonblank_checkpoint`) before ticking, preserves `valid_mask` across the wire, and rejects incompatible schema/JSON loudly. A separate assertion keeps the fixture's safety flag healthy when Brainstem/transport is absent.
-
-The default stub `cargo test` path does not compile this harness (`required-features = ["corpus-ipc"]`).
-
 #### Config keys and env vars
 
 | Setting | Stub (default binary / `::new()`) | `corpus-ipc` binary |
 |---|---|---|
-| `lif_count`, `izh_count`, `channels` | used (network dimensions) | used |
+| `runtime_mode` | used (`live` restores a Spikenaut sidecar before ticks; `simulation` builds a blank network) | used (same gate; independent of ZMQ) |
+| `lif_count`, `izh_count`, `channels` | used (checked against the checkpoint in live mode) | used |
 | `tick_rate_hz` | used | used |
 | `log_level` | binary tracing init only; unused by `::new()` / `run` | binary tracing init only; unused by `::new()` / `run` |
 | `services` | used (`ServiceRegistry`) | used |
-| `spine_sub_port` | parsed, **no-op** | sets `SPIKENAUT_ZMQ_READOUT_IPC` and `CORPUS_IPC_ZMQ_READOUT_IPC` to `tcp://127.0.0.1:<port>` |
+| `ingress` | used (bounded class queues in the tick loop) | used (same queues wrap backend packets before the network step) |
+| `spine_sub_port` | parsed, **no-op** | sets `CORPUS_IPC_ZMQ_READOUT_IPC` to `tcp://127.0.0.1:<port>` (also sets legacy `SPIKENAUT_ZMQ_READOUT_IPC` for compatibility) |
 | `spine_pub_port` | parsed, **no-op** | binds ZMQ PUB `tcp://*:<port>` |
-| `model_path` | parsed; if the file exists it is loaded as a JSON checkpoint, otherwise a blank `with_dimensions` network is used | same checkpoint load; ZMQ source `initialize` only connects the SUB socket |
+| `model_path` | used in **live** mode (sidecar JSON); ignored in **simulation** (`StubStimulusSource::initialize` still ignores it) | same live/simulation gate, then passed literally to `initialize` (no `~` expansion); the ZMQ SUB source connects and ignores `_model_path` |
 
 **Settings that only take effect with `corpus-ipc`** (the `brainstem-daemon` binary built `--features corpus-ipc`):
 
-- `spine_sub_port` (drives `SPIKENAUT_ZMQ_READOUT_IPC` and `CORPUS_IPC_ZMQ_READOUT_IPC`)
+- `spine_sub_port` (drives `CORPUS_IPC_ZMQ_READOUT_IPC`)
 - `spine_pub_port`
-- `SPIKENAUT_ZMQ_READOUT_IPC` / `CORPUS_IPC_ZMQ_READOUT_IPC` (JSON `IpcMessage` SUB endpoint)
+- `CORPUS_IPC_ZMQ_READOUT_IPC` (const `CORPUS_IPC_READOUT_ENV`; this is what `ZmqStimulusSource::initialize` reads when no explicit `connect` endpoint is set)
 
-The ZMQ source subscribes to **JSON** `corpus_ipc::IpcMessage` frames (`Stimuli` / `Neuromodulators`). It does not use the legacy binary readout packet.
+**Passed through / set, but unused by the ZMQ SUB source after connect:**
 
-Under stub those TOML keys are still parsed. The env vars are unset by the default binary. Nothing in this crate reads them without the `corpus-ipc` feature.
+- `model_path` (literal filesystem path; `~` is not expanded; passed to `initialize`, which names the argument `_model_path` and does not consume it; live-mode restore consumes it before that handshake)
+- `SPIKENAUT_ZMQ_READOUT_IPC` (const `LEGACY_SPIKENAUT_READOUT_ENV`; the binary still sets this alongside `CORPUS_IPC_ZMQ_READOUT_IPC` for older tooling)
+
+Under stub those ZMQ TOML keys are still parsed. The env vars are unset by the default binary. Nothing in this crate reads them without the `corpus-ipc` feature.
+
+ZMQ SUB ingress decodes unversioned JSON `IpcMessage` frames (`Stimuli` / `Neuromodulators`) through crates.io `corpus-ipc` 0.1 types. Width, schema token `corpus-ipc.stimulus.v1`, freshness, and future timestamps are rejected without stopping the tick loop. Modulation-only frames are drained in the same tick so they do not consume a sensory period.
+
+### Runtime modes: simulation vs loaded Spikenaut
+
+`runtime_mode` is independent of the stub vs ZMQ **backend**. Backends move stimuli and spikes. The network itself is restored **before** the tick loop:
+
+```text
+resolve model/checkpoint
+        ↓
+parse + source/schema gate (`source = "spikenaut_julia"`, optional `q88`/`encoder`)
+        ↓
+validate dimensions/input contract
+        ↓
+validate finite parameters (including f32 overflow)
+        ↓
+validate nonblank expected weights
+        ↓
+record provenance/hash/model identity
+        ↓
+construct/restore runtime `neuromod` 0.6.0 network (freeze R-STDP `reward_lr`)
+        ↓
+ONLY THEN start live ticks
+```
+
+| `runtime_mode` | Network at tick start | `model_path` |
+|---|---|---|
+| `live` (default) | Distill sidecar `snn_model.json` restored into `neuromod::SpikingNetwork`. Startup **fails closed** on a missing, corrupt, dimension-mismatched, non-finite, or blank artifact, and on any sidecar that carries `output_weights` (including explicit `null`). FPGA Q8.8 `.mem` dumps are rejected. | Required: a sidecar JSON file, a Hugging Face `config.json`, or a directory containing `snn_model.json` / `dataset/merged_v2/snn_model.json` |
+| `simulation` | Blank `SpikingNetwork::with_dimensions(lif_count, izh_count, channels)` (zero input weights). Logs that this is **not** a loaded Spikenaut checkpoint. | Parsed but unused for restoration |
+
+Live mode never falls back to `with_dimensions()` after a failed load. A successful live start logs `schema_id`, `model_id`, source path, SHA-256, encoder, source, and lineage.
+
+The allowed software artifact is the Distill sidecar JSON published as Hugging Face [`rmems/Spikenaut-SNN`](https://huggingface.co/rmems/Spikenaut-SNN) (`dataset/merged_v2/snn_model.json`, plus optional hub `config.json`). That is the same document `Spikenaut-SNN` loads; this crate adapts it into crates.io `neuromod` **0.6.0** rather than inventing a new format or forking `stdp_config` / `eligibility`. The merged_v2 bank is 16 LIF × 16 input channels and has no Izhikevich cells, so live config must use `izh_count = 0`.
+
+`neuromod` 0.6.0 has no Distill readout matrix, so live restore **rejects** any present `output_weights` key rather than silently dropping trained readout weights. Legacy sidecars that omit the field still load. The currently published Hugging Face `dataset/merged_v2/snn_model.json` includes `output_weights` and will fail closed until Distill publishes a sidecar that omits that field.
+
+Live restore copies LIF weights, membrane, `last_spike`, `decay_rate`, and `threshold` (also seeding `base_threshold`) and sets `RmStdpConfig.reward_lr = 0` so dopamine-gated R-STDP cannot retrain the Distill matrix. `neuromod` 0.6.0 `SpikingNetwork::step` still assigns `decay_rate` from acetylcholine, blends `threshold` toward `0.05..=0.50`, and L1-renormalizes rows whose weights already sum above `1e-6`. Those are engine contracts; this crate does not fork `step`.
+
+### Thalamic → corpus-ipc → Brainstem smoke
+
+CPU-only integration coverage (no GPU) lives in `tests/thalamic_brainstem_smoke.rs` and is gated on `--features corpus-ipc` so default stub tests never need `libzmq`.
+
+The Thalamic fixture (`tests/fixtures/thalamic_producer.rs`) produces `IpcMessage::Stimuli(StimulusBatch)` from simulated telemetry. It does not import `neuromod` or own a `SpikingNetwork`. Brainstem restores a Distill sidecar JSON checkpoint before ticking, preserves `valid_mask` and `session_id` across the wire, and rejects incompatible schema/JSON loudly. A separate assertion keeps the fixture's safety flag healthy when Brainstem/transport is absent, and a later publish cannot clobber a thermal fault.
+
+```bash
+CC=gcc CXX=g++ cargo test --locked --features corpus-ipc --test thalamic_brainstem_smoke
+```
+
+Simulation is the deliberate test/dev path for a blank network. Do not use it as a stand-in for production Spikenaut.
+
+```toml
+# Explicit blank network for local tests (not production Spikenaut)
+runtime_mode = "simulation"
+lif_count = 16
+izh_count = 5
+channels = 16
+model_path = "/unused/in/simulation.json"
+```
+
+### Bounded ingress
+
+Every in-process channel that can feed the tick loop goes through `BoundedIngress` (one queue per message class). OS `SIGINT`/`SIGTERM` stay out-of-band in `tokio::select!` so shutdown cannot sit behind bulk traffic.
+
+| Class | Feeds the tick from | Default capacity | Overflow | Why |
+|---|---|---|---|---|
+| `control` | in-band control/safety envelopes | 16 | `block_timeout` (then reject) | Producer sees backpressure; not silently dropped |
+| `reward` | `IngressPacket.modulators` | 8 (depth 0..=1) | `coalesce` | Neuromodulators are a snapshot; keep latest |
+| `sensory` | `StimulusSource` stimuli | 64 | `drop_oldest` | Latest frames matter; losses are counted |
+| `telemetry` | reserved bulk class | 128 | `drop_oldest` | Isolated so it cannot fill the control queue |
+
+`coalesce` always stores at most one occupant. `block_timeout` waits up to `block_timeout_ms` (default 5) against a **single deadline** (spurious wakes do not restart the timer). Queue capacity is capped at `MAX_QUEUE_CAPACITY` (16384). `block_timeout_ms` is capped at `MAX_BLOCK_TIMEOUT_MS` (86400000). `max_payload_len` is capped at `MAX_PAYLOAD_LEN` (1048576); each packet's `stimuli` and `modulators` vectors are capped by the configured `max_payload_len` (default 4096). The tick loop uses `try_enqueue` when admitting a backend packet so the 1 kHz cadence never waits on itself. Empty backend placeholders (`Ok(None)` or empty `stimuli`) are **not** enqueued on the sensory queue, so they cannot evict in-process sensory. Non-empty `modulators` on the same packet are still admitted to the reward queue. In-band control is drained first and observed (logged) each tick; the network step has no control actuator this wave, and OS `SIGINT`/`SIGTERM` remain the live shutdown path.
+
+Each lost or coalesced event increments exactly one of `rejected`, `dropped`, or `coalesced`. Snapshots also record `accepted`, `depth`, `high_water_mark`, `producer_waits`, and `producer_wait_ns` with a `class` label only. `BoundedIngress::shutdown()` unblocks waiters and refuses further enqueue.
 
 The stub backend is always safe for core library builds, tests, and simulation. Example (feature-independent):
 
@@ -233,13 +341,14 @@ restorecon -Rv ~/.config/soma
 | Concern | Owned by `brainstem-daemon` | Not owned |
 |---|---|---|
 | Purpose | Run `neuromod::SpikingNetwork` in a headless loop; ingest stimuli and publish spikes via a pluggable `BackendPair` (stub by default; `corpus-ipc` / ZeroMQ when that feature is enabled) | Training/weight optimization; hardware I/O; business logic (trading/mining) |
-| Configuration | Load `DaemonConfig` from TOML; maintain a config-driven `ServiceRegistry` | Hardcoded service names; upstream `soma-engine` service names |
+| Configuration | Load `DaemonConfig` from TOML; maintain a config-driven `ServiceRegistry`; restore a validated Spikenaut sidecar (or an explicit simulation blank network) before ticks | Hardcoded service names; upstream `soma-engine` service names; silent fallback to a blank `with_dimensions()` network in live mode |
 | Networking | Optional ZeroMQ PUB/SUB when built with `--features corpus-ipc`; `tokio` async runtime. Default stub opens no sockets | Direct exchange adapters; market-data feeds |
 | Dependencies | `neuromod`, `tokio`, `serde`, `tracing`, `clap`; optional `corpus-ipc` + `zmq` behind the `corpus-ipc` feature (off by default) | Exchange/Mining-specific adapters; GPU drivers; weight-training frameworks |
 
 ### Relationship to other projects
 
-- **`neuromod`** — core spiking-network library consumed by the daemon. The daemon configures dimensions and drives `SpikingNetwork::step` on every tick.
+- **`neuromod`** — crates.io **0.6.0** (`neuromod = "0.6.0"`; Cargo's pre-1.0 range stays on 0.6.z). Live mode restores Distill sidecar LIF weights/state into this crate's `SpikingNetwork` (no in-tree fork of `stdp_config` / per-LIF `eligibility`) and then drives `SpikingNetwork::step` on every tick (`step` remains the thread-local RNG wrapper; `step_with_rng` is unused here). Simulation mode constructs a blank network from configured dimensions. The optional 4-float ingress tail is dopamine, serotonin, acetylcholine, norepinephrine (`cortisol` / `tempo` / `aux_dopamine` are gone).
+- **`Spikenaut-SNN` / Hugging Face `rmems/Spikenaut-SNN`** — canonical Distill sidecar (`snn_model.json`). Brainstem loads that artifact into `neuromod` 0.6.0; it does not own training or FPGA export.
 - **`limbic-critic`** — expected to send neuromodulator / critic signals over the `corpus-ipc` ingress channel when that feature is enabled. The daemon applies them but does not generate them. The default stub path does not open an ingress socket.
 - **`silicon-bridge`** — consumes the daemon's outbound spike stream (ZeroMQ PUB) when the `corpus-ipc` feature is enabled. The daemon does not know what silicon-bridge does with the spikes. The default stub sink is a no-op.
 - **`Spikenaut-Hardware`** — physical hardware coordination is out of scope; the daemon publishes logical spike events only.
@@ -249,7 +358,7 @@ restorecon -Rv ~/.config/soma
 
 - `corpus-ipc` (optional Cargo feature `corpus-ipc`, off by default; pulls `zmq`)
 - `neuromod`
-- `tokio`, `serde`, `toml`, `tracing`, `clap`, `anyhow`, `dirs`
+- `tokio`, `serde`, `serde_json`, `toml`, `tracing`, `clap`, `anyhow`, `dirs`, `sha2`
 
 ### Forbidden dependencies / domains
 
@@ -262,8 +371,9 @@ restorecon -Rv ~/.config/soma
 ## Contributing
 
 Local quality gate (fmt, clippy, stub vs optional `corpus-ipc` tests):
-see [`REVIEW.md`](REVIEW.md). GitHub Actions OS matrix and ZeroMQ skips:
-[`docs/ci.md`](docs/ci.md).
+see [REVIEW.md](https://github.com/Limen-Neural/brainstem-daemon/blob/main/REVIEW.md).
+GitHub Actions OS matrix and ZeroMQ skips:
+[docs/ci.md](https://github.com/Limen-Neural/brainstem-daemon/blob/main/docs/ci.md).
 
 ## License
 

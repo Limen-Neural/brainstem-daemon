@@ -15,13 +15,32 @@ use tokio::time;
 use tracing::{error, info, warn};
 
 use crate::backend::{
-    BackendPair, IngressPacket, SpikeEvent as LocalSpikeEvent, SpikeSink, StimulusSource,
+    BackendPair, IngressPacket, NEUROMODULATOR_COUNT, SpikeEvent as LocalSpikeEvent, SpikeSink,
+    StimulusSource,
 };
-use crate::checkpoint::{CheckpointIdentity, NetworkDims, try_load_checkpoint};
+use crate::checkpoint::{self, ModelProvenance};
+use crate::ingress::{BoundedIngress, IngressConfig};
 use crate::registry::{ServiceConfig, ServiceRegistry};
 
-// Keep the const for compatibility when the corpus-ipc feature is used.
-pub const CORPUS_IPC_READOUT_ENV: &str = "SPIKENAUT_ZMQ_READOUT_IPC";
+/// Env var read by crates.io `corpus-ipc` 0.1 `ZmqIpcBackend::initialize`.
+pub const CORPUS_IPC_READOUT_ENV: &str = "CORPUS_IPC_ZMQ_READOUT_IPC";
+/// Legacy name still set by the binary for older tooling; published corpus-ipc ignores it.
+pub const LEGACY_SPIKENAUT_READOUT_ENV: &str = "SPIKENAUT_ZMQ_READOUT_IPC";
+
+/// How the daemon obtains its `SpikingNetwork` at startup.
+///
+/// Live mode is the default and **requires** a validated Spikenaut sidecar
+/// checkpoint at `model_path`. Simulation mode is the only way to tick a
+/// blank `with_dimensions()` network; it must be requested explicitly.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeMode {
+    /// Restore and validate a Distill sidecar `snn_model.json` before ticks.
+    #[default]
+    Live,
+    /// Construct a blank `SpikingNetwork::with_dimensions(...)` for tests.
+    Simulation,
+}
 
 /// Daemon configuration loaded from TOML.
 #[derive(Debug, Deserialize, Clone)]
@@ -34,8 +53,17 @@ pub struct DaemonConfig {
     pub lif_count: usize,
     pub izh_count: usize,
     pub channels: usize,
+    /// `live` (default) or `simulation`. Omitted keys deserialize as live.
+    #[serde(default)]
+    pub runtime_mode: RuntimeMode,
     #[serde(default)]
     pub services: Vec<ServiceConfig>,
+    /// Bounded per-class ingress. Omitted TOML keys (and an omitted `[ingress]`
+    /// section) keep [`IngressConfig::default`]. Rust struct literals still
+    /// need this field; use `IngressConfig::default()` or `..` with a complete
+    /// value. Serde defaults do not apply to struct literals.
+    #[serde(default)]
+    pub ingress: IngressConfig,
 }
 
 impl DaemonConfig {
@@ -70,7 +98,7 @@ pub struct RuntimeStats {
     pub rejected_batches: u64,
     pub last_batch_id: Option<u64>,
     pub last_valid_mask: Option<Vec<bool>>,
-    pub loaded_checkpoint: Option<CheckpointIdentity>,
+    pub loaded_checkpoint: Option<ModelProvenance>,
 }
 
 /// Headless spiking-network daemon.
@@ -80,6 +108,7 @@ pub struct BrainstemDaemon {
     config: DaemonConfig,
     registry: ServiceRegistry,
     backend: BackendPair,
+    ingress: BoundedIngress,
 }
 
 impl BrainstemDaemon {
@@ -124,12 +153,15 @@ impl BrainstemDaemon {
     pub fn try_with_backend(mut config: DaemonConfig, backend: BackendPair) -> Result<Self> {
         validate_neuron_count(&config)?;
 
+        config.ingress.validate()?;
+        let ingress = BoundedIngress::new(config.ingress.clone())?;
         let services = std::mem::take(&mut config.services);
         let registry = ServiceRegistry::from_configs(services);
         Ok(Self {
             config,
             registry,
             backend,
+            ingress,
         })
     }
 
@@ -138,16 +170,64 @@ impl BrainstemDaemon {
         &self.registry
     }
 
+    /// Restore the runtime network from config (live checkpoint or simulation).
+    ///
+    /// Live mode fails closed: an unreadable or incompatible checkpoint is never
+    /// replaced with a blank `with_dimensions()` network.
+    pub fn restore_network(&self) -> Result<(SpikingNetwork, ModelProvenance)> {
+        checkpoint::restore_network(&self.config)
+    }
+
+    /// Cloneable producer handle for in-process classified ingress.
+    pub fn ingress(&self) -> BoundedIngress {
+        self.ingress.clone()
+    }
+
     /// Run the daemon until a termination signal is received.
+    ///
+    /// Restores the network from config. The binary should prefer
+    /// [`Self::run_with_restored_network`] so the checkpoint is read once,
+    /// before sockets open.
     pub async fn run(self) -> Result<()> {
+        self.run_loop(None).await
+    }
+
+    /// Run with a network already restored by the caller (typically the binary).
+    ///
+    /// This avoids a second disk read after the pre-socket fail-closed check.
+    /// Live mode still verifies that `provenance` is a Spikenaut sidecar schema
+    /// and that network dimensions match the daemon config, so a blank or
+    /// mismatched pair cannot enter the tick loop.
+    pub async fn run_with_restored_network(
+        self,
+        network: SpikingNetwork,
+        provenance: ModelProvenance,
+    ) -> Result<()> {
+        self.run_loop(Some((network, provenance))).await
+    }
+
+    async fn run_loop(self, restored: Option<(SpikingNetwork, ModelProvenance)>) -> Result<()> {
         let cfg = self.config;
         let mut backend = self.backend;
-        let mut stats = RuntimeStats::default();
-        let mut network = instantiate_network(&cfg, &mut stats)?;
+        let ingress = self.ingress;
 
         if cfg.tick_rate_hz == 0 || cfg.tick_rate_hz > 1_000_000 {
+            ingress.shutdown();
+            shutdown_backend(&mut backend);
             anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
         }
+
+        let restored = take_restored_network(&cfg, restored);
+        let (mut network, provenance) = match restored {
+            Ok(pair) => pair,
+            Err(err) => {
+                ingress.shutdown();
+                shutdown_backend(&mut backend);
+                return Err(err);
+            }
+        };
+
+        log_model_provenance(&cfg, &provenance);
 
         let tick_duration = Duration::from_nanos(1_000_000_000 / u64::from(cfg.tick_rate_hz));
         let mut ticker = time::interval(tick_duration);
@@ -155,6 +235,7 @@ impl BrainstemDaemon {
 
         let mut stimuli = vec![0.0; cfg.channels];
         let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
+        let mut stats = RuntimeStats::default();
 
         let mut shutdown = std::pin::pin!(shutdown_signal());
 
@@ -167,37 +248,44 @@ impl BrainstemDaemon {
                         &mut *backend.sink,
                         &mut stimuli,
                         &mut spike_buf,
+                        &ingress,
                         &mut stats,
                     );
                 }
                 _ = &mut shutdown => {
                     info!("Termination signal received, shutting down");
+                    ingress.shutdown();
                     break;
                 }
             }
         }
 
-        // Explicit backend lifecycle hooks (flush sink, shutdown source) are invoked
-        // for custom backends. Current built-ins are no-ops, but this satisfies
-        // CodeAnt/CodeRabbit "missing cleanup" notes.
-        if let Err(e) = backend.sink.flush() {
-            warn!("Failed to flush spike sink on shutdown: {e}");
-        }
-        if let Err(e) = backend.source.shutdown() {
-            warn!("Failed to shut down stimulus source: {e}");
-        }
-
+        shutdown_backend(&mut backend);
         Ok(())
     }
 
     /// Drive a bounded number of ticks without waiting for a termination signal.
     ///
     /// Used by the CPU-only Thalamic → corpus-ipc → Brainstem smoke harness.
+    /// Source shutdown always runs, even when sink flush fails.
     pub fn run_for_ticks(self, ticks: u64) -> Result<RuntimeStats> {
         let cfg = self.config;
         let mut backend = self.backend;
+        let ingress = self.ingress;
         let mut stats = RuntimeStats::default();
-        let mut network = instantiate_network(&cfg, &mut stats)?;
+
+        let restored = match take_restored_network(&cfg, None) {
+            Ok(pair) => pair,
+            Err(err) => {
+                ingress.shutdown();
+                shutdown_backend(&mut backend);
+                return Err(err);
+            }
+        };
+        let (mut network, provenance) = restored;
+        log_model_provenance(&cfg, &provenance);
+        stats.loaded_checkpoint = Some(provenance);
+
         let mut stimuli = vec![0.0; cfg.channels];
         let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
 
@@ -208,16 +296,41 @@ impl BrainstemDaemon {
                 &mut *backend.sink,
                 &mut stimuli,
                 &mut spike_buf,
+                &ingress,
                 &mut stats,
             );
         }
 
-        backend.sink.flush().context("failed to flush spike sink")?;
-        backend
+        let flush_err = backend
+            .sink
+            .flush()
+            .context("failed to flush spike sink")
+            .err();
+        let shutdown_err = backend
             .source
             .shutdown()
-            .context("failed to shut down stimulus source")?;
+            .context("failed to shut down stimulus source")
+            .err();
+        ingress.shutdown();
+        if let Some(err) = flush_err {
+            return Err(err);
+        }
+        if let Some(err) = shutdown_err {
+            return Err(err);
+        }
         Ok(stats)
+    }
+}
+
+fn shutdown_backend(backend: &mut BackendPair) {
+    // Explicit backend lifecycle hooks (flush sink, shutdown source) are invoked
+    // for custom backends. Current built-ins are no-ops, but this satisfies
+    // CodeAnt/CodeRabbit "missing cleanup" notes.
+    if let Err(e) = backend.sink.flush() {
+        warn!("Failed to flush spike sink on shutdown: {e}");
+    }
+    if let Err(e) = backend.source.shutdown() {
+        warn!("Failed to shut down stimulus source: {e}");
     }
 }
 
@@ -266,7 +379,37 @@ fn init_runtime_default() -> BackendPair {
     BackendPair::stub()
 }
 
-fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
+fn log_model_provenance(config: &DaemonConfig, provenance: &ModelProvenance) {
+    match config.runtime_mode {
+        RuntimeMode::Simulation => {
+            warn!(
+                schema_id = %provenance.schema_id,
+                model_id = %provenance.model_id,
+                lif_count = config.lif_count,
+                izh_count = config.izh_count,
+                channels = config.channels,
+                "Simulation mode: blank with_dimensions() network; not a loaded Spikenaut checkpoint"
+            );
+        }
+        RuntimeMode::Live => {
+            info!(
+                schema_id = %provenance.schema_id,
+                model_id = %provenance.model_id,
+                path = %provenance.source_path.display(),
+                sha256 = %provenance.content_sha256,
+                encoder = provenance.encoder.as_deref().unwrap_or("-"),
+                source = provenance.source.as_deref().unwrap_or("-"),
+                lineage = provenance.frozen_lineage.as_deref().unwrap_or("-"),
+                lif_count = config.lif_count,
+                izh_count = config.izh_count,
+                channels = config.channels,
+                "Loaded Spikenaut checkpoint; entering tick loop"
+            );
+        }
+    }
+}
+
+pub(crate) fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
     let total = config
         .lif_count
         .checked_add(config.izh_count)
@@ -290,36 +433,59 @@ fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
     Ok(())
 }
 
-fn instantiate_network(cfg: &DaemonConfig, stats: &mut RuntimeStats) -> Result<SpikingNetwork> {
-    let expected = NetworkDims {
-        lif_count: cfg.lif_count,
-        izh_count: cfg.izh_count,
-        channels: cfg.channels,
+fn take_restored_network(
+    cfg: &DaemonConfig,
+    restored: Option<(SpikingNetwork, ModelProvenance)>,
+) -> Result<(SpikingNetwork, ModelProvenance)> {
+    let (network, provenance) = match restored {
+        Some(pair) => pair,
+        None => checkpoint::restore_network(cfg)
+            .context("failed to restore runtime network before entering the tick loop")?,
     };
-    match try_load_checkpoint(&cfg.model_path, expected)? {
-        Some((network, identity)) => {
-            info!(
-                model_id = %identity.model_id,
-                schema_version = identity.schema_version,
-                fingerprint = %identity.fingerprint,
-                path = %identity.path.display(),
-                "loaded explicit checkpoint"
-            );
-            stats.loaded_checkpoint = Some(identity);
-            Ok(network)
+    validate_restored_pair(cfg, &network, &provenance)?;
+    Ok((network, provenance))
+}
+
+fn validate_restored_pair(
+    cfg: &DaemonConfig,
+    network: &SpikingNetwork,
+    provenance: &ModelProvenance,
+) -> Result<()> {
+    match cfg.runtime_mode {
+        RuntimeMode::Live => {
+            if provenance.schema_id != checkpoint::SCHEMA_ID {
+                bail!(
+                    "live mode requires a validated Spikenaut checkpoint (schema {}), got {}",
+                    checkpoint::SCHEMA_ID,
+                    provenance.schema_id
+                );
+            }
         }
-        None => {
-            info!(
-                path = %cfg.model_path.display(),
-                "no checkpoint file present; constructing a blank network from dimensions"
-            );
-            Ok(SpikingNetwork::with_dimensions(
-                cfg.lif_count,
-                cfg.izh_count,
-                cfg.channels,
-            ))
+        RuntimeMode::Simulation => {
+            if provenance.schema_id != checkpoint::SIMULATION_SCHEMA_ID {
+                bail!(
+                    "simulation mode requires schema {}, got {}",
+                    checkpoint::SIMULATION_SCHEMA_ID,
+                    provenance.schema_id
+                );
+            }
         }
     }
+    if network.neurons.len() != cfg.lif_count
+        || network.iz_neurons.len() != cfg.izh_count
+        || network.num_channels != cfg.channels
+    {
+        bail!(
+            "restored network dimensions ({}/{}/{}) do not match config lif_count/izh_count/channels ({}/{}/{})",
+            network.neurons.len(),
+            network.iz_neurons.len(),
+            network.num_channels,
+            cfg.lif_count,
+            cfg.izh_count,
+            cfg.channels
+        );
+    }
+    Ok(())
 }
 
 // Trait-based tick loop (works with or without corpus-ipc feature)
@@ -330,43 +496,47 @@ fn run_tick(
     sink: &mut dyn SpikeSink,
     stimuli: &mut [f32],
     spike_buf: &mut Vec<LocalSpikeEvent>,
+    ingress: &BoundedIngress,
     stats: &mut RuntimeStats,
 ) {
-    let packet = match source.next_ingress() {
-        Ok(Some(p)) => p,
-        Ok(None) => {
-            // Per StimulusSource contract: None means skip ingress this tick but still
-            // advance the network with zeroed stimuli (maintains tick cadence).
-            // decode_inputs will zero-fill the stimuli buffer based on the empty readout.
-            IngressPacket {
-                stimuli: Vec::new(),
-                modulators: None,
-                valid_mask: None,
-                batch_id: None,
-                timestamp_ns: None,
-            }
-        }
+    let backend_packet = match source.next_ingress() {
+        Ok(Some(p)) => Some(p),
+        Ok(None) => None,
         Err(e) => {
-            error!("Failed to receive from stimulus source: {e}");
+            warn!("Failed to receive from stimulus source: {e}");
             stats.rejected_batches += 1;
-            return;
+            None
         }
     };
 
-    if packet.batch_id.is_some() {
-        stats.accepted_batches += 1;
-        stats.last_batch_id = packet.batch_id;
-        stats.last_valid_mask = packet.valid_mask.clone();
+    // Admit through bounded class queues so a bursty backend cannot grow
+    // unbounded in-process, then drain control-first for this tick.
+    // `None` (skip or error) does not enqueue a placeholder that could evict
+    // in-process sensory. decode_inputs zero-fills when drain yields no stimuli.
+    if let Some(packet) = backend_packet {
+        if packet.rejected {
+            stats.rejected_batches += 1;
+        } else if packet.batch_id.is_some() {
+            stats.accepted_batches += 1;
+            stats.last_batch_id = packet.batch_id;
+            stats.last_valid_mask.clone_from(&packet.valid_mask);
+        }
+        ingress.admit_backend_packet(packet);
     }
+    let drained = ingress.drain_for_tick();
+    observe_control_envelopes(&drained.control);
+    let packet = drained.into_packet();
 
     let modulators = decode_inputs(&packet, stimuli);
 
     // Note: decode_inputs already zero-fills any remaining channels when packet.stimuli is shorter.
 
+    // `step` is the thread-local RNG wrapper around 0.6 `step_with_rng`.
+    // The generator is not stored on the network and is not checkpointed.
     let spike_ids = match network.step(stimuli, &modulators) {
         Ok(spikes) => spikes,
         Err(e) => {
-            error!("Network step failed: {e:?}");
+            error!("Network step failed: {e}");
             return;
         }
     };
@@ -417,6 +587,22 @@ fn run_tick(
     }
 }
 
+/// Observe drained in-band control/safety envelopes.
+///
+/// LIM-1216 bounds and prioritizes this class so it cannot starve behind bulk
+/// telemetry. There is no network control actuator in this crate; OS
+/// `SIGINT`/`SIGTERM` remain the live shutdown path. Callers that inject
+/// control packets can inspect `DrainedTick.control` via `drain_for_tick`.
+fn observe_control_envelopes(packets: &[IngressPacket]) {
+    if packets.is_empty() {
+        return;
+    }
+    info!(
+        count = packets.len(),
+        "observed in-band control envelopes (no network actuator; OS signals remain shutdown)"
+    );
+}
+
 /// decode_inputs now takes an IngressPacket.
 /// When packet.modulators is None (the common stub path in PR A), we return defaults.
 /// This mirrors the previous "short readout" fallback behavior.
@@ -437,13 +623,12 @@ fn decode_inputs(packet: &IngressPacket, stimuli: &mut [f32]) -> NeuroModulators
     }
 
     match packet.modulators.as_ref() {
-        Some(mods) if mods.len() >= 4 => {
+        Some(mods) if mods.len() >= NEUROMODULATOR_COUNT => {
             return NeuroModulators {
                 dopamine: mods[0],
-                cortisol: mods[1],
+                serotonin: mods[1],
                 acetylcholine: mods[2],
-                tempo: mods[3],
-                aux_dopamine: 0.0,
+                norepinephrine: mods[3],
             };
         }
         _ => {}
@@ -463,12 +648,14 @@ pub(crate) fn run_tick_for_test(
     stimuli: &mut [f32],
     spike_buf: &mut Vec<LocalSpikeEvent>,
 ) {
+    let ingress = BoundedIngress::new(IngressConfig::default()).expect("default ingress");
     run_tick(
         source,
         network,
         sink,
         stimuli,
         spike_buf,
+        &ingress,
         &mut RuntimeStats::default(),
     );
 }
@@ -476,6 +663,7 @@ pub(crate) fn run_tick_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::CollectingSpikeSink;
     use crate::registry::ServiceConfig;
 
     fn sample_config() -> DaemonConfig {
@@ -488,11 +676,35 @@ mod tests {
             lif_count: 16,
             izh_count: 5,
             channels: 16,
+            runtime_mode: RuntimeMode::Simulation,
             services: vec![
                 ServiceConfig::named("telemetry"),
                 ServiceConfig::named("critic-ipc"),
             ],
+            ingress: IngressConfig::default(),
         }
+    }
+
+    fn tagged_packet(tag: f32) -> IngressPacket {
+        IngressPacket {
+            stimuli: vec![tag],
+            modulators: None,
+            ..Default::default()
+        }
+    }
+
+    fn write_config_toml(stem: &str, body: &str) -> PathBuf {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("daemon-test-toml");
+        std::fs::create_dir_all(&dir).expect("create test-toml dir");
+        let path = dir.join(format!(
+            "{stem}-{}-{:?}.toml",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, body).expect("write test toml");
+        path
     }
 
     #[test]
@@ -519,9 +731,7 @@ mod tests {
         let packet = IngressPacket {
             stimuli: vec![0.1, 0.2, 0.3, 0.4],
             modulators: None,
-            valid_mask: None,
-            batch_id: None,
-            timestamp_ns: None,
+            ..Default::default()
         };
         let mut stimuli = vec![0.0; 4];
         let _mods = decode_inputs(&packet, &mut stimuli);
@@ -533,16 +743,34 @@ mod tests {
         let packet = IngressPacket {
             stimuli: vec![0.0; 4],
             modulators: Some(vec![0.5, 0.6, 0.7, 0.8]),
-            valid_mask: None,
-            batch_id: None,
-            timestamp_ns: None,
+            ..Default::default()
         };
         let mut stimuli = vec![0.0; 4];
         let mods = decode_inputs(&packet, &mut stimuli);
         assert_eq!(mods.dopamine, 0.5);
-        assert_eq!(mods.cortisol, 0.6);
+        assert_eq!(mods.serotonin, 0.6);
         assert_eq!(mods.acetylcholine, 0.7);
-        assert_eq!(mods.tempo, 0.8);
+        assert_eq!(mods.norepinephrine, 0.8);
+    }
+
+    #[test]
+    fn decode_inputs_ignores_extra_modulator_tail() {
+        let packet = IngressPacket {
+            stimuli: vec![0.0; 2],
+            modulators: Some(vec![0.1, 0.2, 0.3, 0.4, 0.9]),
+            ..Default::default()
+        };
+        let mut stimuli = vec![0.0; 2];
+        let mods = decode_inputs(&packet, &mut stimuli);
+        assert_eq!(
+            mods,
+            NeuroModulators {
+                dopamine: 0.1,
+                serotonin: 0.2,
+                acetylcholine: 0.3,
+                norepinephrine: 0.4,
+            }
+        );
     }
 
     #[test]
@@ -550,9 +778,7 @@ mod tests {
         let packet = IngressPacket {
             stimuli: vec![0.1, 0.2],
             modulators: None,
-            valid_mask: None,
-            batch_id: None,
-            timestamp_ns: None,
+            ..Default::default()
         };
         let mut stimuli = vec![0.0; 4];
         let mods = decode_inputs(&packet, &mut stimuli);
@@ -568,6 +794,7 @@ mod tests {
             valid_mask: Some(vec![true, false, true, true]),
             batch_id: Some(1),
             timestamp_ns: Some(1),
+            ..Default::default()
         };
         let mut stimuli = vec![0.0; 4];
         let _mods = decode_inputs(&packet, &mut stimuli);
@@ -622,9 +849,166 @@ mod tests {
     }
 
     #[test]
-    fn stub_backend_basic_tick() {
-        use crate::backend::CollectingSpikeSink;
+    fn omitted_runtime_mode_deserializes_as_live() {
+        let text = r#"
+tick_rate_hz = 1000
+log_level = "info"
+spine_sub_port = 5555
+spine_pub_port = 5556
+model_path = "snn_model.json"
+lif_count = 16
+izh_count = 0
+channels = 16
+"#;
+        let cfg: DaemonConfig = toml::from_str(text).expect("toml");
+        assert_eq!(cfg.runtime_mode, RuntimeMode::Live);
+    }
 
+    #[test]
+    fn live_restore_fails_closed_without_replacing_with_blank_network() {
+        let mut cfg = sample_config();
+        cfg.runtime_mode = RuntimeMode::Live;
+        cfg.izh_count = 0;
+        cfg.model_path = PathBuf::from("/no/such/snn_model.json");
+        let daemon = BrainstemDaemon::try_new(cfg).expect("construction does not load weights");
+        let err = match daemon.restore_network() {
+            Ok(_) => panic!("live mode must fail closed"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("checkpoint not found"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_fails_before_tick_loop_when_live_checkpoint_is_missing() {
+        let mut cfg = sample_config();
+        cfg.runtime_mode = RuntimeMode::Live;
+        cfg.izh_count = 0;
+        cfg.model_path = PathBuf::from("/no/such/snn_model.json");
+        let daemon = BrainstemDaemon::try_new(cfg).unwrap();
+        let ingress = daemon.ingress();
+        let result = tokio::time::timeout(Duration::from_millis(500), daemon.run()).await;
+        let inner = result.expect("run must return immediately rather than tick");
+        assert!(inner.is_err());
+        assert!(
+            ingress.is_shutdown(),
+            "startup failure must close ingress so blocked producers do not wait out block_timeout_ms"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_shuts_down_ingress_when_tick_rate_invalid() {
+        let mut cfg = sample_config();
+        cfg.tick_rate_hz = 0;
+        let daemon = BrainstemDaemon::try_new(cfg).unwrap();
+        let ingress = daemon.ingress();
+        let result = tokio::time::timeout(Duration::from_millis(500), daemon.run()).await;
+        let inner = result.expect("run must return immediately rather than tick");
+        assert!(inner.is_err());
+        assert!(ingress.is_shutdown());
+    }
+
+    #[tokio::test]
+    async fn run_unblocks_waiting_producer_when_startup_fails() {
+        use crate::ingress::{EnqueueOutcome, MessageClass, OverflowPolicy};
+        use std::sync::mpsc;
+        use std::thread;
+
+        let mut cfg = sample_config();
+        cfg.runtime_mode = RuntimeMode::Live;
+        cfg.izh_count = 0;
+        cfg.model_path = PathBuf::from("/no/such/snn_model.json");
+        cfg.ingress.control_policy = OverflowPolicy::BlockTimeout;
+        cfg.ingress.control_capacity = 1;
+        cfg.ingress.block_timeout_ms = 60_000;
+        let daemon = BrainstemDaemon::try_new(cfg).unwrap();
+        let ingress = daemon.ingress();
+        assert!(
+            ingress
+                .enqueue(MessageClass::Control, tagged_packet(1.0))
+                .accepted()
+        );
+
+        let producer = ingress.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = tx.send(producer.enqueue(MessageClass::Control, tagged_packet(2.0)));
+        });
+
+        let started = std::time::Instant::now();
+        while ingress.metrics().control.producer_waits == 0 {
+            if started.elapsed() > Duration::from_secs(2) {
+                panic!("producer never entered block_timeout wait");
+            }
+            thread::yield_now();
+        }
+
+        let inner = tokio::time::timeout(Duration::from_millis(500), daemon.run())
+            .await
+            .expect("run must return immediately rather than tick");
+        assert!(inner.is_err());
+        let outcome = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("producer hung after failed startup");
+        assert_eq!(outcome, EnqueueOutcome::Shutdown);
+        assert!(ingress.is_shutdown());
+    }
+
+    #[test]
+    fn live_run_rejects_simulation_provenance() {
+        let mut cfg = sample_config();
+        cfg.runtime_mode = RuntimeMode::Live;
+        cfg.izh_count = 0;
+        let network = SpikingNetwork::with_dimensions(cfg.lif_count, cfg.izh_count, cfg.channels);
+        let provenance = ModelProvenance {
+            schema_id: crate::checkpoint::SIMULATION_SCHEMA_ID.to_string(),
+            source_path: PathBuf::from("<simulation>"),
+            content_sha256: "none".to_string(),
+            model_id: "simulation/blank".to_string(),
+            encoder: None,
+            source: None,
+            frozen_lineage: None,
+        };
+        let err = match take_restored_network(&cfg, Some((network, provenance))) {
+            Ok(_) => panic!("live mode must reject a blank simulation pair"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("validated Spikenaut checkpoint"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn live_run_rejects_dimension_mismatched_restored_network() {
+        let mut cfg = sample_config();
+        cfg.runtime_mode = RuntimeMode::Live;
+        cfg.izh_count = 0;
+        let network = SpikingNetwork::with_dimensions(1, 0, 1);
+        let provenance = ModelProvenance {
+            schema_id: crate::checkpoint::SCHEMA_ID.to_string(),
+            source_path: PathBuf::from("snn_model.json"),
+            content_sha256: "abcd".to_string(),
+            model_id: "spikenaut-snn:test".to_string(),
+            encoder: None,
+            source: None,
+            frozen_lineage: None,
+        };
+        let err = match take_restored_network(&cfg, Some((network, provenance))) {
+            Ok(_) => panic!("live mode must reject mismatched dimensions"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("dimensions"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn stub_backend_basic_tick() {
         let mut source = crate::backend::StubStimulusSource;
         let mut sink = CollectingSpikeSink::new();
         let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
@@ -641,6 +1025,343 @@ mod tests {
         );
 
         // Sink should have received one (possibly empty) batch
+        assert_eq!(sink.emitted.len(), 1);
+    }
+
+    struct ScriptedStimulusSource {
+        packet: IngressPacket,
+    }
+
+    impl StimulusSource for ScriptedStimulusSource {
+        fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
+            Ok(Some(self.packet.clone()))
+        }
+
+        fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn tick_once(packet: IngressPacket, network: &mut SpikingNetwork) -> CollectingSpikeSink {
+        let mut source = ScriptedStimulusSource { packet };
+        let mut sink = CollectingSpikeSink::new();
+        let mut stimuli = vec![0.0; network.num_channels];
+        let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+        run_tick_for_test(
+            &mut source,
+            network,
+            &mut sink,
+            &mut stimuli,
+            &mut spike_buf,
+        );
+        sink
+    }
+
+    #[test]
+    fn tick_applies_neuromod_06_modulator_snapshot() {
+        let mut network = SpikingNetwork::with_dimensions(2, 1, 2);
+        let packet = IngressPacket {
+            stimuli: vec![0.0; 2],
+            modulators: Some(vec![0.5, 0.25, 0.8, 0.1]),
+            ..Default::default()
+        };
+
+        let sink = tick_once(packet, &mut network);
+
+        assert_eq!(sink.emitted.len(), 1);
+        assert_eq!(network.global_step, 1);
+        assert_eq!(
+            network.modulators,
+            NeuroModulators {
+                dopamine: 0.5,
+                serotonin: 0.25,
+                acetylcholine: 0.8,
+                norepinephrine: 0.1,
+            }
+        );
+        // Engine assigns LIF decay from acetylcholine: 0.15 - 0.05 * ACh.
+        assert!(
+            network
+                .neurons
+                .iter()
+                .all(|n| (n.decay_rate - 0.11).abs() < 1e-6)
+        );
+    }
+
+    #[test]
+    fn tick_defaults_modulators_when_ingress_omits_them() {
+        let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
+        let packet = IngressPacket {
+            stimuli: vec![0.2, 0.3],
+            modulators: None,
+            ..Default::default()
+        };
+
+        let sink = tick_once(packet, &mut network);
+
+        assert_eq!(sink.emitted.len(), 1);
+        assert_eq!(network.modulators, NeuroModulators::default());
+        assert!(
+            network
+                .neurons
+                .iter()
+                .all(|n| (n.decay_rate - 0.15).abs() < 1e-6)
+        );
+    }
+
+    #[test]
+    fn tick_loop_emits_one_batch_per_step() {
+        let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
+        let packet = IngressPacket {
+            stimuli: vec![0.4, 0.1],
+            modulators: Some(vec![0.0, 0.0, 0.0, 0.0]),
+            ..Default::default()
+        };
+
+        let mut source = ScriptedStimulusSource { packet };
+        let mut sink = CollectingSpikeSink::new();
+        let mut stimuli = vec![0.0; 2];
+        let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+
+        for _ in 0..3 {
+            run_tick_for_test(
+                &mut source,
+                &mut network,
+                &mut sink,
+                &mut stimuli,
+                &mut spike_buf,
+            );
+        }
+
+        assert_eq!(sink.emitted.len(), 3);
+        assert_eq!(network.global_step, 3);
+    }
+
+    #[test]
+    fn spiking_network_serde_matches_neuromod_06_contract() {
+        // #41 checkpoint loading must use this crates.io `neuromod` 0.6.0 shape.
+        // Do not fork `stdp_config` / `eligibility` in-tree.
+        let network = SpikingNetwork::with_dimensions(2, 1, 2);
+        let json = serde_json::to_value(&network).expect("serialize blank network");
+
+        let default_stdp =
+            serde_json::to_value(neuromod::RmStdpConfig::default()).expect("serialize stdp_config");
+        assert_eq!(json.get("stdp_config"), Some(&default_stdp));
+        assert!(json.get("neurons").and_then(|n| n.get(0)).is_some());
+        let eligibility = json["neurons"][0]
+            .get("eligibility")
+            .and_then(|e| e.as_array())
+            .expect("0.6.0 LIF neurons serialize eligibility traces");
+        assert_eq!(eligibility.len(), 2);
+        let blank_trace = serde_json::to_value(neuromod::EligibilityTrace::default())
+            .expect("serialize eligibility trace");
+        assert_eq!(eligibility[0], blank_trace);
+
+        let restored: SpikingNetwork =
+            serde_json::from_value(json).expect("deserialize neuromod 0.6 network");
+        assert_eq!(restored.num_channels, 2);
+        assert_eq!(restored.neurons.len(), 2);
+        assert_eq!(restored.iz_neurons.len(), 1);
+        assert_eq!(restored.modulators, NeuroModulators::default());
+        assert_eq!(restored.stdp_config, neuromod::RmStdpConfig::default());
+        assert_eq!(restored.neurons[0].eligibility.len(), 2);
+    }
+
+    #[test]
+    fn pre_0_6_checkpoint_json_still_deserializes() {
+        // 0.6.0 JSON self-describing formats default missing R-STDP fields.
+        let network = SpikingNetwork::with_dimensions(2, 1, 2);
+        let mut json = serde_json::to_value(&network).expect("serialize blank network");
+        let object = json.as_object_mut().expect("network is a JSON object");
+        object.remove("stdp_config");
+        for neuron in object["neurons"].as_array_mut().expect("neurons array") {
+            neuron
+                .as_object_mut()
+                .expect("neuron object")
+                .remove("eligibility");
+        }
+
+        let restored: SpikingNetwork =
+            serde_json::from_value(json).expect("deserialize pre-0.6 JSON");
+        assert_eq!(restored.stdp_config, neuromod::RmStdpConfig::default());
+        assert!(restored.neurons.iter().all(|n| n.eligibility.is_empty()));
+    }
+
+    #[test]
+    fn daemon_rejects_zero_ingress_capacity() {
+        let mut cfg = sample_config();
+        cfg.ingress.sensory_capacity = 0;
+        let err = match BrainstemDaemon::try_with_backend(cfg, BackendPair::stub()) {
+            Ok(_) => panic!("expected zero ingress capacity to fail"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("sensory") && message.contains("capacity"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn config_defaults_ingress_when_section_omitted() {
+        let path = write_config_toml(
+            "ingress-omit",
+            r#"
+tick_rate_hz = 1000
+log_level = "info"
+spine_sub_port = 5555
+spine_pub_port = 5556
+model_path = "/tmp/model.mem"
+lif_count = 16
+izh_count = 5
+channels = 16
+"#,
+        );
+        let cfg = DaemonConfig::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(cfg.ingress, IngressConfig::default());
+    }
+
+    #[test]
+    fn config_parses_ingress_section() {
+        let path = write_config_toml(
+            "ingress-set",
+            r#"
+tick_rate_hz = 1000
+log_level = "info"
+spine_sub_port = 5555
+spine_pub_port = 5556
+model_path = "/tmp/model.mem"
+lif_count = 16
+izh_count = 5
+channels = 16
+
+[ingress]
+sensory_capacity = 2
+sensory_policy = "drop_oldest"
+reward_policy = "coalesce"
+control_policy = "block_timeout"
+telemetry_policy = "reject"
+block_timeout_ms = 0
+"#,
+        );
+        let cfg = DaemonConfig::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(cfg.ingress.sensory_capacity, 2);
+        assert_eq!(
+            cfg.ingress.sensory_policy,
+            crate::ingress::OverflowPolicy::DropOldest
+        );
+        assert_eq!(
+            cfg.ingress.reward_policy,
+            crate::ingress::OverflowPolicy::Coalesce
+        );
+        assert_eq!(
+            cfg.ingress.control_policy,
+            crate::ingress::OverflowPolicy::BlockTimeout
+        );
+        assert_eq!(
+            cfg.ingress.telemetry_policy,
+            crate::ingress::OverflowPolicy::Reject
+        );
+        assert_eq!(cfg.ingress.block_timeout_ms, 0);
+    }
+
+    #[test]
+    fn run_tick_drains_control_and_backend_sensory() {
+        use crate::backend::CollectingSpikeSink;
+        use crate::ingress::MessageClass;
+
+        let ingress = BoundedIngress::new(IngressConfig::tiny_fixture()).unwrap();
+        let _ = ingress.enqueue(
+            MessageClass::Control,
+            IngressPacket {
+                stimuli: vec![9.0],
+                modulators: None,
+                ..Default::default()
+            },
+        );
+
+        struct PacketSource;
+        impl StimulusSource for PacketSource {
+            fn next_ingress(&mut self) -> anyhow::Result<Option<IngressPacket>> {
+                Ok(Some(IngressPacket {
+                    stimuli: vec![0.1, 0.2],
+                    modulators: Some(vec![0.5, 0.0, 0.0, 0.0]),
+                    ..Default::default()
+                }))
+            }
+
+            fn initialize(&mut self, _model_path: Option<&str>) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut source = PacketSource;
+        let mut sink = CollectingSpikeSink::new();
+        let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
+        let mut stimuli = vec![0.0; 2];
+        let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+        super::run_tick(
+            &mut source,
+            &mut network,
+            &mut sink,
+            &mut stimuli,
+            &mut spike_buf,
+            &ingress,
+            &mut RuntimeStats::default(),
+        );
+
+        assert_eq!(stimuli, vec![0.1, 0.2]);
+        assert_eq!(ingress.metrics().control.depth, 0);
+        assert_eq!(ingress.metrics().sensory.depth, 0);
+        assert_eq!(ingress.metrics().reward.depth, 0);
+        assert_eq!(sink.emitted.len(), 1);
+    }
+
+    #[test]
+    fn run_tick_skips_backend_none_without_evicting_sensory() {
+        use crate::backend::CollectingSpikeSink;
+        use crate::ingress::MessageClass;
+
+        let ingress = BoundedIngress::new(IngressConfig::tiny_fixture()).unwrap();
+        let _ = ingress.enqueue(
+            MessageClass::Sensory,
+            IngressPacket {
+                stimuli: vec![0.3, 0.4],
+                modulators: None,
+                ..Default::default()
+            },
+        );
+
+        struct NoneSource;
+        impl StimulusSource for NoneSource {
+            fn next_ingress(&mut self) -> anyhow::Result<Option<IngressPacket>> {
+                Ok(None)
+            }
+
+            fn initialize(&mut self, _model_path: Option<&str>) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut source = NoneSource;
+        let mut sink = CollectingSpikeSink::new();
+        let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
+        let mut stimuli = vec![0.0; 2];
+        let mut spike_buf: Vec<crate::backend::SpikeEvent> = Vec::new();
+        super::run_tick(
+            &mut source,
+            &mut network,
+            &mut sink,
+            &mut stimuli,
+            &mut spike_buf,
+            &ingress,
+            &mut RuntimeStats::default(),
+        );
+
+        assert_eq!(stimuli, vec![0.3, 0.4]);
+        assert_eq!(ingress.metrics().sensory.depth, 0);
         assert_eq!(sink.emitted.len(), 1);
     }
 

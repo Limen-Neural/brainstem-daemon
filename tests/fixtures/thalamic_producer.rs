@@ -13,10 +13,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
 use brainstem_daemon::ingress::STIMULUS_SCHEMA;
-use corpus_ipc::{BatchMetadata, IpcMessage, StimulusBatch};
+use corpus_ipc::{BatchMetadata, IpcMessage, StimulusBatch, Validate};
 
 /// Simulated Thalamic producer: sensory + safety only.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ThalamicProducer {
     /// Deterministic hardware-safety path. Independent of IPC/Brainstem.
     pub safety_healthy: bool,
@@ -82,12 +82,17 @@ impl ThalamicProducer {
                 self.publish_errors += 1;
             }
         }
-        self.safety_healthy = true;
     }
 
     /// Evaluate a trivial independent protection predicate.
     pub fn safety_tick(&mut self, thermal_ok: bool) {
         self.safety_healthy = thermal_ok;
+    }
+}
+
+impl Default for ThalamicProducer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

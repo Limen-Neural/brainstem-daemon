@@ -6,16 +6,17 @@
 pub mod backend;
 pub mod checkpoint;
 pub mod daemon;
-#[cfg(feature = "corpus-ipc")]
 pub mod ingress;
 pub mod registry;
 
 // Re-export the new pluggable I/O surface (pub from day one).
 pub use backend::{
-    BackendPair, CollectingSpikeSink, IngressPacket, SpikeEvent, SpikeSink, StimulusSource,
+    BackendPair, CollectingSpikeSink, IngressPacket, NEUROMODULATOR_COUNT, SpikeEvent, SpikeSink,
+    StimulusSource,
 };
-pub use checkpoint::{
-    CheckpointIdentity, NetworkDims, load_checkpoint, try_load_checkpoint,
-    write_nonblank_checkpoint,
+pub use checkpoint::{ModelProvenance, restore_network};
+pub use daemon::{BrainstemDaemon, DaemonConfig, RuntimeMode, RuntimeStats};
+pub use ingress::{
+    BoundedIngress, ClassMetrics, DrainedTick, EnqueueOutcome, IngressConfig, IngressMetrics,
+    MAX_BLOCK_TIMEOUT_MS, MAX_PAYLOAD_LEN, MAX_QUEUE_CAPACITY, MessageClass, OverflowPolicy,
 };
-pub use daemon::{BrainstemDaemon, DaemonConfig, RuntimeStats};

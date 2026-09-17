@@ -15,12 +15,19 @@
 
 use anyhow::Result;
 
+/// Length of the neuromodulator tail appended after the stimulus prefix.
+///
+/// Order matches `neuromod` 0.6: dopamine, serotonin, acetylcholine,
+/// norepinephrine. Do not invent a parallel in-tree modulator struct.
+pub const NEUROMODULATOR_COUNT: usize = 4;
+
 /// Packet returned by a `StimulusSource` for one tick.
 #[derive(Debug, Clone, Default)]
 pub struct IngressPacket {
     /// The core stimulus vector (the "readout" part expected by the network).
     pub stimuli: Vec<f32>,
-    /// Optional raw modulator values (e.g. [dopamine, cortisol, acetylcholine, tempo, ...]).
+    /// Optional raw modulator values in [`NEUROMODULATOR_COUNT`] order
+    /// (dopamine, serotonin, acetylcholine, norepinephrine).
     /// When `None`, the caller should use defaults (see `decode_inputs`).
     pub modulators: Option<Vec<f32>>,
     /// Per-channel validity mask copied from a typed `StimulusBatch` when present.
@@ -30,6 +37,11 @@ pub struct IngressPacket {
     pub batch_id: Option<u64>,
     /// Optional stimulus timestamp in nanoseconds from `corpus-ipc`.
     pub timestamp_ns: Option<u64>,
+    /// Optional producer session from `StimulusBatch.session_id`.
+    pub session_id: Option<String>,
+    /// True when the source consumed an invalid/incompatible frame this tick.
+    /// The tick loop still advances; `RuntimeStats.rejected_batches` counts these.
+    pub rejected: bool,
 }
 
 /// Local spike event type (independent of any external crate).
@@ -107,13 +119,7 @@ pub struct StubStimulusSource;
 
 impl StimulusSource for StubStimulusSource {
     fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
-        Ok(Some(IngressPacket {
-            stimuli: Vec::new(),
-            modulators: None,
-            valid_mask: None,
-            batch_id: None,
-            timestamp_ns: None,
-        }))
+        Ok(Some(IngressPacket::default()))
     }
 
     fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
@@ -130,7 +136,7 @@ impl SpikeSink for NoopSpikeSink {
     }
 }
 
-/// Collecting sink for tests and the integration smoke harness.
+/// Collecting sink for tests and the Thalamic integration smoke harness.
 #[derive(Default)]
 pub struct CollectingSpikeSink {
     pub emitted: Vec<Vec<SpikeEvent>>,
@@ -165,6 +171,8 @@ mod zmq_impl {
     /// the historical `SPIKENAUT_ZMQ_READOUT_IPC` alias.
     pub const CORPUS_IPC_ZMQ_READOUT_ENV: &str = "CORPUS_IPC_ZMQ_READOUT_IPC";
     const LEGACY_READOUT_ENV: &str = "SPIKENAUT_ZMQ_READOUT_IPC";
+    /// Cap on modulator-only frames drained in one tick so a flood cannot stall 1 kHz.
+    const MAX_DRAIN_PER_TICK: usize = 32;
 
     pub struct ZmqStimulusSource {
         socket: Option<SafeSocket>,
@@ -180,6 +188,8 @@ mod zmq_impl {
     }
 
     impl ZmqStimulusSource {
+        /// Unspecified-width constructor: typed `StimulusBatch` width is not checked.
+        /// Prefer [`Self::with_channels`] when the daemon config width is known.
         pub fn new() -> Self {
             Self::with_channels(0)
         }
@@ -232,50 +242,75 @@ mod zmq_impl {
                 .as_nanos() as u64
         }
 
-        /// Skip ingress this tick while retaining the last neuromodulator snapshot.
-        ///
-        /// `None` means there is no held snapshot, matching the `StimulusSource`
-        /// contract (`Ok(None)` still advances the network on zeroed stimuli).
-        fn skip_ingress(&self) -> Option<IngressPacket> {
-            self.last_modulators.as_ref().map(|mods| IngressPacket {
+        fn hold_modulators(&mut self, mods: &[f32]) {
+            let dst = self.last_modulators.get_or_insert_with(Vec::new);
+            dst.clear();
+            dst.extend_from_slice(mods);
+        }
+
+        fn skip_ingress(&self, rejected: bool) -> Option<IngressPacket> {
+            if !rejected && self.last_modulators.is_none() {
+                return None;
+            }
+            Some(IngressPacket {
                 stimuli: Vec::new(),
-                modulators: Some(mods.clone()),
-                valid_mask: None,
-                batch_id: None,
-                timestamp_ns: None,
+                modulators: self.last_modulators.clone(),
+                rejected,
+                ..IngressPacket::default()
             })
+        }
+
+        fn attach_held_modulators(&self, packet: &mut IngressPacket) {
+            if packet.modulators.is_none() {
+                packet.modulators.clone_from(&self.last_modulators);
+            }
         }
     }
 
     impl StimulusSource for ZmqStimulusSource {
         fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
-            let socket = self
-                .socket
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("ZMQ stimulus source not initialized"))?;
-            match socket.socket.recv_bytes(::zmq::DONTWAIT) {
-                Ok(buf) => {
-                    let policy = IngressPolicy::new(self.channels, Some(self.max_age));
-                    match accept_ipc_json(&buf, &policy, Self::now_ns()) {
+            let policy = IngressPolicy::new(self.channels, Some(self.max_age));
+
+            for _ in 0..MAX_DRAIN_PER_TICK {
+                let recvd = self
+                    .socket
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("ZMQ stimulus source not initialized"))?
+                    .socket
+                    .recv_bytes(::zmq::DONTWAIT);
+                match recvd {
+                    Ok(buf) => match accept_ipc_json(&buf, &policy, Self::now_ns()) {
+                        Ok(packet) if packet.stimuli.is_empty() && packet.modulators.is_some() => {
+                            if let Some(mods) = packet.modulators.as_ref() {
+                                self.hold_modulators(mods);
+                            }
+                            // Modulation-only: keep draining so a Stimuli frame
+                            // in the same tick is not delayed by one period.
+                            continue;
+                        }
                         Ok(mut packet) => {
                             if let Some(mods) = packet.modulators.as_ref() {
-                                self.last_modulators = Some(mods.clone());
+                                self.hold_modulators(mods);
                             } else {
-                                packet.modulators = self.last_modulators.clone();
+                                self.attach_held_modulators(&mut packet);
                             }
-                            Ok(Some(packet))
+                            return Ok(Some(packet));
                         }
                         Err(e) => {
-                            // Consumed-but-invalid payload (stale, Ping, width, ...):
-                            // skip ingress this tick but still let the caller tick.
                             tracing::warn!("Rejected ingress frame: {e}");
-                            Ok(self.skip_ingress())
+                            // Consumed-but-invalid: stop draining this tick so a
+                            // later valid frame is still available next period.
+                            return Ok(self.skip_ingress(true));
                         }
+                    },
+                    Err(::zmq::Error::EAGAIN) => {
+                        return Ok(self.skip_ingress(false));
                     }
+                    Err(e) => return Err(anyhow::anyhow!("ZMQ recv failed: {e}")),
                 }
-                Err(::zmq::Error::EAGAIN) => Ok(self.skip_ingress()),
-                Err(e) => Err(anyhow::anyhow!("ZMQ recv failed: {e}")),
             }
+
+            Ok(self.skip_ingress(false))
         }
 
         fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
@@ -330,6 +365,10 @@ mod zmq_impl {
             let cap = self.corpus_buf.capacity();
             let corpus_spikes = std::mem::replace(&mut self.corpus_buf, Vec::with_capacity(cap));
 
+            // Unversioned tagged JSON (`{"Spikes":{...}}`) matches the pre-envelope
+            // encoding still accepted by corpus-ipc 0.1. The envelope encoder
+            // (`encode_ipc_message_json`) is a wire-format change for existing PUB
+            // consumers, so it is not used here.
             let msg = IpcMessage::Spikes(SpikeBatch {
                 session_id: None,
                 batch_id,
@@ -383,50 +422,14 @@ mod zmq_impl {
             serde_json::to_vec(&IpcMessage::Stimuli(batch)).expect("serialize")
         }
 
-        #[test]
-        fn typed_json_frame_round_trips_over_zmq() {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let port = listener.local_addr().unwrap().port();
-            drop(listener);
-            let endpoint = format!("tcp://127.0.0.1:{port}");
-
-            let context = ::zmq::Context::new();
-            let publisher = context.socket(::zmq::PUB).unwrap();
-            publisher.bind(&endpoint).unwrap();
-
-            let mut source =
-                ZmqStimulusSource::with_channels(4).with_max_age(Duration::from_secs(5));
-            source.connect(&endpoint).unwrap();
-            std::thread::sleep(Duration::from_millis(150));
-
-            let frame = sample_frame(4, 100);
-            publisher.send(&frame, 0).unwrap();
-
-            let packet = (0..50)
-                .find_map(|_| match source.next_ingress() {
-                    Ok(Some(packet)) => Some(packet),
-                    Ok(None) => {
-                        std::thread::sleep(Duration::from_millis(10));
-                        None
-                    }
-                    Err(err) => panic!("ingress error: {err}"),
-                })
-                .expect("ZMQ SUB should receive a typed StimulusBatch");
-
-            assert_eq!(packet.batch_id, Some(100));
-            assert_eq!(packet.valid_mask.as_ref().map(|m| m[1]), Some(false));
-            assert!((packet.stimuli[0] - 1.0).abs() < f32::EPSILON);
-        }
-
         fn bind_loopback(channels: usize) -> (::zmq::Socket, ZmqStimulusSource) {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let port = listener.local_addr().unwrap().port();
-            drop(listener);
-            let endpoint = format!("tcp://127.0.0.1:{port}");
-
             let context = ::zmq::Context::new();
             let publisher = context.socket(::zmq::PUB).unwrap();
-            publisher.bind(&endpoint).unwrap();
+            publisher.bind("tcp://127.0.0.1:*").unwrap();
+            let endpoint = match publisher.get_last_endpoint().unwrap() {
+                Ok(ep) => ep,
+                Err(bytes) => String::from_utf8(bytes).expect("endpoint utf8"),
+            };
 
             let mut source =
                 ZmqStimulusSource::with_channels(channels).with_max_age(Duration::from_secs(5));
@@ -441,6 +444,9 @@ mod zmq_impl {
                 last = source.next_ingress();
                 match &last {
                     Err(err) => panic!("ingress error: {err}"),
+                    Ok(Some(packet)) if packet.rejected => {
+                        return last;
+                    }
                     Ok(Some(_)) => return last,
                     Ok(None) => std::thread::sleep(Duration::from_millis(10)),
                 }
@@ -449,27 +455,50 @@ mod zmq_impl {
         }
 
         #[test]
+        fn typed_json_frame_round_trips_over_zmq() {
+            let (publisher, mut source) = bind_loopback(4);
+            let frame = sample_frame(4, 100);
+            publisher.send(&frame, 0).unwrap();
+
+            let packet = poll_ingress(&mut source)
+                .expect("recv")
+                .expect("ZMQ SUB should receive a typed StimulusBatch");
+            assert!(!packet.rejected);
+            assert_eq!(packet.batch_id, Some(100));
+            assert_eq!(packet.valid_mask.as_ref().map(|m| m[1]), Some(false));
+            assert!((packet.stimuli[0] - 1.0).abs() < f32::EPSILON);
+            assert_eq!(packet.session_id.as_deref(), Some("zmq-loopback"));
+        }
+
+        #[test]
         fn rejected_frame_does_not_hard_fail_ingress() {
             let (publisher, mut source) = bind_loopback(4);
             let ping = serde_json::to_vec(&IpcMessage::Ping).expect("serialize Ping");
             publisher.send(&ping, 0).unwrap();
 
-            // Ping is consumed-but-invalid: must be Ok(None), not Err, so the
-            // subsequent valid batch can still be accepted on the next tick.
             let ping_result = poll_ingress(&mut source);
             assert!(
                 ping_result.is_ok(),
                 "rejected Ping must not be a hard receive failure: {ping_result:?}"
             );
+            let ping_packet = ping_result.expect("ok").expect("rejection is signaled");
             assert!(
-                matches!(ping_result, Ok(None)),
-                "Ping has no held modulators, so skip-ingress is Ok(None): {ping_result:?}"
+                ping_packet.rejected,
+                "Ping must set rejected so RuntimeStats can count it"
             );
+            assert!(ping_packet.stimuli.is_empty());
 
             let frame = sample_frame(4, 101);
             publisher.send(&frame, 0).unwrap();
-            let packet = poll_ingress(&mut source)
-                .expect("recv")
+            let packet = (0..50)
+                .find_map(|_| match source.next_ingress() {
+                    Ok(Some(packet)) if !packet.rejected => Some(packet),
+                    Ok(_) => {
+                        std::thread::sleep(Duration::from_millis(10));
+                        None
+                    }
+                    Err(err) => panic!("ingress error: {err}"),
+                })
                 .expect("ZMQ SUB should receive a typed StimulusBatch after Ping");
             assert_eq!(packet.batch_id, Some(101));
         }
@@ -488,19 +517,30 @@ mod zmq_impl {
                 serde_json::to_vec(&IpcMessage::Neuromodulators(snapshot)).expect("serialize");
             publisher.send(&frame, 0).unwrap();
 
-            let packet = poll_ingress(&mut source)
-                .expect("recv")
-                .expect("ZMQ SUB should receive Neuromodulators");
+            // Modulation-only frames are drained; after EAGAIN the held snapshot
+            // is returned so idle ticks keep DA/cortisol/ACh/tempo.
+            let packet = (0..50)
+                .find_map(|_| match source.next_ingress() {
+                    Ok(Some(packet)) if packet.modulators.is_some() => Some(packet),
+                    Ok(_) => {
+                        std::thread::sleep(Duration::from_millis(10));
+                        None
+                    }
+                    Err(err) => panic!("ingress error: {err}"),
+                })
+                .expect("ZMQ SUB should hold Neuromodulators after drain");
             assert_eq!(
                 packet.modulators.as_deref(),
                 Some(&[0.4, 0.3, 0.2, 1.0][..])
             );
+            assert!(packet.stimuli.is_empty());
 
             let idle = source
                 .next_ingress()
                 .expect("EAGAIN with held modulators must not be a hard failure");
             let idle = idle.expect("idle tick must carry last neuromodulator snapshot");
             assert!(idle.stimuli.is_empty());
+            assert!(!idle.rejected);
             assert_eq!(idle.modulators.as_deref(), Some(&[0.4, 0.3, 0.2, 1.0][..]));
         }
     }

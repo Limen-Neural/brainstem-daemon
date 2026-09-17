@@ -4,6 +4,10 @@ GitHub Actions (`.github/workflows/ci.yml`) checks that the default stub
 backend is portable, and that optional ZeroMQ features still build where
 system `libzmq` is available.
 
+All jobs install **Rust 1.98.1** — the same string as `Cargo.toml`
+`rust-version` and `rust-toolchain.toml` `channel` (see REVIEW.md
+"MSRV pin rule").
+
 ## Matrix
 
 | Job | Runner | Features | Commands |
@@ -20,11 +24,11 @@ the Linux `corpus-ipc` job (`required-features = ["corpus-ipc"]`).
 ## Skips
 
 - **macOS** and **Windows** skip the `corpus-ipc` / ZeroMQ job. That
-  feature links system `libzmq` (`libzmq3-dev` on Debian/Ubuntu). The
-  GitHub-hosted macOS and Windows images do not provide that package, and
-  installing it would make the portable stub matrix depend on optional
-  native deps. Enable `corpus-ipc` locally on those OSes only after you
-  have installed ZeroMQ yourself.
+  feature compiles ZeroMQ (C/C++) via `zmq-sys`. The GitHub-hosted macOS
+  and Windows images are left on the portable stub matrix so optional
+  native deps do not gate default CI. Enable `corpus-ipc` locally on
+  those OSes after you have a C++ toolchain (and optionally system
+  ZeroMQ). Stub and `corpus-ipc` jobs both use Rust 1.98.1.
 - `cargo fmt --check` runs on Linux only. rustfmt output does not depend
   on the host OS.
 

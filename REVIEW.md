@@ -8,6 +8,20 @@ This file is the local checklist. GitHub Actions runs the stub commands on
 Linux, macOS, and Windows, and the optional `corpus-ipc` job on Linux
 only. See [`docs/ci.md`](docs/ci.md).
 
+## MSRV pin rule
+
+`Cargo.toml` `rust-version`, `rust-toolchain.toml` `channel`, and every
+`toolchain:` string in `.github/workflows/ci.yml` must stay **identical**
+(currently **1.98.1**). `Dockerfile` `FROM rust:` tags and
+`.devin/blueprint.yaml` rustup pins must match too.
+
+To bump MSRV:
+
+1. Set the new version in `Cargo.toml`, `rust-toolchain.toml`, `ci.yml`,
+   `Dockerfile`, `.devin/blueprint.yaml`, `README.md`, and `AGENTS.md`.
+2. Run the mandatory stub commands below on that toolchain.
+3. Do not bump only one pin.
+
 ## When to run
 
 - Before every push that changes `src/`, `Cargo.toml`, or CI
@@ -19,8 +33,11 @@ only. See [`docs/ci.md`](docs/ci.md).
 Default features are empty. That path uses the in-memory **stub** backend
 and does **not** need `libzmq`.
 
-The optional `corpus-ipc` feature (same as `--all-features` today) links
-ZeroMQ. Install `libzmq` first (`libzmq3-dev` on Debian/Ubuntu).
+The optional `corpus-ipc` feature (same as `--all-features` today) compiles
+ZeroMQ via `zmq-sys` / `zeromq-src` (needs a C++ compiler). Install
+`libzmq3-dev` on Debian/Ubuntu if you prefer a system library. The crate
+pin is **Rust 1.98.1**, matching published `corpus-ipc` 0.1, so these
+commands do not need `--ignore-rust-version`.
 
 See README [Backends (temporary)](README.md#backends-temporary) for the
 feature → backend → config-key truth table (including env vars that are

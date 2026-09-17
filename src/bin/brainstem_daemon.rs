@@ -9,7 +9,7 @@ use brainstem_daemon::backend::BackendPair;
 use brainstem_daemon::daemon::{BrainstemDaemon, DaemonConfig};
 
 #[cfg(feature = "corpus-ipc")]
-use brainstem_daemon::daemon::CORPUS_IPC_READOUT_ENV;
+use brainstem_daemon::daemon::{CORPUS_IPC_READOUT_ENV, LEGACY_SPIKENAUT_READOUT_ENV};
 
 use anyhow::Context;
 #[cfg(feature = "corpus-ipc")]
@@ -43,8 +43,9 @@ fn main() -> anyhow::Result<()> {
     })?;
 
     // Set the readout endpoint env var(s) when corpus-ipc feature is enabled.
-    // Binary controls the endpoint. Pinned corpus-ipc reads SPIKENAUT_ZMQ_READOUT_IPC
-    // only; CORPUS_IPC_ZMQ_READOUT_IPC is still set for compatibility and is unused.
+    // Binary controls the endpoint. crates.io corpus-ipc 0.1 reads
+    // CORPUS_IPC_ZMQ_READOUT_IPC; SPIKENAUT_ZMQ_READOUT_IPC is still set for
+    // compatibility with older tooling.
 
     #[cfg(feature = "corpus-ipc")]
     {
@@ -52,7 +53,7 @@ fn main() -> anyhow::Result<()> {
         // SAFETY: no other threads exist at this point in `main`.
         unsafe {
             std::env::set_var(CORPUS_IPC_READOUT_ENV, &readout_endpoint);
-            std::env::set_var("CORPUS_IPC_ZMQ_READOUT_IPC", &readout_endpoint);
+            std::env::set_var(LEGACY_SPIKENAUT_READOUT_ENV, &readout_endpoint);
         }
     }
 
@@ -71,6 +72,11 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
 
     info!("Loaded config from {}", config_path.display());
 
+    // Fail closed on the model *before* opening sockets. The restored network is
+    // passed into `run_with_restored_network` so the sidecar is not read twice.
+    let (network, provenance) = brainstem_daemon::restore_network(&cfg)
+        .context("invalid or missing Spikenaut checkpoint")?;
+
     // Choose backend explicitly so we can log the mode.
     #[cfg(feature = "corpus-ipc")]
     let pair = {
@@ -80,8 +86,9 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
         let mut source = brainstem_daemon::backend::ZmqStimulusSource::with_channels(cfg.channels);
 
         // Pass the model path through for initialize's signature. Checkpoint
-        // loading is performed by `BrainstemDaemon::run` from `cfg.model_path`.
-        // The ZMQ source only connects the SUB socket here.
+        // loading is performed by `restore_network` /
+        // `BrainstemDaemon::run_with_restored_network`. The ZMQ source only
+        // connects the SUB socket here (`_model_path` is unused).
 
         let model_path = cfg.model_path.to_string_lossy();
         source
@@ -114,5 +121,5 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
 
     let daemon = BrainstemDaemon::try_with_backend(cfg, pair)
         .context("invalid daemon configuration: reduce lif_count and/or izh_count")?;
-    daemon.run().await
+    daemon.run_with_restored_network(network, provenance).await
 }

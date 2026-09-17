@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use crate::backend::IngressPacket;
-use corpus_ipc::{IpcMessage, StimulusBatch};
+use corpus_ipc::{IpcMessage, StimulusBatch, Validate};
 
 /// Schema token Brainstem requires in `StimulusBatch.metadata.custom["schema"]`.
 pub const STIMULUS_SCHEMA: &str = "corpus-ipc.stimulus.v1";
@@ -17,12 +17,15 @@ pub const STIMULUS_SCHEMA: &str = "corpus-ipc.stimulus.v1";
 /// Ingress acceptance policy.
 #[derive(Debug, Clone)]
 pub struct IngressPolicy {
+    /// Expected stimulus width. `0` means unspecified: width is not checked.
     pub expected_channels: usize,
     pub max_age: Option<Duration>,
 }
 
 impl IngressPolicy {
     /// Policy for a configured channel width and optional freshness window.
+    ///
+    /// Pass `expected_channels = 0` to accept any width (unspecified-width mode).
     pub fn new(expected_channels: usize, max_age: Option<Duration>) -> Self {
         Self {
             expected_channels,
@@ -38,6 +41,7 @@ pub enum IngressError {
     UnexpectedVariant(&'static str),
     Width { expected: usize, got: usize },
     Stale { age_ns: u64, max_age_ns: u64 },
+    Future { timestamp_ns: u64, now_ns: u64 },
     Schema(String),
     Stimulus(String),
 }
@@ -62,6 +66,15 @@ impl std::fmt::Display for IngressError {
                 write!(
                     f,
                     "stimulus is stale: age {age_ns} ns exceeds {max_age_ns} ns"
+                )
+            }
+            Self::Future {
+                timestamp_ns,
+                now_ns,
+            } => {
+                write!(
+                    f,
+                    "stimulus timestamp {timestamp_ns} is in the future (now {now_ns})"
                 )
             }
             Self::Schema(msg) => write!(f, "stimulus schema incompatibility: {msg}"),
@@ -93,15 +106,15 @@ pub fn accept_ipc_message(
         IpcMessage::Stimuli(batch) => accept_stimulus_batch(batch, policy, now_ns),
         IpcMessage::Neuromodulators(snapshot) => Ok(IngressPacket {
             stimuli: Vec::new(),
+            // Positional map from corpus-ipc's DA/cortisol/ACh/tempo snapshot
+            // onto neuromod 0.6's DA/5-HT/ACh/NE slots.
             modulators: Some(vec![
                 snapshot.dopamine,
                 snapshot.cortisol,
                 snapshot.acetylcholine,
                 snapshot.tempo,
             ]),
-            valid_mask: None,
-            batch_id: None,
-            timestamp_ns: None,
+            ..IngressPacket::default()
         }),
         IpcMessage::Spikes(_) => Err(IngressError::UnexpectedVariant("Spikes")),
         IpcMessage::Embeddings(_) => Err(IngressError::UnexpectedVariant("Embeddings")),
@@ -122,7 +135,9 @@ fn accept_stimulus_batch(
     policy: &IngressPolicy,
     now_ns: u64,
 ) -> Result<IngressPacket, IngressError> {
-    batch.validate().map_err(IngressError::Stimulus)?;
+    batch
+        .validate()
+        .map_err(|err| IngressError::Stimulus(err.to_string()))?;
 
     match batch.metadata.as_ref() {
         Some(meta) => match meta.custom.get("schema") {
@@ -143,7 +158,7 @@ fn accept_stimulus_batch(
         }
     }
 
-    if batch.values.len() != policy.expected_channels {
+    if policy.expected_channels != 0 && batch.values.len() != policy.expected_channels {
         return Err(IngressError::Width {
             expected: policy.expected_channels,
             got: batch.values.len(),
@@ -151,28 +166,30 @@ fn accept_stimulus_batch(
     }
 
     if let Some(max_age) = policy.max_age {
+        if batch.timestamp > now_ns {
+            return Err(IngressError::Future {
+                timestamp_ns: batch.timestamp,
+                now_ns,
+            });
+        }
         let max_age_ns = max_age.as_nanos() as u64;
-        let age_ns = now_ns.saturating_sub(batch.timestamp);
+        let age_ns = now_ns - batch.timestamp;
         if age_ns > max_age_ns {
             return Err(IngressError::Stale { age_ns, max_age_ns });
         }
     }
 
-    let mut stimuli = batch.values;
-    if let Some(mask) = batch.valid_mask.as_ref() {
-        for (value, valid) in stimuli.iter_mut().zip(mask.iter()) {
-            if !*valid {
-                *value = 0.0;
-            }
-        }
-    }
-
+    // Do not zero masked slots here. `valid_mask` is preserved so downstream
+    // consumers can tell a producer 0.0 from a masked placeholder; the tick
+    // loop applies the mask once in `decode_inputs`.
     Ok(IngressPacket {
-        stimuli,
+        stimuli: batch.values,
         modulators: None,
         valid_mask: batch.valid_mask,
         batch_id: Some(batch.batch_id),
         timestamp_ns: Some(batch.timestamp),
+        session_id: batch.session_id,
+        rejected: false,
     })
 }
 
@@ -209,8 +226,10 @@ mod tests {
         let bytes = serde_json::to_vec(&message).unwrap();
         let packet = accept_ipc_json(&bytes, &policy(), 1_000).unwrap();
         assert_eq!(packet.valid_mask, Some(vec![true, false, true, true]));
+        // Masked channel 1 keeps the producer placeholder; decode_inputs zeros it.
         assert_eq!(packet.stimuli, vec![1.0, 0.0, 0.25, 0.5]);
         assert_eq!(packet.batch_id, Some(7));
+        assert_eq!(packet.session_id.as_deref(), Some("smoke"));
     }
 
     #[test]
@@ -229,6 +248,17 @@ mod tests {
     }
 
     #[test]
+    fn unspecified_width_accepts_any_channel_count() {
+        let packet = accept_ipc_message(
+            IpcMessage::Stimuli(sample_batch()),
+            &IngressPolicy::new(0, Some(Duration::from_secs(1))),
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(packet.stimuli.len(), 4);
+    }
+
+    #[test]
     fn stale_batch_fails() {
         let mut batch = sample_batch();
         batch.timestamp = 0;
@@ -239,6 +269,20 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, IngressError::Stale { .. }));
+    }
+
+    #[test]
+    fn future_timestamp_fails() {
+        let mut batch = sample_batch();
+        batch.timestamp = 5_000;
+        let err = accept_ipc_message(IpcMessage::Stimuli(batch), &policy(), 1_000).unwrap_err();
+        assert!(matches!(
+            err,
+            IngressError::Future {
+                timestamp_ns: 5_000,
+                now_ns: 1_000
+            }
+        ));
     }
 
     #[test]

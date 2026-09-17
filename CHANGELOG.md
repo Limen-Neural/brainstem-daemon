@@ -9,29 +9,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Live-mode startup gate that loads and validates a Distill sidecar
+  `snn_model.json` (Hugging Face `rmems/Spikenaut-SNN`) before the tick loop.
+  Provenance (path, SHA-256, schema id, encoder, lineage) is logged. Startup
+  fails closed on missing, corrupt, dimension-mismatched, non-finite, or
+  blank checkpoints, and on sidecars that carry `output_weights`. FPGA Q8.8
+  `.mem` dumps are rejected.
+- Explicit `runtime_mode = "simulation"` for blank `with_dimensions()`
+  networks; it cannot masquerade as a loaded Spikenaut checkpoint.
+- crates.io package metadata: `readme`, `homepage`, `documentation`,
+  `keywords`, `categories`, docs.rs config, and `exclude` for repo-only
+  files (CI, agent docs, Docker). Dual MIT/Apache-2.0 license files stay
+  in the package.
+- Tick-loop regression tests for `neuromod` 0.6 modulator snapshots, default
+  ingress fallback, and the 0.6.0 `SpikingNetwork` serde contract
+  (`stdp_config` / `eligibility`) used by checkpoint loading (#41).
 - GitHub Actions CI matrix: stub build/test/clippy on Linux, macOS, and
   Windows; rustfmt and optional `corpus-ipc` / libzmq jobs on Linux only
   (`docs/ci.md`).
-- Stub vs `corpus-ipc` backend feature truth table in `README.md`: which Cargo flags wire which backend, which TOML keys apply, and which env vars are no-ops under stub. Documents that `model_path` is a checkpoint path when the file exists (otherwise a blank network), that `CORPUS_IPC_ZMQ_READOUT_IPC` is the SUB endpoint for typed JSON `IpcMessage` frames, and that `log_level` is binary tracing-init only.
+- Stub vs `corpus-ipc` backend feature truth table in `README.md`: which Cargo flags wire which backend, which TOML keys apply, and which env vars are no-ops under stub. Documents that `model_path` is passed literally (no `~` expansion) but currently ignored by published `ZmqIpcBackend`, that `SPIKENAUT_ZMQ_READOUT_IPC` is binary-set compatibility only, and that `log_level` is binary tracing-init only.
 - GitHub Actions CI workflow for formatting, clippy, build, and test validation.
 - Config-driven `ServiceRegistry` and `BrainstemDaemon` in the library.
 - `DaemonConfig.services` field for registering named, enabled services.
 - `## Role and boundary matrix` documentation in `README.md`.
 - Local `StimulusSource` / `SpikeSink` traits + `IngressPacket` / `SpikeEvent` (owned by this crate).
 - `BackendPair` + `BackendPair::stub()` for pluggable I/O.
-- In-crate stub backend (`StubStimulusSource`, `NoopSpikeSink`, `CollectingSpikeSink`).
+- In-crate stub backend (`StubStimulusSource`, `NoopSpikeSink`) plus a public
+  `CollectingSpikeSink` for tests and the Thalamic integration smoke harness.
+- CPU-only Thalamic → `corpus-ipc` → Brainstem smoke (`tests/thalamic_brainstem_smoke.rs`,
+  `required-features = ["corpus-ipc"]`). A Thalamic fixture with no `SpikingNetwork`
+  publishes typed `IpcMessage::Stimuli(StimulusBatch)` JSON; Brainstem loads a Distill
+  sidecar, validates schema/width/freshness/`valid_mask`, and ticks through
+  `BrainstemDaemon::run_for_ticks`.
+- Typed `corpus-ipc` ingress (`accept_ipc_json`): schema token
+  `corpus-ipc.stimulus.v1`, channel-width check (or unspecified-width when
+  `expected_channels = 0`), future-timestamp and max-age rejection, session_id
+  passthrough, and `RuntimeStats` accepted/rejected counters. Rejected frames
+  still advance the network. Modulation-only frames are drained in the same tick.
 - `BrainstemDaemon::with_backend(cfg, pair)` constructor for tests and custom backends.
 - Test coverage for the non-`corpus-ipc` (stub) path that runs under `--no-default-features`.
 - Graceful `SIGTERM` handling alongside the existing `SIGINT` (Ctrl-C): the tick loop now
   breaks, flushes the backend, and exits `0` on either signal.
-- Explicit JSON checkpoint loader (`src/checkpoint.rs`) that fails closed on schema, dimension, NaN, and blank-weight fixtures.
-- Typed `corpus-ipc` ingress validation (`src/ingress.rs`) for width, freshness, `valid_mask`, and schema token `corpus-ipc.stimulus.v1`.
-- CPU-only Thalamic → corpus-ipc → Brainstem integration smoke test (`tests/thalamic_brainstem_smoke.rs`, `--features corpus-ipc`).
-- `BrainstemDaemon::run_for_ticks` for bounded, signal-free tick runs.
+- Bounded per-class ingress (`BoundedIngress`) in the tick loop: configured capacities,
+  overflow policies (`block_timeout`, `reject`, `drop_oldest`, `coalesce`), and
+  accepted/rejected/dropped/coalesced/depth/high-water-mark/producer-wait metrics.
+  Optional `[ingress]` TOML section; omitted keys keep the documented defaults.
+  Shutdown unblocks waiting producers. Configured `max_payload_len` is
+  rejected above `MAX_PAYLOAD_LEN` (1048576). Startup-fail paths in
+  `run_loop` call `BoundedIngress::shutdown()` so blocked producers do not
+  wait out `block_timeout_ms`.
 
 ### Changed
 
+- Switch optional `corpus-ipc` from a git pin to crates.io `0.1.0`
+  (`features = ["zmq"]`). ZMQ SUB ingress decodes unversioned JSON
+  `IpcMessage` (`Stimuli` / `Neuromodulators`) with crates.io types; egress
+  publishes unversioned `IpcMessage::Spikes` JSON. The binary sets
+  `CORPUS_IPC_ZMQ_READOUT_IPC` and still sets `SPIKENAUT_ZMQ_READOUT_IPC` for
+  older tooling.
+- Upgrade `neuromod` from 0.4.0 to crates.io **0.6.0** (pre-1.0 range
+  `>=0.6.0, <0.7.0`). Ingress modulators map to dopamine / serotonin /
+  acetylcholine / norepinephrine; `cortisol`, `tempo`, and `aux_dopamine`
+  were removed upstream. The tick loop still calls `SpikingNetwork::step`
+  (0.6 thread-local wrapper around `step_with_rng`). Checkpoints now carry
+  engine-wired R-STDP (`stdp_config` / per-LIF `eligibility`).
+- Align MSRV and toolchain pins to **Rust 1.98.1** (`Cargo.toml`,
+  `rust-toolchain.toml`, CI, `Dockerfile`, `AGENTS.md`, `README.md`,
+  `.devin/blueprint.yaml`) so stub and optional `corpus-ipc` 0.1 builds
+  share one pin (no `--ignore-rust-version`).
 - Relicense from GPL-3.0 to dual MIT/Apache-2.0.
+- `model_path` in live mode is a real checkpoint path (Distill sidecar JSON), not backend-initialization trivia. Simulation mode is the only remaining blank-network path.
 - Add SPDX license identifiers to all source files.
 - Refactor `soma-daemon` binary into a thin wrapper over `BrainstemDaemon`.
 - Renamed the legacy `soma-daemon` binary to `brainstem-daemon` (matches the crate/repo name).
@@ -40,8 +87,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Binary now logs the active backend mode (`🔌 stub` / `📡 ZMQ corpus-ipc`).
 - `decode_inputs` now accepts `&IngressPacket` (with explicit `None` modulator fallback).
 - All direct `corpus_ipc` / `zmq` usage is now feature-gated (except the compatibility `CORPUS_IPC_READOUT_ENV` const).
-- `corpus-ipc` feature pins crate version **0.1.0** at git rev `3ad764a` (`IpcMessage` / `StimulusBatch`; crates.io does not yet resolve `corpus-ipc = "0.1"`). ZMQ ingress decodes JSON `IpcMessage::Stimuli` rather than the legacy binary readout packet.
-- MSRV / `rust-toolchain.toml` aligned to **1.98.1** so the 0.1.0 `corpus-ipc` crate compiles.
 
 ### Removed
 
@@ -51,6 +96,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed / Cleaned
 
+- Live restore rejects Distill sidecars that carry `output_weights` (including
+  explicit `null`) instead of validating then silently dropping the readout
+  row. neuromod 0.6.0 has no Distill readout matrix; legacy sidecars that omit
+  the field still load.
+- Live restore rejects Distill values that are finite as `f64` but overflow `f32`, and requires Distill `source = "spikenaut_julia"`. The binary restores once before sockets and reuses that network for the tick loop. Live mode sets `RmStdpConfig.reward_lr = 0` so dopamine-gated R-STDP cannot retrain Distill weights; `neuromod` 0.6.0 `step` still owns decay/threshold/L1-renorm as engine contracts.
 - Removed unconditional dependency on `corpus-ipc` git crate and system `libzmq` for core builds and tests.
 
 ## [0.1.2] - 2026-04-22

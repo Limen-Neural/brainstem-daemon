@@ -26,8 +26,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # 1.98.1
+      - name: Install Rust 1.98.1
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # pinned action
         with:
           toolchain: "1.98.1"
           components: rustfmt
@@ -47,8 +47,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # 1.98.1
+      - name: Install Rust 1.98.1
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # pinned action
         with:
           toolchain: "1.98.1"
           components: clippy
@@ -87,8 +87,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libzmq3-dev
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # 1.98.1
+      - name: Install Rust 1.98.1
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # pinned action
         with:
           toolchain: "1.98.1"
           components: clippy
