@@ -31,11 +31,12 @@ Default (stub) commands — no `libzmq` required:
 - `cargo test --locked` — run stub-backend tests.
 - `cargo build --release --bin brainstem-daemon` — build the release binary.
 
-Optional `corpus-ipc` / `--all-features` commands need the system ZeroMQ
-dev package (`libzmq3-dev` on Debian/Ubuntu). They are not vendored.
+Optional `corpus-ipc` / `--all-features` commands need a C++ compiler.
+The system ZeroMQ dev package (`libzmq3-dev` on Debian/Ubuntu) is optional
+and useful. ZeroMQ is not vendored as a git submodule.
 Run them on the **1.98.1** pin (`rust-toolchain.toml` / `Cargo.toml`
-`rust-version`); published `corpus-ipc` 0.1 declares that MSRV, so do
-not pass `--ignore-rust-version`:
+`rust-version`); published `corpus-ipc` 0.1 declares that minimum
+supported Rust version (MSRV), so do not pass `--ignore-rust-version`:
 
 - `cargo test --locked --all-features`
 - `cargo clippy --locked --all-targets --all-features -- -D warnings`
