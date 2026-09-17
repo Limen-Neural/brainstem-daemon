@@ -51,7 +51,12 @@ This repository is preconfigured on the Cursor Cloud virtual machine. The Rust t
 
 For most development, use the in-memory stub backend. It needs no `libzmq` and no open ports. This is the safest path for everyday work and continuous integration.
 
-If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls published `corpus-ipc` 0.1 from crates.io (`features = ["zmq"]`) and this crate's optional `zmq` dependency. Published `corpus-ipc` compiles libzmq via `zmq-sys`. You need a C++ compiler; `libzmq3-dev` is still useful on Debian/Ubuntu. It does not vendor ZeroMQ as a git submodule. The `corpus-ipc` crate's minimum supported Rust version (MSRV) is 1.98.1. Default stub builds stay on 1.97.1.
+If you need ZeroMQ networking, enable the `corpus-ipc` feature.
+
+- It pulls published `corpus-ipc` 0.1 from crates.io (`features = ["zmq"]`) and this crate's optional `zmq` dependency.
+- Published `corpus-ipc` compiles libzmq via `zmq-sys`. You need a C++ compiler; `libzmq3-dev` is still useful on Debian/Ubuntu.
+- It does not vendor ZeroMQ as a git submodule.
+- The `corpus-ipc` crate's minimum supported Rust version (MSRV) is 1.98.1. Default stub builds stay on 1.97.1.
 
 Prefer the README [Backends (temporary)](README.md#backends-temporary) section as the user-facing truth table, unless a newer code change supersedes it.
 That table maps Cargo flags to the backend and to which config keys and env vars apply.
