@@ -120,11 +120,11 @@ Default Cargo features are empty (`default = []` in `Cargo.toml`). That path use
 
 #### Feature truth table
 
-| Cargo flags | Wired backend | `libzmq` | Binary (`brainstem-daemon`) | Library `BrainstemDaemon::new()` / `try_new()` |
+| Cargo flags | Wired backend | Native libzmq (`zmq-sys`) | Binary (`brainstem-daemon`) | Library `BrainstemDaemon::new()` / `try_new()` |
 |---|---|---|---|---|
-| default / `--no-default-features` | stub | not required | no sockets; logs `🔌 Using stub backend` | stub |
-| `--features corpus-ipc` | ZMQ / `corpus-ipc` | required | SUB via env, PUB on `spine_pub_port`; logs `📡 Using ZMQ corpus-ipc backend` | **still stub** |
-| `--all-features` | same as `corpus-ipc` | required | same as `--features corpus-ipc` | **still stub** |
+| default / `--no-default-features` | stub | not used | no sockets; logs `🔌 Using stub backend` | stub |
+| `--features corpus-ipc` | ZMQ / `corpus-ipc` | compiled by `zmq-sys` (C++ compiler; system `libzmq3-dev` optional) | SUB via env, PUB on `spine_pub_port`; logs `📡 Using ZMQ corpus-ipc backend` | **still stub** |
+| `--all-features` | same as `corpus-ipc` | compiled by `zmq-sys` (C++ compiler; system `libzmq3-dev` optional) | same as `--features corpus-ipc` | **still stub** |
 
 Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`. Those always inject `BackendPair::stub()`. Only `src/bin/brainstem_daemon.rs` constructs `ZmqStimulusSource` + `ZmqSpikeSink` when `corpus-ipc` is on.
 
