@@ -590,6 +590,13 @@ mod tests {
         }
     }
 
+    fn tagged_packet(tag: f32) -> IngressPacket {
+        IngressPacket {
+            stimuli: vec![tag],
+            modulators: None,
+        }
+    }
+
     fn write_config_toml(stem: &str, body: &str) -> PathBuf {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")
@@ -806,27 +813,14 @@ channels = 16
         let ingress = daemon.ingress();
         assert!(
             ingress
-                .enqueue(
-                    MessageClass::Control,
-                    IngressPacket {
-                        stimuli: vec![1.0],
-                        modulators: None,
-                    },
-                )
+                .enqueue(MessageClass::Control, tagged_packet(1.0))
                 .accepted()
         );
 
         let producer = ingress.clone();
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let outcome = producer.enqueue(
-                MessageClass::Control,
-                IngressPacket {
-                    stimuli: vec![2.0],
-                    modulators: None,
-                },
-            );
-            let _ = tx.send(outcome);
+            let _ = tx.send(producer.enqueue(MessageClass::Control, tagged_packet(2.0)));
         });
 
         let started = std::time::Instant::now();
@@ -837,8 +831,9 @@ channels = 16
             thread::yield_now();
         }
 
-        let result = tokio::time::timeout(Duration::from_millis(500), daemon.run()).await;
-        let inner = result.expect("run must return immediately rather than tick");
+        let inner = tokio::time::timeout(Duration::from_millis(500), daemon.run())
+            .await
+            .expect("run must return immediately rather than tick");
         assert!(inner.is_err());
         let outcome = rx
             .recv_timeout(Duration::from_secs(2))
