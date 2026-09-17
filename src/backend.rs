@@ -15,12 +15,19 @@
 
 use anyhow::Result;
 
+/// Length of the neuromodulator tail appended after the stimulus prefix.
+///
+/// Order matches `neuromod` 0.6: dopamine, serotonin, acetylcholine,
+/// norepinephrine. Do not invent a parallel in-tree modulator struct.
+pub const NEUROMODULATOR_COUNT: usize = 4;
+
 /// Packet returned by a `StimulusSource` for one tick.
 #[derive(Debug, Clone, Default)]
 pub struct IngressPacket {
     /// The core stimulus vector (the "readout" part expected by the network).
     pub stimuli: Vec<f32>,
-    /// Optional raw modulator values (e.g. [dopamine, cortisol, acetylcholine, tempo, ...]).
+    /// Optional raw modulator values in [`NEUROMODULATOR_COUNT`] order
+    /// (dopamine, serotonin, acetylcholine, norepinephrine).
     /// When `None`, the caller should use defaults (see `decode_inputs`).
     pub modulators: Option<Vec<f32>>,
 }
@@ -156,14 +163,13 @@ impl SpikeSink for CollectingSpikeSink {
 #[cfg(feature = "corpus-ipc")]
 mod zmq_impl {
     use super::*;
-    // In the current pinned corpus-ipc revision, the main trait is exported as
-    // `NeuralBackend` (deprecated alias). Importing it brings the trait methods
-    // into scope for ZmqBrainBackend.
-    use corpus_ipc::NeuralBackend as BackendConnector;
-    use corpus_ipc::{SpikeBatch, SpikeEvent as CorpusSpikeEvent, SpineMessage, ZmqBrainBackend};
+    // Import `IpcBackend` so `initialize` / `process_batch` are in scope for
+    // crates.io `corpus-ipc` 0.1 (`ZmqIpcBackend`).
+    use corpus_ipc::IpcBackend;
+    use corpus_ipc::{IpcMessage, SpikeBatch, SpikeEvent as CorpusSpikeEvent, ZmqIpcBackend};
 
     pub struct ZmqStimulusSource {
-        inner: ZmqBrainBackend,
+        inner: ZmqIpcBackend,
         channels: usize,
     }
 
@@ -176,20 +182,21 @@ mod zmq_impl {
     impl ZmqStimulusSource {
         pub fn new() -> Self {
             Self {
-                inner: ZmqBrainBackend::new(),
+                inner: ZmqIpcBackend::new(),
                 channels: 0,
             }
         }
 
         /// Construct with known channel count so `next_ingress` can split
-        /// stimulus prefix from appended neuromodulator tail (4 floats).
+        /// stimulus prefix from appended neuromodulator tail
+        /// ([`NEUROMODULATOR_COUNT`] floats: DA / 5-HT / ACh / NE).
         ///
         /// The default `new()` uses `channels=0`, which means the entire readout
         /// is passed as stimuli and no modulators are extracted. Library users
         /// who want automatic modulator extraction must use `with_channels(cfg.channels)`.
         pub fn with_channels(ch: usize) -> Self {
             Self {
-                inner: ZmqBrainBackend::new(),
+                inner: ZmqIpcBackend::new(),
                 channels: ch,
             }
         }
@@ -197,12 +204,12 @@ mod zmq_impl {
 
     impl StimulusSource for ZmqStimulusSource {
         fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
-            let readout = self.inner.process_signals(&[])?;
+            let readout = self.inner.process_batch(&[])?;
             let ch = self.channels;
             if ch > 0 && readout.len() > ch {
                 let stimuli = readout[..ch].to_vec();
-                let modulators = if readout.len() >= ch + 4 {
-                    Some(readout[ch..ch + 4].to_vec())
+                let modulators = if readout.len() >= ch + NEUROMODULATOR_COUNT {
+                    Some(readout[ch..ch + NEUROMODULATOR_COUNT].to_vec())
                 } else {
                     None
                 };
@@ -268,7 +275,11 @@ mod zmq_impl {
             let cap = self.corpus_buf.capacity();
             let corpus_spikes = std::mem::replace(&mut self.corpus_buf, Vec::with_capacity(cap));
 
-            let msg = SpineMessage::Spikes(SpikeBatch {
+            // Unversioned tagged JSON (`{"Spikes":{...}}`) matches the pre-envelope
+            // encoding still accepted by corpus-ipc 0.1. The envelope encoder
+            // (`encode_ipc_message_json`) is a wire-format change for existing PUB
+            // consumers, so it is not used here.
+            let msg = IpcMessage::Spikes(SpikeBatch {
                 session_id: None,
                 batch_id,
                 timestamp,

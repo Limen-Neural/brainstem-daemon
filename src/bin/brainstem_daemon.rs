@@ -9,7 +9,7 @@ use brainstem_daemon::backend::BackendPair;
 use brainstem_daemon::daemon::{BrainstemDaemon, DaemonConfig};
 
 #[cfg(feature = "corpus-ipc")]
-use brainstem_daemon::daemon::CORPUS_IPC_READOUT_ENV;
+use brainstem_daemon::daemon::{CORPUS_IPC_READOUT_ENV, LEGACY_SPIKENAUT_READOUT_ENV};
 
 use anyhow::Context;
 #[cfg(feature = "corpus-ipc")]
@@ -43,8 +43,9 @@ fn main() -> anyhow::Result<()> {
     })?;
 
     // Set the readout endpoint env var(s) when corpus-ipc feature is enabled.
-    // Binary controls the endpoint. Pinned corpus-ipc reads SPIKENAUT_ZMQ_READOUT_IPC
-    // only; CORPUS_IPC_ZMQ_READOUT_IPC is still set for compatibility and is unused.
+    // Binary controls the endpoint. crates.io corpus-ipc 0.1 reads
+    // CORPUS_IPC_ZMQ_READOUT_IPC; SPIKENAUT_ZMQ_READOUT_IPC is still set for
+    // compatibility with older tooling.
 
     #[cfg(feature = "corpus-ipc")]
     {
@@ -52,7 +53,7 @@ fn main() -> anyhow::Result<()> {
         // SAFETY: no other threads exist at this point in `main`.
         unsafe {
             std::env::set_var(CORPUS_IPC_READOUT_ENV, &readout_endpoint);
-            std::env::set_var("CORPUS_IPC_ZMQ_READOUT_IPC", &readout_endpoint);
+            std::env::set_var(LEGACY_SPIKENAUT_READOUT_ENV, &readout_endpoint);
         }
     }
 
@@ -87,8 +88,8 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
         // Pass the model path through for the ZMQ backend handshake. SNN
         // restoration is owned by `restore_network` /
         // `BrainstemDaemon::run_with_restored_network`, not by
-        // `ZmqBrainBackend::initialize` (the pinned dep still names the
-        // argument `_model_path` and ignores it).
+        // `ZmqIpcBackend::initialize` (published corpus-ipc 0.1 still names
+        // the argument `_model_path` and ignores it).
 
         let model_path = cfg.model_path.to_string_lossy();
         source
