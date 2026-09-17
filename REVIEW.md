@@ -18,7 +18,8 @@ only. See [`docs/ci.md`](docs/ci.md).
 To bump MSRV:
 
 1. Set the new version in `Cargo.toml`, `rust-toolchain.toml`, `ci.yml`,
-   `Dockerfile`, `.devin/blueprint.yaml`, `README.md`, and `AGENTS.md`.
+   `Dockerfile`, `.devin/blueprint.yaml`, `README.md`, `AGENTS.md`,
+   `docs/ci.md`, and `REVIEW.md`.
 2. Run the mandatory stub commands below on that toolchain.
 3. Do not bump only one pin.
 

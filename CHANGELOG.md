@@ -31,14 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Upgrade `neuromod` from 0.4.0 to crates.io **0.6.0** (pre-1.0 range
-  `>=0.6.0, <0.7.0`). Ingress modulators map to dopamine / serotonin /
-  acetylcholine / norepinephrine; `cortisol`, `tempo`, and `aux_dopamine`
-  were removed upstream. The tick loop still calls `SpikingNetwork::step`
-  (0.6 thread-local wrapper around `step_with_rng`). Checkpoints now carry
-  engine-wired R-STDP (`stdp_config` / per-LIF `eligibility`).
+  `>=0.6.0, <0.7.0`). Library `IngressPacket` modulators map to dopamine /
+  serotonin / acetylcholine / norepinephrine; `cortisol`, `tempo`, and
+  `aux_dopamine` were removed upstream. With `--features corpus-ipc`, the
+  pinned ZMQ 4-float tail stays Nero order (dopamine, cortisol,
+  acetylcholine, tempo): DA and ACh are forwarded, and cortisol/tempo are
+  dropped instead of being treated as serotonin/norepinephrine. The tick
+  loop still calls `SpikingNetwork::step` (0.6 thread-local wrapper around
+  `step_with_rng`). Checkpoints now carry engine-wired R-STDP
+  (`stdp_config` / per-LIF `eligibility`).
 - Align MSRV and toolchain pins to **Rust 1.98.1** (`Cargo.toml`,
   `rust-toolchain.toml`, CI, `Dockerfile`, `AGENTS.md`, `README.md`,
-  `.devin/blueprint.yaml`) to match the Spikenaut software stack.
+  `.devin/blueprint.yaml`, `docs/ci.md`, `REVIEW.md`) to match the
+  Spikenaut software stack.
 - Relicense from GPL-3.0 to dual MIT/Apache-2.0.
 - Add SPDX license identifiers to all source files.
 - Refactor `soma-daemon` binary into a thin wrapper over `BrainstemDaemon`.
