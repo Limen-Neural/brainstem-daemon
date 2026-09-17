@@ -55,7 +55,7 @@ If you need ZeroMQ networking, enable the `corpus-ipc` feature.
 
 - The `corpus-ipc` feature pulls published `corpus-ipc` 0.1 from crates.io (`features = ["zmq"]`) and this crate's optional `zmq` dependency.
 - Published `corpus-ipc` compiles libzmq via `zmq-sys`. You need a C++ compiler; `libzmq3-dev` is still useful on Debian/Ubuntu.
-- This setup does not vendor ZeroMQ as a git submodule.
+- The `corpus-ipc` crate does not vendor ZeroMQ as a git submodule.
 - The `corpus-ipc` crate's minimum supported Rust version (MSRV) is 1.98.1. Default stub builds stay on 1.97.1.
 
 Prefer the README [Backends (temporary)](README.md#backends-temporary) section as the user-facing truth table, unless a newer code change supersedes it.
