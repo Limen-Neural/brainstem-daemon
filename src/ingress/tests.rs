@@ -9,7 +9,7 @@ use crate::backend::IngressPacket;
 
 use super::{
     BoundedIngress, ClassMetrics, EnqueueOutcome, IngressConfig, MAX_BLOCK_TIMEOUT_MS,
-    MAX_QUEUE_CAPACITY, MessageClass, OverflowPolicy,
+    MAX_PAYLOAD_LEN, MAX_QUEUE_CAPACITY, MessageClass, OverflowPolicy,
 };
 
 fn wait_until(timeout: Duration, mut pred: impl FnMut() -> bool) -> bool {
@@ -228,13 +228,13 @@ fn try_enqueue_never_blocks_block_timeout_class() {
             .try_enqueue(MessageClass::Control, pkt(1.0))
             .accepted()
     );
-    let started = Instant::now();
     assert_eq!(
         ingress.try_enqueue(MessageClass::Control, pkt(2.0)),
         EnqueueOutcome::Rejected
     );
-    assert!(
-        started.elapsed() < Duration::from_millis(50),
+    assert_eq!(
+        ingress.metrics().control.producer_waits,
+        0,
         "try_enqueue must return without honoring block_timeout_ms"
     );
 }
@@ -367,6 +367,19 @@ fn block_timeout_above_max_is_rejected_at_construction() {
         .expect("expected oversized block_timeout_ms to fail")
         .to_string();
     assert!(err.contains("MAX_BLOCK_TIMEOUT_MS"));
+}
+
+#[test]
+fn payload_len_above_max_is_rejected_at_construction() {
+    let cfg = IngressConfig {
+        max_payload_len: MAX_PAYLOAD_LEN + 1,
+        ..IngressConfig::default()
+    };
+    let err = BoundedIngress::new(cfg)
+        .err()
+        .expect("expected oversized max_payload_len to fail")
+        .to_string();
+    assert!(err.contains("MAX_PAYLOAD_LEN"));
 }
 
 #[test]

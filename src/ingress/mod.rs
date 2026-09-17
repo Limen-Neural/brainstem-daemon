@@ -36,6 +36,9 @@ pub const MAX_QUEUE_CAPACITY: usize = 16_384;
 /// Hard cap so `block_timeout` cannot overflow platform `Instant` addition.
 pub const MAX_BLOCK_TIMEOUT_MS: u64 = 86_400_000;
 
+/// Hard cap so a TOML typo cannot disable payload admission (`f32` elements).
+pub const MAX_PAYLOAD_LEN: usize = 1_048_576;
+
 /// Low-cardinality label set for ingress metrics (four values).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MessageClass {
@@ -239,11 +242,19 @@ impl IngressConfig {
         Duration::from_millis(self.block_timeout_ms)
     }
 
-    /// Capacities must be in `1..=MAX_QUEUE_CAPACITY`. Payload length must be ≥ 1.
-    /// `block_timeout_ms` must be in `0..=MAX_BLOCK_TIMEOUT_MS`.
+    /// Capacities must be in `1..=MAX_QUEUE_CAPACITY`. Payload length must be
+    /// in `1..=MAX_PAYLOAD_LEN`. `block_timeout_ms` must be in
+    /// `0..=MAX_BLOCK_TIMEOUT_MS`.
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.max_payload_len == 0 {
             anyhow::bail!("ingress max_payload_len must be >= 1");
+        }
+        if self.max_payload_len > MAX_PAYLOAD_LEN {
+            anyhow::bail!(
+                "ingress max_payload_len {} exceeds MAX_PAYLOAD_LEN ({})",
+                self.max_payload_len,
+                MAX_PAYLOAD_LEN
+            );
         }
         if self.block_timeout_ms > MAX_BLOCK_TIMEOUT_MS {
             anyhow::bail!(

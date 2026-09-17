@@ -201,6 +201,7 @@ impl BrainstemDaemon {
         let ingress = self.ingress;
 
         if cfg.tick_rate_hz == 0 || cfg.tick_rate_hz > 1_000_000 {
+            ingress.shutdown();
             shutdown_backend(&mut backend);
             anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
         }
@@ -209,6 +210,7 @@ impl BrainstemDaemon {
         let (mut network, provenance) = match restored {
             Ok(pair) => pair,
             Err(err) => {
+                ingress.shutdown();
                 shutdown_backend(&mut backend);
                 return Err(err);
             }
@@ -765,9 +767,84 @@ channels = 16
         cfg.izh_count = 0;
         cfg.model_path = PathBuf::from("/no/such/snn_model.json");
         let daemon = BrainstemDaemon::try_new(cfg).unwrap();
+        let ingress = daemon.ingress();
         let result = tokio::time::timeout(Duration::from_millis(500), daemon.run()).await;
         let inner = result.expect("run must return immediately rather than tick");
         assert!(inner.is_err());
+        assert!(
+            ingress.is_shutdown(),
+            "startup failure must close ingress so blocked producers do not wait out block_timeout_ms"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_shuts_down_ingress_when_tick_rate_invalid() {
+        let mut cfg = sample_config();
+        cfg.tick_rate_hz = 0;
+        let daemon = BrainstemDaemon::try_new(cfg).unwrap();
+        let ingress = daemon.ingress();
+        let result = tokio::time::timeout(Duration::from_millis(500), daemon.run()).await;
+        let inner = result.expect("run must return immediately rather than tick");
+        assert!(inner.is_err());
+        assert!(ingress.is_shutdown());
+    }
+
+    #[tokio::test]
+    async fn run_unblocks_waiting_producer_when_startup_fails() {
+        use crate::ingress::{EnqueueOutcome, MessageClass, OverflowPolicy};
+        use std::sync::mpsc;
+        use std::thread;
+
+        let mut cfg = sample_config();
+        cfg.runtime_mode = RuntimeMode::Live;
+        cfg.izh_count = 0;
+        cfg.model_path = PathBuf::from("/no/such/snn_model.json");
+        cfg.ingress.control_policy = OverflowPolicy::BlockTimeout;
+        cfg.ingress.control_capacity = 1;
+        cfg.ingress.block_timeout_ms = 60_000;
+        let daemon = BrainstemDaemon::try_new(cfg).unwrap();
+        let ingress = daemon.ingress();
+        assert!(
+            ingress
+                .enqueue(
+                    MessageClass::Control,
+                    IngressPacket {
+                        stimuli: vec![1.0],
+                        modulators: None,
+                    },
+                )
+                .accepted()
+        );
+
+        let producer = ingress.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let outcome = producer.enqueue(
+                MessageClass::Control,
+                IngressPacket {
+                    stimuli: vec![2.0],
+                    modulators: None,
+                },
+            );
+            let _ = tx.send(outcome);
+        });
+
+        let started = std::time::Instant::now();
+        while ingress.metrics().control.producer_waits == 0 {
+            if started.elapsed() > Duration::from_secs(2) {
+                panic!("producer never entered block_timeout wait");
+            }
+            thread::yield_now();
+        }
+
+        let result = tokio::time::timeout(Duration::from_millis(500), daemon.run()).await;
+        let inner = result.expect("run must return immediately rather than tick");
+        assert!(inner.is_err());
+        let outcome = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("producer hung after failed startup");
+        assert_eq!(outcome, EnqueueOutcome::Shutdown);
+        assert!(ingress.is_shutdown());
     }
 
     #[test]

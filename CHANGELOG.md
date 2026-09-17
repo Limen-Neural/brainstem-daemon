@@ -43,7 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overflow policies (`block_timeout`, `reject`, `drop_oldest`, `coalesce`), and
   accepted/rejected/dropped/coalesced/depth/high-water-mark/producer-wait metrics.
   Optional `[ingress]` TOML section; omitted keys keep the documented defaults.
-  Shutdown unblocks waiting producers.
+  Shutdown unblocks waiting producers. Configured `max_payload_len` is
+  rejected above `MAX_PAYLOAD_LEN` (1048576). Startup-fail paths in
+  `run_loop` call `BoundedIngress::shutdown()` so blocked producers do not
+  wait out `block_timeout_ms`.
 
 ### Changed
 
