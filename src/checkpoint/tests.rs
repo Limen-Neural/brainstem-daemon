@@ -90,10 +90,14 @@ fn live_loads_valid_sidecar_and_records_provenance() {
     assert!((network.neurons[0].weights[0] - 0.5).abs() < 1e-6);
     assert!((network.neurons[1].weights[1] - 0.75).abs() < 1e-6);
     assert!(network.neurons[1].last_spike);
+    assert_eq!(network.stdp_config.reward_lr, 0.0);
     assert_eq!(provenance.schema_id, SCHEMA_ID);
     assert_eq!(provenance.model_id, "spikenaut-snn:test-fixture");
     assert_eq!(provenance.source_path, path);
-    assert_eq!(provenance.content_sha256.len(), 64);
+    assert_eq!(
+        provenance.content_sha256,
+        hex_sha256(valid_sidecar_json().as_bytes())
+    );
     assert_eq!(provenance.encoder.as_deref(), Some("v3_state_telemetry"));
     assert_eq!(provenance.frozen_lineage.as_deref(), Some("test-fixture"));
 }
@@ -189,13 +193,10 @@ fn live_rejects_corrupt_json() {
 fn live_rejects_dimension_mismatch() {
     let dir = unique_dir();
     let path = write_json(&dir, "snn_model.json", &valid_sidecar_json());
-    let cfg = live_config(path, 16, 16);
+    let cfg = live_config(path, 16, 2);
     let err = restore_failed(&cfg);
     let message = err.to_string();
-    assert!(
-        message.contains("LIF count") || message.contains("input width"),
-        "unexpected error: {message}"
-    );
+    assert!(message.contains("LIF count"), "unexpected error: {message}");
 }
 
 #[test]
@@ -350,6 +351,23 @@ fn simulation_uses_blank_with_dimensions_and_does_not_claim_spikenaut() {
     assert_eq!(provenance.schema_id, SIMULATION_SCHEMA_ID);
     assert_eq!(provenance.model_id, "simulation/blank");
     assert_eq!(provenance.content_sha256, "none");
+    assert_eq!(
+        network.stdp_config.reward_lr,
+        neuromod::RmStdpConfig::default().reward_lr
+    );
+}
+
+#[test]
+fn restore_rejects_neuron_count_overflow_before_allocation() {
+    let mut cfg = live_config(PathBuf::from("/no/such/snn_model.json"), 2, 2);
+    cfg.runtime_mode = RuntimeMode::Simulation;
+    cfg.lif_count = usize::MAX;
+    cfg.izh_count = 1;
+    let err = restore_failed(&cfg);
+    assert!(
+        err.to_string().contains("overflows usize"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use neuromod::SpikingNetwork;
+use neuromod::{RmStdpConfig, SpikingNetwork};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -66,6 +66,7 @@ pub struct ModelProvenance {
 ///
 /// Live mode never falls back to a blank `with_dimensions()` network.
 pub fn restore_network(config: &DaemonConfig) -> Result<(SpikingNetwork, ModelProvenance)> {
+    crate::daemon::validate_neuron_count(config)?;
     match config.runtime_mode {
         RuntimeMode::Simulation => Ok(blank_simulation_network(config)),
         RuntimeMode::Live => load_live_checkpoint(config),
@@ -197,8 +198,9 @@ struct SidecarNeuron {
     threshold: f64,
     last_spike: bool,
     weights: Vec<f64>,
-    /// Sidecar readout row. neuromod 0.4 has no readout matrix; values are
-    /// validated as finite and then ignored.
+    /// Sidecar readout row. neuromod 0.6.0 has no Distill readout matrix;
+    /// values are validated as finite and then ignored (fail-closed rejection
+    /// of this field is stacked on PR #57).
     #[serde(default)]
     output_weights: Option<Vec<f64>>,
 }
@@ -385,7 +387,7 @@ fn require_finite(value: f64, context: &str) -> Result<()> {
     if !value.is_finite() {
         bail!("invalid Spikenaut sidecar: {context} is {value}, expected a finite number");
     }
-    // Distill stores f64; neuromod 0.4 restores f32. Reject values that
+    // Distill stores f64; neuromod 0.6 restores f32. Reject values that
     // overflow so restore cannot inject infinities.
     if !(value as f32).is_finite() {
         bail!("invalid Spikenaut sidecar: {context} is {value}, which overflows f32");
@@ -440,9 +442,19 @@ fn apply_sidecar(network: &mut SpikingNetwork, document: &SidecarDocument) -> Re
         dst.weights = src.weights.iter().map(|w| *w as f32).collect();
         dst.membrane_potential = src.membrane_potential as f32;
         dst.threshold = src.threshold as f32;
+        dst.base_threshold = src.threshold as f32;
         dst.decay_rate = src.decay_rate as f32;
         dst.last_spike = src.last_spike;
     }
+    // Inference-only: dopamine-gated R-STDP must not retrain Distill weights.
+    // neuromod 0.6.0 `step` still assigns `decay_rate` from acetylcholine,
+    // blends `threshold` toward 0.05..=0.50, and L1-renormalizes rows whose
+    // weights already sum above 1e-6 — those are engine contracts, not
+    // sidecar fields this loader can freeze without forking neuromod.
+    network.set_rm_stdp_config(RmStdpConfig {
+        reward_lr: 0.0,
+        ..network.stdp_config
+    });
     Ok(())
 }
 

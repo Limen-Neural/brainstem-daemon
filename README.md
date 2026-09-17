@@ -165,17 +165,17 @@ Under stub those ZMQ TOML keys are still parsed. The env vars are unset by the d
 ```text
 resolve model/checkpoint
         ↓
-parse + version check
+parse + source/schema gate (`source = "spikenaut_julia"`, optional `q88`/`encoder`)
         ↓
 validate dimensions/input contract
         ↓
-validate finite parameters
+validate finite parameters (including f32 overflow)
         ↓
 validate nonblank expected weights
         ↓
 record provenance/hash/model identity
         ↓
-construct/restore runtime network
+construct/restore runtime `neuromod` 0.6.0 network (freeze R-STDP `reward_lr`)
         ↓
 ONLY THEN start live ticks
 ```
@@ -187,7 +187,9 @@ ONLY THEN start live ticks
 
 Live mode never falls back to `with_dimensions()` after a failed load. A successful live start logs `schema_id`, `model_id`, source path, SHA-256, encoder, source, and lineage.
 
-The allowed software artifact is the Distill sidecar JSON published as Hugging Face [`rmems/Spikenaut-SNN`](https://huggingface.co/rmems/Spikenaut-SNN) (`dataset/merged_v2/snn_model.json`, plus optional hub `config.json`). That is the same document `Spikenaut-SNN` loads; this crate adapts it into `neuromod` 0.4.x rather than inventing a new format. The merged_v2 bank is 16 LIF × 16 input channels and has no Izhikevich cells, so live config must use `izh_count = 0`.
+The allowed software artifact is the Distill sidecar JSON published as Hugging Face [`rmems/Spikenaut-SNN`](https://huggingface.co/rmems/Spikenaut-SNN) (`dataset/merged_v2/snn_model.json`, plus optional hub `config.json`). That is the same document `Spikenaut-SNN` loads; this crate adapts it into crates.io `neuromod` **0.6.0** rather than inventing a new format or forking `stdp_config` / `eligibility`. The merged_v2 bank is 16 LIF × 16 input channels and has no Izhikevich cells, so live config must use `izh_count = 0`.
+
+Live restore copies LIF weights, membrane, `last_spike`, `decay_rate`, and `threshold` (also seeding `base_threshold`) and sets `RmStdpConfig.reward_lr = 0` so dopamine-gated R-STDP cannot retrain the Distill matrix. `neuromod` 0.6.0 `SpikingNetwork::step` still assigns `decay_rate` from acetylcholine, blends `threshold` toward `0.05..=0.50`, and L1-renormalizes rows whose weights already sum above `1e-6`. Those are engine contracts; this crate does not fork `step`.
 
 Simulation is the deliberate test/dev path for a blank network. Do not use it as a stand-in for production Spikenaut.
 

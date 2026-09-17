@@ -168,6 +168,9 @@ impl BrainstemDaemon {
     /// Run with a network already restored by the caller (typically the binary).
     ///
     /// This avoids a second disk read after the pre-socket fail-closed check.
+    /// Live mode still verifies that `provenance` is a Spikenaut sidecar schema
+    /// and that network dimensions match the daemon config, so a blank or
+    /// mismatched pair cannot enter the tick loop.
     pub async fn run_with_restored_network(
         self,
         network: SpikingNetwork,
@@ -185,11 +188,7 @@ impl BrainstemDaemon {
             anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
         }
 
-        let restored = match restored {
-            Some(pair) => Ok(pair),
-            None => checkpoint::restore_network(&cfg)
-                .context("failed to restore runtime network before entering the tick loop"),
-        };
+        let restored = take_restored_network(&cfg, restored);
         let (mut network, provenance) = match restored {
             Ok(pair) => pair,
             Err(err) => {
@@ -319,7 +318,7 @@ fn log_model_provenance(config: &DaemonConfig, provenance: &ModelProvenance) {
     }
 }
 
-fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
+pub(crate) fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
     let total = config
         .lif_count
         .checked_add(config.izh_count)
@@ -340,6 +339,61 @@ fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+fn take_restored_network(
+    cfg: &DaemonConfig,
+    restored: Option<(SpikingNetwork, ModelProvenance)>,
+) -> Result<(SpikingNetwork, ModelProvenance)> {
+    let (network, provenance) = match restored {
+        Some(pair) => pair,
+        None => checkpoint::restore_network(cfg)
+            .context("failed to restore runtime network before entering the tick loop")?,
+    };
+    validate_restored_pair(cfg, &network, &provenance)?;
+    Ok((network, provenance))
+}
+
+fn validate_restored_pair(
+    cfg: &DaemonConfig,
+    network: &SpikingNetwork,
+    provenance: &ModelProvenance,
+) -> Result<()> {
+    match cfg.runtime_mode {
+        RuntimeMode::Live => {
+            if provenance.schema_id != checkpoint::SCHEMA_ID {
+                bail!(
+                    "live mode requires a validated Spikenaut checkpoint (schema {}), got {}",
+                    checkpoint::SCHEMA_ID,
+                    provenance.schema_id
+                );
+            }
+        }
+        RuntimeMode::Simulation => {
+            if provenance.schema_id != checkpoint::SIMULATION_SCHEMA_ID {
+                bail!(
+                    "simulation mode requires schema {}, got {}",
+                    checkpoint::SIMULATION_SCHEMA_ID,
+                    provenance.schema_id
+                );
+            }
+        }
+    }
+    if network.neurons.len() != cfg.lif_count
+        || network.iz_neurons.len() != cfg.izh_count
+        || network.num_channels != cfg.channels
+    {
+        bail!(
+            "restored network dimensions ({}/{}/{}) do not match config lif_count/izh_count/channels ({}/{}/{})",
+            network.neurons.len(),
+            network.iz_neurons.len(),
+            network.num_channels,
+            cfg.lif_count,
+            cfg.izh_count,
+            cfg.channels
+        );
+    }
     Ok(())
 }
 
@@ -659,6 +713,52 @@ channels = 16
         let result = tokio::time::timeout(Duration::from_millis(500), daemon.run()).await;
         let inner = result.expect("run must return immediately rather than tick");
         assert!(inner.is_err());
+    }
+
+    #[test]
+    fn live_run_rejects_simulation_provenance() {
+        let mut cfg = sample_config();
+        cfg.runtime_mode = RuntimeMode::Live;
+        cfg.izh_count = 0;
+        let network = SpikingNetwork::with_dimensions(cfg.lif_count, cfg.izh_count, cfg.channels);
+        let provenance = ModelProvenance {
+            schema_id: crate::checkpoint::SIMULATION_SCHEMA_ID.to_string(),
+            source_path: PathBuf::from("<simulation>"),
+            content_sha256: "none".to_string(),
+            model_id: "simulation/blank".to_string(),
+            encoder: None,
+            source: None,
+            frozen_lineage: None,
+        };
+        let err = take_restored_network(&cfg, Some((network, provenance)))
+            .expect_err("live mode must reject a blank simulation pair");
+        assert!(
+            err.to_string().contains("validated Spikenaut checkpoint"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn live_run_rejects_dimension_mismatched_restored_network() {
+        let mut cfg = sample_config();
+        cfg.runtime_mode = RuntimeMode::Live;
+        cfg.izh_count = 0;
+        let network = SpikingNetwork::with_dimensions(1, 0, 1);
+        let provenance = ModelProvenance {
+            schema_id: crate::checkpoint::SCHEMA_ID.to_string(),
+            source_path: PathBuf::from("snn_model.json"),
+            content_sha256: "abcd".to_string(),
+            model_id: "spikenaut-snn:test".to_string(),
+            encoder: None,
+            source: None,
+            frozen_lineage: None,
+        };
+        let err = take_restored_network(&cfg, Some((network, provenance)))
+            .expect_err("live mode must reject mismatched dimensions");
+        assert!(
+            err.to_string().contains("dimensions"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
