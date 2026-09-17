@@ -19,8 +19,11 @@ only. See [`docs/ci.md`](docs/ci.md).
 Default features are empty. That path uses the in-memory **stub** backend
 and does **not** need `libzmq`.
 
-The optional `corpus-ipc` feature (same as `--all-features` today) links
-ZeroMQ. Install `libzmq` first (`libzmq3-dev` on Debian/Ubuntu).
+The optional `corpus-ipc` feature (same as `--all-features` today) compiles
+ZeroMQ via `zmq-sys` / `zeromq-src` (needs a C++ compiler). Install
+`libzmq3-dev` on Debian/Ubuntu if you prefer a system library, and use
+Rust 1.98.1 (or `--ignore-rust-version`) because published `corpus-ipc`
+0.1 declares that MSRV.
 
 See README [Backends (temporary)](README.md#backends-temporary) for the
 feature → backend → config-key truth table (including env vars that are

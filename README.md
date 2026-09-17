@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/Limen-Neural/brainstem-daemon/actions/workflows/ci.yml/badge.svg)](https://github.com/Limen-Neural/brainstem-daemon/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Crates.io](https://img.shields.io/crates/v/brainstem-daemon.svg)](https://crates.io/crates/brainstem-daemon)
+[![docs.rs](https://docs.rs/brainstem-daemon/badge.svg)](https://docs.rs/brainstem-daemon)
 
 Headless spiking neural-network runtime written in Rust.
 
@@ -18,15 +20,35 @@ Headless spiking neural-network runtime written in Rust.
 
 ---
 
+## Install
+
+From crates.io (binary):
+
+```bash
+cargo install brainstem-daemon
+# Optional ZeroMQ / corpus-ipc backend (needs a C/C++ toolchain; system libzmq is optional):
+cargo install brainstem-daemon --features corpus-ipc
+```
+
+As a library dependency (crates.io, not a git pin):
+
+```toml
+brainstem-daemon = "0.1"
+# Optional ZeroMQ backend:
+brainstem-daemon = { version = "0.1", features = ["corpus-ipc"] }
+```
+
+The optional `corpus-ipc` feature depends on the published `corpus-ipc` crate (`0.1`, `features = ["zmq"]`). The default path uses the in-memory stub backend and does not need ZeroMQ.
+
 ## Building
 
-Requires **Rust 1.97.1 only** (`rust-toolchain.toml`). Do not use other toolchains.
+Requires **Rust 1.97.1** (`rust-toolchain.toml`) for the default stub crate. Enabling `--features corpus-ipc` also compiles published `corpus-ipc` 0.1, whose MSRV is **1.98.1** — use that toolchain (or `cargo … --ignore-rust-version`) for the feature build.
 
 ```bash
 # Release build, default stub backend (no libzmq)
 cargo build --release --bin brainstem-daemon
 
-# Optional ZeroMQ / corpus-ipc backend (needs system libzmq)
+# Optional ZeroMQ / corpus-ipc backend
 cargo build --release --bin brainstem-daemon --features corpus-ipc
 ```
 
@@ -88,7 +110,7 @@ enabled = true
 
 ### Backends (temporary)
 
-Default Cargo features are empty (`default = []` in `Cargo.toml`). That path uses the in-memory **stub** backend (`StubStimulusSource` + `NoopSpikeSink`) and does **not** need `libzmq`. The optional `corpus-ipc` feature (same as `--all-features` today) pulls the `corpus-ipc` git dependency and links system ZeroMQ (`libzmq3-dev` on Debian/Ubuntu). It does not vendor ZeroMQ.
+Default Cargo features are empty (`default = []` in `Cargo.toml`). That path uses the in-memory **stub** backend (`StubStimulusSource` + `NoopSpikeSink`) and does **not** need ZeroMQ. The optional `corpus-ipc` feature (same as `--all-features` today) pulls `corpus-ipc` **from crates.io** (`0.1`, `features = ["zmq"]`) plus this crate's optional `zmq` dependency. Published `corpus-ipc` compiles libzmq via `zmq-sys` / `zeromq-src` (a C++ compiler is required; a system `libzmq` package is not). It does not vendor ZeroMQ as a git submodule.
 
 `DaemonConfig` deserialization is **not** feature-gated: `spine_sub_port`, `spine_pub_port`, and `model_path` are still required in TOML even on the stub path (`services` is the only optional field, defaulting to empty). Effect at runtime depends on which backend is **wired**.
 
@@ -102,7 +124,7 @@ Default Cargo features are empty (`default = []` in `Cargo.toml`). That path use
 
 Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`. Those always inject `BackendPair::stub()`. Only `src/bin/brainstem_daemon.rs` constructs `ZmqStimulusSource` + `ZmqSpikeSink` when `corpus-ipc` is on.
 
-Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. Call `StimulusSource::initialize(...)` on the source first (as the binary does). Neither constructor nor `run` calls `initialize`; skipping it makes ingress fail with `ZmqBrainBackend not initialized`.
+Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. Call `StimulusSource::initialize(...)` on the source first (as the binary does). Neither constructor nor `run` calls `initialize`; skipping it makes ingress fail with `ZmqIpcBackend not initialized`.
 
 #### Config keys and env vars
 
@@ -112,20 +134,20 @@ Library users who want live ZMQ must build that pair themselves under `#[cfg(fea
 | `tick_rate_hz` | used | used |
 | `log_level` | binary tracing init only; unused by `::new()` / `run` | binary tracing init only; unused by `::new()` / `run` |
 | `services` | used (`ServiceRegistry`) | used |
-| `spine_sub_port` | parsed, **no-op** | sets `SPIKENAUT_ZMQ_READOUT_IPC` to `tcp://127.0.0.1:<port>` (also sets unused `CORPUS_IPC_ZMQ_READOUT_IPC` for compatibility) |
+| `spine_sub_port` | parsed, **no-op** | sets `CORPUS_IPC_ZMQ_READOUT_IPC` to `tcp://127.0.0.1:<port>` (also sets legacy `SPIKENAUT_ZMQ_READOUT_IPC` for compatibility) |
 | `spine_pub_port` | parsed, **no-op** | binds ZMQ PUB `tcp://*:<port>` |
-| `model_path` | parsed, **no-op** (`StubStimulusSource::initialize` ignores it) | passed literally to `initialize` (no `~` expansion); pinned `ZmqBrainBackend` currently ignores `_model_path` |
+| `model_path` | parsed, **no-op** (`StubStimulusSource::initialize` ignores it) | passed literally to `initialize` (no `~` expansion); published `ZmqIpcBackend` currently ignores `_model_path` |
 
 **Settings that only take effect with `corpus-ipc`** (the `brainstem-daemon` binary built `--features corpus-ipc`):
 
-- `spine_sub_port` (drives `SPIKENAUT_ZMQ_READOUT_IPC`)
+- `spine_sub_port` (drives `CORPUS_IPC_ZMQ_READOUT_IPC`)
 - `spine_pub_port`
-- `SPIKENAUT_ZMQ_READOUT_IPC` (const `CORPUS_IPC_READOUT_ENV`; this is what pinned `ZmqBrainBackend::initialize` reads)
+- `CORPUS_IPC_ZMQ_READOUT_IPC` (const `CORPUS_IPC_READOUT_ENV`; this is what published `ZmqIpcBackend::initialize` reads)
 
-**Passed through / set, but currently unused by the pinned dep:**
+**Passed through / set, but currently unused by published `corpus-ipc` 0.1:**
 
 - `model_path` (literal filesystem path; `~` is not expanded; passed to `initialize`, which names the argument `_model_path` and does not consume it)
-- `CORPUS_IPC_ZMQ_READOUT_IPC` (the binary still sets this alongside `SPIKENAUT_ZMQ_READOUT_IPC` for compatibility; pinned `corpus-ipc` does not read it)
+- `SPIKENAUT_ZMQ_READOUT_IPC` (const `LEGACY_SPIKENAUT_READOUT_ENV`; the binary still sets this alongside `CORPUS_IPC_ZMQ_READOUT_IPC` for older tooling; published `corpus-ipc` does not read it)
 
 Under stub those TOML keys are still parsed. The env vars are unset by the default binary. Nothing in this crate reads them without the `corpus-ipc` feature.
 
@@ -253,8 +275,9 @@ restorecon -Rv ~/.config/soma
 ## Contributing
 
 Local quality gate (fmt, clippy, stub vs optional `corpus-ipc` tests):
-see [`REVIEW.md`](REVIEW.md). GitHub Actions OS matrix and ZeroMQ skips:
-[`docs/ci.md`](docs/ci.md).
+see [REVIEW.md](https://github.com/Limen-Neural/brainstem-daemon/blob/main/REVIEW.md).
+GitHub Actions OS matrix and ZeroMQ skips:
+[docs/ci.md](https://github.com/Limen-Neural/brainstem-daemon/blob/main/docs/ci.md).
 
 ## License
 

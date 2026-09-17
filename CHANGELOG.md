@@ -9,10 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- crates.io package metadata: `readme`, `homepage`, `documentation`,
+  `keywords`, `categories`, docs.rs config, and `exclude` for repo-only
+  files (CI, agent docs, Docker). Dual MIT/Apache-2.0 license files stay
+  in the package.
 - GitHub Actions CI matrix: stub build/test/clippy on Linux, macOS, and
   Windows; rustfmt and optional `corpus-ipc` / libzmq jobs on Linux only
   (`docs/ci.md`).
-- Stub vs `corpus-ipc` backend feature truth table in `README.md`: which Cargo flags wire which backend, which TOML keys apply, and which env vars are no-ops under stub. Documents that `model_path` is passed literally (no `~` expansion) but currently ignored by pinned `ZmqBrainBackend`, that `CORPUS_IPC_ZMQ_READOUT_IPC` is binary-set compatibility only, and that `log_level` is binary tracing-init only.
+- Stub vs `corpus-ipc` backend feature truth table in `README.md`: which Cargo flags wire which backend, which TOML keys apply, and which env vars are no-ops under stub. Documents that `model_path` is passed literally (no `~` expansion) but currently ignored by published `ZmqIpcBackend`, that `SPIKENAUT_ZMQ_READOUT_IPC` is binary-set compatibility only, and that `log_level` is binary tracing-init only.
 - GitHub Actions CI workflow for formatting, clippy, build, and test validation.
 - Config-driven `ServiceRegistry` and `BrainstemDaemon` in the library.
 - `DaemonConfig.services` field for registering named, enabled services.
@@ -27,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Switch optional `corpus-ipc` from a git pin to crates.io `0.1.0`
+  (`features = ["zmq"]`). ZMQ ingress uses published `ZmqIpcBackend` /
+  `IpcBackend::process_batch`; egress publishes unversioned
+  `IpcMessage::Spikes` JSON. The binary sets `CORPUS_IPC_ZMQ_READOUT_IPC`
+  (what 0.1 reads) and still sets `SPIKENAUT_ZMQ_READOUT_IPC` for older
+  tooling.
+- Bump `neuromod` from `0.4.0` to published `0.5.2`. Ingress float tail
+  `[dopamine, cortisol, acetylcholine, tempo]` maps onto 0.5 fields:
+  cortisol → `norepinephrine`; `tempo` has no analogue (`serotonin` stays
+  default `0.0`).
 - Relicense from GPL-3.0 to dual MIT/Apache-2.0.
 - Add SPDX license identifiers to all source files.
 - Refactor `soma-daemon` binary into a thin wrapper over `BrainstemDaemon`.

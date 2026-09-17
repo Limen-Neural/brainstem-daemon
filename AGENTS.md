@@ -51,7 +51,7 @@ This repository is preconfigured on the Cursor Cloud virtual machine. The Rust t
 
 For most development, use the in-memory stub backend. It needs no `libzmq` and no open ports. This is the safest path for everyday work and continuous integration.
 
-If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls the `corpus-ipc` git dependency and links the system `libzmq` library (install `libzmq3-dev` on Debian/Ubuntu). It does not vendor ZeroMQ.
+If you need ZeroMQ networking, enable the `corpus-ipc` feature. That feature pulls published `corpus-ipc` 0.1 from crates.io (`features = ["zmq"]`) and this crate's optional `zmq` dependency. Published `corpus-ipc` compiles libzmq via `zmq-sys` (needs a C++ compiler; `libzmq3-dev` is still useful on Debian/Ubuntu). It does not vendor ZeroMQ as a git submodule. The `corpus-ipc` crate's MSRV is 1.98.1; default stub builds stay on 1.97.1.
 
 Prefer the README [Backends (temporary)](README.md#backends-temporary) section as the user-facing truth table, unless a newer code change supersedes it.
 That table maps Cargo flags to the backend and to which config keys and env vars apply.
@@ -85,5 +85,5 @@ model_path     = "~/models/soma16.mem"
 
 The `model_path` is not used by the stub backend.
 With `--features corpus-ipc` the binary passes it literally to `ZmqStimulusSource::initialize`.
-`~` is not expanded, and the pinned `ZmqBrainBackend` currently ignores `_model_path`.
+`~` is not expanded, and published `ZmqIpcBackend` currently ignores `_model_path`.
 With the stub backend, `brainstem-daemon` runs a headless spiking-neural-network tick loop and logs `🔌 Using stub backend`.

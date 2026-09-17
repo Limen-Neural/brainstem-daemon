@@ -19,8 +19,10 @@ use crate::backend::{
 };
 use crate::registry::{ServiceConfig, ServiceRegistry};
 
-// Keep the const for compatibility when the corpus-ipc feature is used.
-pub const CORPUS_IPC_READOUT_ENV: &str = "SPIKENAUT_ZMQ_READOUT_IPC";
+/// Env var read by crates.io `corpus-ipc` 0.1 `ZmqIpcBackend::initialize`.
+pub const CORPUS_IPC_READOUT_ENV: &str = "CORPUS_IPC_ZMQ_READOUT_IPC";
+/// Legacy name still set by the binary for older tooling; published corpus-ipc ignores it.
+pub const LEGACY_SPIKENAUT_READOUT_ENV: &str = "SPIKENAUT_ZMQ_READOUT_IPC";
 
 /// Daemon configuration loaded from TOML.
 #[derive(Debug, Deserialize, Clone)]
@@ -344,12 +346,15 @@ fn decode_inputs(packet: &IngressPacket, stimuli: &mut [f32]) -> NeuroModulators
 
     match packet.modulators.as_ref() {
         Some(mods) if mods.len() >= 4 => {
+            // Ingress tail is still [dopamine, cortisol, acetylcholine, tempo]
+            // (corpus-ipc `NeuromodulatorSnapshot` wire layout). neuromod 0.5
+            // maps cortisol → norepinephrine (stress/arousal) and has no tempo
+            // field; serotonin is left at default 0.0.
             return NeuroModulators {
                 dopamine: mods[0],
-                cortisol: mods[1],
+                norepinephrine: mods[1],
                 acetylcholine: mods[2],
-                tempo: mods[3],
-                aux_dopamine: 0.0,
+                serotonin: 0.0,
             };
         }
         _ => {}
@@ -433,9 +438,9 @@ mod tests {
         let mut stimuli = vec![0.0; 4];
         let mods = decode_inputs(&packet, &mut stimuli);
         assert_eq!(mods.dopamine, 0.5);
-        assert_eq!(mods.cortisol, 0.6);
+        assert_eq!(mods.norepinephrine, 0.6);
         assert_eq!(mods.acetylcholine, 0.7);
-        assert_eq!(mods.tempo, 0.8);
+        assert_eq!(mods.serotonin, 0.0);
     }
 
     #[test]
