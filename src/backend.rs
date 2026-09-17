@@ -252,12 +252,12 @@ mod zmq_impl {
             if !rejected && self.last_modulators.is_none() {
                 return None;
             }
-            Some(IngressPacket {
-                stimuli: Vec::new(),
-                modulators: self.last_modulators.clone(),
+            let mut packet = IngressPacket {
                 rejected,
                 ..IngressPacket::default()
-            })
+            };
+            packet.modulators.clone_from(&self.last_modulators);
+            Some(packet)
         }
 
         fn attach_held_modulators(&self, packet: &mut IngressPacket) {

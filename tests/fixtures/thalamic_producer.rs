@@ -24,13 +24,19 @@ pub struct ThalamicProducer {
     pub publish_errors: u64,
 }
 
-impl ThalamicProducer {
-    pub fn new() -> Self {
+impl Default for ThalamicProducer {
+    fn default() -> Self {
         Self {
             safety_healthy: true,
             published: 0,
             publish_errors: 0,
         }
+    }
+}
+
+impl ThalamicProducer {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Build a representative normalized telemetry frame.
@@ -87,12 +93,6 @@ impl ThalamicProducer {
     /// Evaluate a trivial independent protection predicate.
     pub fn safety_tick(&mut self, thermal_ok: bool) {
         self.safety_healthy = thermal_ok;
-    }
-}
-
-impl Default for ThalamicProducer {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
