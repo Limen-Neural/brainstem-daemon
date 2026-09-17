@@ -26,10 +26,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # 1.97.1
+      - name: Install Rust 1.98.1
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # pinned action
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.98.1"
           components: rustfmt
 
       - name: Check formatting
@@ -47,10 +47,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # 1.97.1
+      - name: Install Rust 1.98.1
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # pinned action
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.98.1"
           components: clippy
 
       - name: Cache cargo build
@@ -87,10 +87,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libzmq3-dev
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # 1.97.1
+      - name: Install Rust 1.98.1
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # pinned action
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.98.1"
           components: clippy
 
       - name: Cache cargo build
@@ -105,22 +105,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-corpus-ipc-
 
-      # Published corpus-ipc 0.1 declares rust-version 1.98.1; this job stays on the
-      # crate pin (1.97.1) and ignores the optional dep's rust-version.
       - name: Run clippy (all-features)
         env:
           CC: gcc
           CXX: g++
-        run: cargo clippy --locked --all-targets --all-features --ignore-rust-version -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Build (all-features)
         env:
           CC: gcc
           CXX: g++
-        run: cargo build --locked --all-features --ignore-rust-version
+        run: cargo build --locked --all-features
 
       - name: Test (all-features)
         env:
           CC: gcc
           CXX: g++
-        run: cargo test --locked --all-features --ignore-rust-version
+        run: cargo test --locked --all-features

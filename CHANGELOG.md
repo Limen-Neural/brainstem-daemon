@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `keywords`, `categories`, docs.rs config, and `exclude` for repo-only
   files (CI, agent docs, Docker). Dual MIT/Apache-2.0 license files stay
   in the package.
+- Tick-loop regression tests for `neuromod` 0.6 modulator snapshots, default
+  ingress fallback, and the 0.6.0 `SpikingNetwork` serde contract
+  (`stdp_config` / `eligibility`) used by checkpoint loading (#41).
 - GitHub Actions CI matrix: stub build/test/clippy on Linux, macOS, and
   Windows; rustfmt and optional `corpus-ipc` / libzmq jobs on Linux only
   (`docs/ci.md`).
@@ -37,12 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `IpcMessage::Spikes` JSON. The binary sets `CORPUS_IPC_ZMQ_READOUT_IPC`
   (what 0.1 reads) and still sets `SPIKENAUT_ZMQ_READOUT_IPC` for older
   tooling.
-- Bump `neuromod` from `0.4.0` to published `0.5.2`. Ingress float tail
-  `[dopamine, cortisol, acetylcholine, tempo]` maps onto 0.5 fields:
-  cortisol → `norepinephrine`; `tempo` has no analogue (`serotonin` stays
-  default `0.0`).
-- Optional `corpus-ipc` CI/local commands pass `--ignore-rust-version` so the
-  1.97.1 pin can compile published `corpus-ipc` 0.1 (minimum supported Rust version 1.98.1).
+- Upgrade `neuromod` from 0.4.0 to crates.io **0.6.0** (pre-1.0 range
+  `>=0.6.0, <0.7.0`). Ingress modulators map to dopamine / serotonin /
+  acetylcholine / norepinephrine; `cortisol`, `tempo`, and `aux_dopamine`
+  were removed upstream. The tick loop still calls `SpikingNetwork::step`
+  (0.6 thread-local wrapper around `step_with_rng`). Checkpoints now carry
+  engine-wired R-STDP (`stdp_config` / per-LIF `eligibility`).
+- Align MSRV and toolchain pins to **Rust 1.98.1** (`Cargo.toml`,
+  `rust-toolchain.toml`, CI, `Dockerfile`, `AGENTS.md`, `README.md`,
+  `.devin/blueprint.yaml`) so stub and optional `corpus-ipc` 0.1 builds
+  share one pin (no `--ignore-rust-version`).
 - Relicense from GPL-3.0 to dual MIT/Apache-2.0.
 - Add SPDX license identifiers to all source files.
 - Refactor `soma-daemon` binary into a thin wrapper over `BrainstemDaemon`.

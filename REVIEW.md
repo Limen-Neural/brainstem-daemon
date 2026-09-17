@@ -8,6 +8,20 @@ This file is the local checklist. GitHub Actions runs the stub commands on
 Linux, macOS, and Windows, and the optional `corpus-ipc` job on Linux
 only. See [`docs/ci.md`](docs/ci.md).
 
+## MSRV pin rule
+
+`Cargo.toml` `rust-version`, `rust-toolchain.toml` `channel`, and every
+`toolchain:` string in `.github/workflows/ci.yml` must stay **identical**
+(currently **1.98.1**). `Dockerfile` `FROM rust:` tags and
+`.devin/blueprint.yaml` rustup pins must match too.
+
+To bump MSRV:
+
+1. Set the new version in `Cargo.toml`, `rust-toolchain.toml`, `ci.yml`,
+   `Dockerfile`, `.devin/blueprint.yaml`, `README.md`, and `AGENTS.md`.
+2. Run the mandatory stub commands below on that toolchain.
+3. Do not bump only one pin.
+
 ## When to run
 
 - Before every push that changes `src/`, `Cargo.toml`, or CI
@@ -21,9 +35,9 @@ and does **not** need `libzmq`.
 
 The optional `corpus-ipc` feature (same as `--all-features` today) compiles
 ZeroMQ via `zmq-sys` / `zeromq-src` (needs a C++ compiler). Install
-`libzmq3-dev` on Debian/Ubuntu if you prefer a system library, and use
-Rust 1.98.1 (or `--ignore-rust-version`) because published `corpus-ipc`
-0.1 declares that minimum supported Rust version (MSRV).
+`libzmq3-dev` on Debian/Ubuntu if you prefer a system library. The crate
+pin is **Rust 1.98.1**, matching published `corpus-ipc` 0.1, so these
+commands do not need `--ignore-rust-version`.
 
 See README [Backends (temporary)](README.md#backends-temporary) for the
 feature → backend → config-key truth table (including env vars that are
@@ -46,15 +60,13 @@ cargo test --locked
 # Debian/Ubuntu
 sudo apt-get install -y libzmq3-dev
 
-# Published corpus-ipc 0.1 declares minimum supported Rust version (MSRV) 1.98.1; pass --ignore-rust-version
-# when staying on this crate's 1.97.1 pin.
-cargo clippy --locked --all-targets --features corpus-ipc --ignore-rust-version -- -D warnings
-cargo test --locked --features corpus-ipc --ignore-rust-version
+cargo clippy --locked --all-targets --features corpus-ipc -- -D warnings
+cargo test --locked --features corpus-ipc
 
 # CI today uses --all-features (equivalent while corpus-ipc is the only feature)
-cargo clippy --locked --all-targets --all-features --ignore-rust-version -- -D warnings
-cargo build --locked --all-features --ignore-rust-version
-cargo test --locked --all-features --ignore-rust-version
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo build --locked --all-features
+cargo test --locked --all-features
 ```
 
 If a `--all-features` build fails because the C++ compiler cannot find a
