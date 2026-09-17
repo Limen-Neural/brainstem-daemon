@@ -146,6 +146,36 @@ fn live_rejects_sidecar_with_output_weights() {
 }
 
 #[test]
+fn live_rejects_sidecar_with_null_output_weights() {
+    // `"output_weights": null` must not deserialize as "field omitted";
+    // fail-closed treats any present key as unrestorable readout state.
+    let dir = unique_dir();
+    let json = r#"{
+            "source": "spikenaut_julia",
+            "encoder": "v3_state_telemetry",
+            "q88": "signed",
+            "neurons": [
+                {
+                    "decay_rate": 0.85,
+                    "membrane_potential": 0.1,
+                    "threshold": 1.0,
+                    "last_spike": false,
+                    "weights": [0.5, -0.25],
+                    "output_weights": null
+                }
+            ]
+        }"#;
+    let path = write_json(&dir, "snn_model.json", json);
+    let cfg = live_config(path, 1, 2);
+    let err = restore_failed(&cfg);
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("output_weights"),
+        "null output_weights must still be rejected, got: {msg}"
+    );
+}
+
+#[test]
 fn live_loads_legacy_sidecar_omitting_output_weights() {
     // Older checkpoints predate the `output_weights` field entirely; the
     // serde default must keep loading them after fail-closed was added.
