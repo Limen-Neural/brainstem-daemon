@@ -315,3 +315,50 @@ fn thalamic_stays_healthy_when_brainstem_unavailable() {
     assert!(thalamic.safety_healthy);
     let _still_producing = thalamic.simulate_telemetry(10, CHANNELS);
 }
+
+#[test]
+fn thalamic_restart_keeps_hardware_safety_out_of_brainstem() {
+    let dir = TempDir::new("brainstem-smoke-restart");
+    let path = write_smoke_sidecar(dir.path());
+
+    // First Thalamic instance: local thermal fault, then stop.
+    let mut thalamic = ThalamicProducer::new();
+    thalamic.safety_tick(false);
+    assert!(!thalamic.safety_healthy);
+    drop(thalamic);
+
+    // Restart: safety is process-local and starts healthy. Brainstem never
+    // inherited the fault (this crate has no thermal/power/NVML fields).
+    let mut restarted = ThalamicProducer::new();
+    assert!(restarted.safety_healthy);
+    let batch = restarted.simulate_telemetry(7, CHANNELS);
+    let bytes = restarted.encode_frame(&batch).unwrap();
+    let mut transport = CaptureTransport { frames: Vec::new() };
+    restarted.publish(Some(&mut transport), &bytes);
+    assert_eq!(restarted.published, 1);
+    assert!(restarted.safety_healthy);
+
+    let policy = IngressPolicy::new(CHANNELS, Some(Duration::from_secs(1)));
+    let packet = accept_ipc_json(&transport.frames[0], &policy, now_ns()).unwrap();
+
+    let source = QueuedStimulusSource {
+        packets: VecDeque::from([Ok(packet)]),
+    };
+    let sink = CollectingSpikeSink::new();
+    let pair = BackendPair {
+        source: Box::new(source),
+        sink: Box::new(sink),
+    };
+    let stats = BrainstemDaemon::try_with_backend(smoke_config(path), pair)
+        .unwrap()
+        .run_for_ticks(1)
+        .unwrap();
+
+    assert_eq!(stats.ticks, 1);
+    assert_eq!(stats.accepted_batches, 1);
+    assert!(stats.loaded_checkpoint.is_some());
+
+    // After Brainstem ticks, Thalamic still evaluates protection locally.
+    restarted.safety_tick(false);
+    assert!(!restarted.safety_healthy);
+}
