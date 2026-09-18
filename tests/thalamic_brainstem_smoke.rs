@@ -404,7 +404,7 @@ fn thalamic_os_process_restart_does_not_leak_safety() {
             std::env::var_os(OS_RESTART_CHILD_ENV).is_some(),
             "child must be marked as a new process, not an in-process reconstruct"
         );
-        let mut child = ThalamicProducer::new();
+        let child = ThalamicProducer::new();
         assert!(
             child.safety_healthy,
             "new OS process must not inherit the parent's thermal fault"
