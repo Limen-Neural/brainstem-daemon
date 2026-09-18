@@ -321,11 +321,12 @@ fn thalamic_restart_keeps_hardware_safety_out_of_brainstem() {
     let dir = TempDir::new("brainstem-smoke-restart");
     let path = write_smoke_sidecar(dir.path());
 
-    // First Thalamic instance: local thermal fault, then stop.
-    let mut thalamic = ThalamicProducer::new();
-    thalamic.safety_tick(false);
-    assert!(!thalamic.safety_healthy);
-    drop(thalamic);
+    // First Thalamic instance: local thermal fault, then stop (end of scope).
+    {
+        let mut thalamic = ThalamicProducer::new();
+        thalamic.safety_tick(false);
+        assert!(!thalamic.safety_healthy);
+    }
 
     // Restart: safety is process-local and starts healthy. Brainstem never
     // inherited the fault (this crate has no thermal/power/NVML fields).
