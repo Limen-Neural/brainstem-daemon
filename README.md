@@ -57,19 +57,34 @@ Thalamic can be stopped and started again without Brainstem taking over hardware
 
 ## Install
 
-From crates.io (binary):
+**0.3.0 is prepared in-tree but is not on crates.io yet.** `cargo publish` has
+not run; the last published crate is **0.1.2**. Until publication,
+`brainstem-daemon = "0.3.0"` does not resolve from the registry (use a git or
+path dependency for development). After 0.3.0 is published:
+
+From crates.io (binary) — pick **one**:
 
 ```bash
 cargo install brainstem-daemon
+```
+
+```bash
 # Optional ZeroMQ / corpus-ipc backend (needs a C/C++ toolchain; system libzmq is optional):
 cargo install brainstem-daemon --features corpus-ipc
 ```
 
-As a library dependency (crates.io, not a git pin):
+As a library dependency (crates.io, not a git pin) — pick **one** table; do not
+paste both keys into the same `Cargo.toml`:
+
+Default stub backend (no ZeroMQ):
 
 ```toml
 brainstem-daemon = "0.3.0"
-# Optional ZeroMQ backend:
+```
+
+Optional ZeroMQ / `corpus-ipc` backend:
+
+```toml
 brainstem-daemon = { version = "0.3.0", features = ["corpus-ipc"] }
 ```
 
@@ -255,7 +270,7 @@ Live restore copies LIF weights, membrane, `last_spike`, `decay_rate`, and `thre
 
 CPU-only integration coverage (no GPU) lives in `tests/thalamic_brainstem_smoke.rs` and is gated on `--features corpus-ipc` so default stub tests never need `libzmq`.
 
-The Thalamic fixture (`tests/fixtures/thalamic_producer.rs`) produces `IpcMessage::Stimuli(StimulusBatch)` from simulated telemetry. It does not import `neuromod` or own a `SpikingNetwork`. Brainstem restores a Distill sidecar JSON checkpoint before ticking, preserves `valid_mask` and `session_id` across the wire, and rejects incompatible schema/JSON loudly. A separate assertion keeps the fixture's safety flag healthy when Brainstem/transport is absent, and a later publish cannot clobber a thermal fault. Dropping the producer and constructing a new one (Thalamic restart) resets only that process-local safety flag; Brainstem health stays liveness/readiness/checkpoint and never inherits thermal/power duty.
+The Thalamic fixture (`tests/fixtures/thalamic_producer.rs`) produces `IpcMessage::Stimuli(StimulusBatch)` from simulated telemetry. It does not import `neuromod` or own a `SpikingNetwork`. Brainstem restores a Distill sidecar JSON checkpoint before ticking, preserves `valid_mask` and `session_id` across the wire, and rejects incompatible schema/JSON loudly. A separate assertion keeps the fixture's safety flag healthy when Brainstem/transport is absent, and a later publish cannot clobber a thermal fault. Dropping the producer and constructing a new one (in-process restart) resets only that process-local safety flag. A child OS process (`thalamic_os_process_restart_does_not_leak_safety`) starts healthy, publishes a wire frame with no thermal/safety keys, and Brainstem `HealthSnapshot` still has no thermal/power fields.
 
 ```bash
 CC=gcc CXX=g++ cargo test --locked --features corpus-ipc --test thalamic_brainstem_smoke

@@ -10,12 +10,15 @@ mod thalamic;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Result;
 use brainstem_daemon::daemon::{BrainstemDaemon, DaemonConfig, RuntimeMode};
 use brainstem_daemon::ingress::{IngressConfig, IngressPolicy, accept_ipc_json};
-use brainstem_daemon::{BackendPair, CollectingSpikeSink, IngressPacket, StimulusSource};
+use brainstem_daemon::{
+    BackendPair, CollectingSpikeSink, HealthSnapshot, IngressPacket, StimulusSource,
+};
 use corpus_ipc::{IpcMessage, StimulusBatch};
 use thalamic::{StimulusTransport, ThalamicProducer};
 
@@ -362,4 +365,107 @@ fn thalamic_restart_keeps_hardware_safety_out_of_brainstem() {
     // After Brainstem ticks, Thalamic still evaluates protection locally.
     restarted.safety_tick(false);
     assert!(!restarted.safety_healthy);
+}
+
+const OS_RESTART_CHILD_ENV: &str = "BRAINSTEM_THALAMIC_OS_RESTART_CHILD";
+const OS_RESTART_FRAME_ENV: &str = "BRAINSTEM_THALAMIC_OS_RESTART_FRAME";
+
+/// True if `key` appears anywhere in a JSON object tree (map keys only).
+fn json_has_key(value: &serde_json::Value, key: &str) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.contains_key(key) || map.values().any(|v| json_has_key(v, key))
+        }
+        serde_json::Value::Array(items) => items.iter().any(|v| json_has_key(v, key)),
+        _ => false,
+    }
+}
+
+fn assert_no_hardware_safety_keys(value: &serde_json::Value, where_: &str) {
+    for key in [
+        "safety_healthy",
+        "thermal",
+        "nvml",
+        "gpu_power",
+        "power_limit",
+    ] {
+        assert!(
+            !json_has_key(value, key),
+            "{where_} must not carry hardware-safety key `{key}`: {value}"
+        );
+    }
+}
+
+#[test]
+fn thalamic_os_process_restart_does_not_leak_safety() {
+    // Child OS process: fresh address space, no parent `ThalamicProducer`.
+    if let Ok(frame_path) = std::env::var(OS_RESTART_FRAME_ENV) {
+        assert!(
+            std::env::var_os(OS_RESTART_CHILD_ENV).is_some(),
+            "child must be marked as a new process, not an in-process reconstruct"
+        );
+        let mut child = ThalamicProducer::new();
+        assert!(
+            child.safety_healthy,
+            "new OS process must not inherit the parent's thermal fault"
+        );
+        let batch = child.simulate_telemetry(11, CHANNELS);
+        let bytes = child.encode_frame(&batch).expect("child encode");
+        std::fs::write(&frame_path, bytes).expect("write child frame");
+        return;
+    }
+
+    let dir = TempDir::new("brainstem-smoke-os-restart");
+    let sidecar = write_smoke_sidecar(dir.path());
+    let frame_path = dir.path().join("child_frame.json");
+
+    let mut parent = ThalamicProducer::new();
+    parent.safety_tick(false);
+    assert!(!parent.safety_healthy);
+
+    let exe = std::env::current_exe().expect("current_exe");
+    let output = Command::new(&exe)
+        .env(OS_RESTART_CHILD_ENV, "1")
+        .env(OS_RESTART_FRAME_ENV, &frame_path)
+        .args([
+            "thalamic_os_process_restart_does_not_leak_safety",
+            "--exact",
+        ])
+        .output()
+        .expect("spawn Thalamic child process");
+    assert!(
+        output.status.success(),
+        "child failed status={:?} stdout={} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Parent process still holds its own thermal fault after the child exits.
+    assert!(!parent.safety_healthy);
+
+    let bytes = std::fs::read(&frame_path).expect("child wrote a frame");
+    let wire: serde_json::Value = serde_json::from_slice(&bytes).expect("child JSON");
+    assert_no_hardware_safety_keys(&wire, "child IpcMessage");
+
+    let policy = IngressPolicy::new(CHANNELS, Some(Duration::from_secs(1)));
+    let packet = accept_ipc_json(&bytes, &policy, now_ns()).unwrap();
+
+    let source = QueuedStimulusSource {
+        packets: VecDeque::from([Ok(packet)]),
+    };
+    let sink = CollectingSpikeSink::new();
+    let pair = BackendPair {
+        source: Box::new(source),
+        sink: Box::new(sink),
+    };
+    let daemon = BrainstemDaemon::try_with_backend(smoke_config(sidecar), pair).unwrap();
+    let snap: HealthSnapshot = daemon.health().snapshot();
+    let snap_json = serde_json::to_value(&snap).expect("snapshot json");
+    assert_no_hardware_safety_keys(&snap_json, "Brainstem HealthSnapshot");
+
+    let stats = daemon.run_for_ticks(1).unwrap();
+    assert_eq!(stats.ticks, 1);
+    assert_eq!(stats.accepted_batches, 1);
+    assert!(stats.loaded_checkpoint.is_some());
 }
