@@ -9,9 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.0] - 2026-09-18
 
-crates.io release matching GitHub milestone **v0.3.0 — Spikenaut SNN runtime**.
-This crate was last published as **0.1.2** (April 2026, `neuromod` 0.4.0). There
-is no 0.2.0 crates.io line; that GitHub milestone was stub-quality work.
+Pending crates.io publication for GitHub milestone **v0.3.0 — Spikenaut SNN runtime**.
+In-tree package version is **0.3.0**; `cargo publish` has not run. Last published
+crate remains **0.1.2** (April 2026, `neuromod` 0.4.0). There is no 0.2.0
+crates.io line; that GitHub milestone was stub-quality work.
 
 ### Added
 
@@ -23,6 +24,10 @@ is no 0.2.0 crates.io line; that GitHub milestone was stub-quality work.
 - Smoke coverage that a dropped/reconstructed Thalamic producer keeps
   hardware-safety state process-local while Brainstem still ticks a loaded
   checkpoint (`thalamic_restart_keeps_hardware_safety_out_of_brainstem`).
+- OS-process Thalamic restart smoke: a child process starts with a clean
+  safety flag; the parent's thermal fault is absent from the published
+  `IpcMessage` JSON and from Brainstem `HealthSnapshot`
+  (`thalamic_os_process_restart_does_not_leak_safety`).
 - Distinct liveness, readiness, recoverable degradation, and sticky fatal health
   (`src/health/`) with a fake-clock state-machine test for every transition and
   recovery path. Optional `control_bind` listener serves `/livez`, `/readyz`,
@@ -111,10 +116,12 @@ is no 0.2.0 crates.io line; that GitHub milestone was stub-quality work.
 - Binary now logs the active backend mode (`🔌 stub` / `📡 ZMQ corpus-ipc`).
 - `decode_inputs` now accepts `&IngressPacket` (with explicit `None` modulator fallback).
 - All direct `corpus_ipc` / `zmq` usage is now feature-gated (except the compatibility `CORPUS_IPC_READOUT_ENV` const).
-- Package version **0.3.0** (`Cargo.toml` / `Cargo.lock`). Install and
-  dependency snippets use `brainstem-daemon = "0.3.0"`. This PR does not
-  create a Git tag or GitHub Release; `cargo publish` remains a maintainer
-  step after merge.
+- Package version **0.3.0** (`Cargo.toml` / `Cargo.lock`). README install and
+  dependency snippets are **post-publication** (`brainstem-daemon = "0.3.0"`
+  once the crate is on crates.io). Default vs `corpus-ipc` examples are
+  separate tables so they cannot be pasted as a duplicate TOML key. This
+  changelog section is pending registry publication; `cargo publish`, a Git
+  tag, and a GitHub Release remain maintainer steps.
 
 ### Removed
 

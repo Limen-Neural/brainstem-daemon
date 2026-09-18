@@ -10,12 +10,15 @@ mod thalamic;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Result;
 use brainstem_daemon::daemon::{BrainstemDaemon, DaemonConfig, RuntimeMode};
 use brainstem_daemon::ingress::{IngressConfig, IngressPolicy, accept_ipc_json};
-use brainstem_daemon::{BackendPair, CollectingSpikeSink, IngressPacket, StimulusSource};
+use brainstem_daemon::{
+    BackendPair, CollectingSpikeSink, HealthSnapshot, IngressPacket, StimulusSource,
+};
 use corpus_ipc::{IpcMessage, StimulusBatch};
 use thalamic::{StimulusTransport, ThalamicProducer};
 
@@ -362,4 +365,123 @@ fn thalamic_restart_keeps_hardware_safety_out_of_brainstem() {
     // After Brainstem ticks, Thalamic still evaluates protection locally.
     restarted.safety_tick(false);
     assert!(!restarted.safety_healthy);
+}
+
+const OS_RESTART_CHILD_ENV: &str = "BRAINSTEM_THALAMIC_OS_RESTART_CHILD";
+const OS_RESTART_FRAME_ENV: &str = "BRAINSTEM_THALAMIC_OS_RESTART_FRAME";
+/// Parent-only token so an inherited empty/`1` env var cannot enter child mode.
+const OS_RESTART_CHILD_TOKEN: &str = "brainstem-thalamic-os-restart-v1";
+
+/// True if `key` appears anywhere in a JSON object tree (map keys only).
+fn json_has_key(value: &serde_json::Value, key: &str) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.contains_key(key) || map.values().any(|v| json_has_key(v, key))
+        }
+        serde_json::Value::Array(items) => items.iter().any(|v| json_has_key(v, key)),
+        _ => false,
+    }
+}
+
+fn assert_no_hardware_safety_keys(value: &serde_json::Value, where_: &str) {
+    for key in [
+        "safety_healthy",
+        "thermal",
+        "nvml",
+        "gpu_power",
+        "power_limit",
+    ] {
+        assert!(
+            !json_has_key(value, key),
+            "{where_} must not carry hardware-safety key `{key}`: {value}"
+        );
+    }
+}
+
+fn os_restart_child_frame_path() -> Option<PathBuf> {
+    match std::env::var(OS_RESTART_CHILD_ENV) {
+        Ok(token) if token == OS_RESTART_CHILD_TOKEN => {
+            std::env::var_os(OS_RESTART_FRAME_ENV).map(PathBuf::from)
+        }
+        _ => None,
+    }
+}
+
+fn write_os_restart_child_frame(frame_path: &Path) {
+    let child = ThalamicProducer::new();
+    assert!(
+        child.safety_healthy,
+        "new OS process must not inherit the parent's thermal fault"
+    );
+    let bytes = child
+        .encode_frame(&child.simulate_telemetry(11, CHANNELS))
+        .expect("child encode");
+    std::fs::write(frame_path, bytes).expect("write child frame");
+}
+
+fn spawn_os_restart_child(frame_path: &Path) -> std::process::Output {
+    let argv0 = std::env::args_os().next().expect("argv0");
+    Command::new(argv0)
+        .env(OS_RESTART_CHILD_ENV, OS_RESTART_CHILD_TOKEN)
+        .env(OS_RESTART_FRAME_ENV, frame_path)
+        .args([
+            "thalamic_os_process_restart_does_not_leak_safety",
+            "--exact",
+        ])
+        .output()
+        .expect("spawn Thalamic child process")
+}
+
+fn tick_brainstem_on_child_frame(sidecar: PathBuf, bytes: &[u8]) -> brainstem_daemon::RuntimeStats {
+    // Child startup + CI scheduling can exceed 1s; this test is about safety
+    // isolation, not ingress freshness.
+    let policy = IngressPolicy::new(CHANNELS, Some(Duration::from_secs(60)));
+    let packet = accept_ipc_json(bytes, &policy, now_ns()).unwrap();
+    let source = QueuedStimulusSource {
+        packets: VecDeque::from([Ok(packet)]),
+    };
+    let pair = BackendPair {
+        source: Box::new(source),
+        sink: Box::new(CollectingSpikeSink::new()),
+    };
+    let daemon = BrainstemDaemon::try_with_backend(smoke_config(sidecar), pair).unwrap();
+    let snap: HealthSnapshot = daemon.health().snapshot();
+    let snap_json = serde_json::to_value(&snap).expect("snapshot json");
+    assert_no_hardware_safety_keys(&snap_json, "Brainstem HealthSnapshot");
+    daemon.run_for_ticks(1).unwrap()
+}
+
+#[test]
+fn thalamic_os_process_restart_does_not_leak_safety() {
+    if let Some(frame_path) = os_restart_child_frame_path() {
+        write_os_restart_child_frame(&frame_path);
+        return;
+    }
+
+    let dir = TempDir::new("brainstem-smoke-os-restart");
+    let sidecar = write_smoke_sidecar(dir.path());
+    let frame_path = dir.path().join("child_frame.json");
+
+    let mut parent = ThalamicProducer::new();
+    parent.safety_tick(false);
+    assert!(!parent.safety_healthy);
+
+    let output = spawn_os_restart_child(&frame_path);
+    assert!(
+        output.status.success(),
+        "child failed status={:?} stdout={} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!parent.safety_healthy);
+
+    let bytes = std::fs::read(&frame_path).expect("child wrote a frame");
+    let wire: serde_json::Value = serde_json::from_slice(&bytes).expect("child JSON");
+    assert_no_hardware_safety_keys(&wire, "child IpcMessage");
+
+    let stats = tick_brainstem_on_child_frame(sidecar, &bytes);
+    assert_eq!(stats.ticks, 1);
+    assert_eq!(stats.accepted_batches, 1);
+    assert!(stats.loaded_checkpoint.is_some());
 }
