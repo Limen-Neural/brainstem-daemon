@@ -1,6 +1,6 @@
 [package]
 name = "brainstem-daemon"
-version = "0.1.2"
+version = "0.3.0"
 edition = "2024"
 # Keep identical to rust-toolchain.toml `channel` and the CI workflow
 # `toolchain:` pin (see REVIEW.md "MSRV pin rule").

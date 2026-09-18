@@ -7,8 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-18
+
+crates.io release matching GitHub milestone **v0.3.0 — Spikenaut SNN runtime**.
+This crate was last published as **0.1.2** (April 2026, `neuromod` 0.4.0). There
+is no 0.2.0 crates.io line; that GitHub milestone was stub-quality work.
+
 ### Added
 
+- README responsibility / failure-domain diagram: `thalamic-relay` (sensory +
+  hardware safety), `corpus-ipc` (published wire/schema), and
+  `brainstem-daemon` (canonical `SpikingNetwork` tick loop) remain separate
+  processes. Documents independent Thalamic stop/restart without moving
+  thermal/power duty into Brainstem (#39).
+- Smoke coverage that a dropped/reconstructed Thalamic producer keeps
+  hardware-safety state process-local while Brainstem still ticks a loaded
+  checkpoint (`thalamic_restart_keeps_hardware_safety_out_of_brainstem`).
 - Distinct liveness, readiness, recoverable degradation, and sticky fatal health
   (`src/health/`) with a fake-clock state-machine test for every transition and
   recovery path. Optional `control_bind` listener serves `/livez`, `/readyz`,
@@ -97,6 +111,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Binary now logs the active backend mode (`🔌 stub` / `📡 ZMQ corpus-ipc`).
 - `decode_inputs` now accepts `&IngressPacket` (with explicit `None` modulator fallback).
 - All direct `corpus_ipc` / `zmq` usage is now feature-gated (except the compatibility `CORPUS_IPC_READOUT_ENV` const).
+- Package version **0.3.0** (`Cargo.toml` / `Cargo.lock`). Install and
+  dependency snippets use `brainstem-daemon = "0.3.0"`. This PR does not
+  create a Git tag or GitHub Release; `cargo publish` remains a maintainer
+  step after merge.
 
 ### Removed
 

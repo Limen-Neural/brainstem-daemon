@@ -6,7 +6,8 @@
 //! This module must not depend on `neuromod` or own a `SpikingNetwork`.
 //! It produces typed `corpus-ipc` sensory frames from simulated telemetry and
 //! keeps a local safety/health flag independent of whether Brainstem is
-//! reachable.
+//! reachable. Dropping and reconstructing the producer (a Thalamic restart)
+//! must not move thermal/power duty into Brainstem.
 
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -22,6 +22,39 @@ Headless spiking neural-network runtime written in Rust.
 
 ---
 
+## Responsibility and failure domains
+
+`brainstem-daemon`, `thalamic-relay`, and `corpus-ipc` stay **separate repositories and separate failure domains**. This process is the single canonical owner of the software `SpikingNetwork` tick loop. Thalamic owns sensory collection and deterministic hardware safety. `corpus-ipc` owns the published wire schema. Stopping or restarting one process does not move those responsibilities into another.
+
+```text
+thalamic-relay ──► corpus-ipc ──► brainstem-daemon ──► spikes/readout
+ sensory/safety     wire/schema      SNN runtime
+```
+
+```text
+┌──────────────────────────┐     ┌─────────────────────┐     ┌──────────────────────────────────┐
+│ thalamic-relay           │     │ corpus-ipc          │     │ brainstem-daemon                 │
+│ (sensory + safety)       │     │ (wire / schema)     │     │ (canonical SNN runtime)          │
+│                          │     │                     │     │                                  │
+│ NVML/GPU + CPU telemetry │     │ crates.io types:    │     │ checkpoint lifecycle/validation  │
+│ thermal/power thresholds │     │  StimulusBatch,     │     │ neuromod::SpikingNetwork restore │
+│ GPU power-limit actuate  │     │  IpcMessage, …      │     │ fixed-rate tick + plasticity     │
+│                          │     │                     │     │ stimulus / modulator ingress     │
+│ Safety stays here when   │     │ No SpikingNetwork   │     │ spike/readout egress             │
+│ this process or          │     │ No hardware safety  │     │ runtime health, identity         │
+│ Brainstem restarts       │     │                     │     │                                  │
+└──────────────────────────┘     └─────────────────────┘     └──────────────────────────────────┘
+         │                                │                              │
+         │  independent stop/restart      │  semver contract             │  independent stop/restart
+         └────────────────────────────────┴──────────────────────────────┘
+ Brainstem does not own NVML/GPU collection, thermal/power hard thresholds,
+ FPGA GPIO, training/distillation, or mining/game/HFT adapters.
+```
+
+Thalamic can be stopped and started again without Brainstem taking over hardware safety. Brainstem can be stopped without Thalamic losing its local protection loop. Evidence: `tests/thalamic_brainstem_smoke.rs` (`thalamic_stays_healthy_when_brainstem_unavailable`, `thalamic_restart_keeps_hardware_safety_out_of_brainstem`). Detail tables: [Role and boundary matrix](#role-and-boundary-matrix).
+
+---
+
 ## Install
 
 From crates.io (binary):
@@ -35,9 +68,9 @@ cargo install brainstem-daemon --features corpus-ipc
 As a library dependency (crates.io, not a git pin):
 
 ```toml
-brainstem-daemon = "0.1"
+brainstem-daemon = "0.3.0"
 # Optional ZeroMQ backend:
-brainstem-daemon = { version = "0.1", features = ["corpus-ipc"] }
+brainstem-daemon = { version = "0.3.0", features = ["corpus-ipc"] }
 ```
 
 The optional `corpus-ipc` feature depends on the published `corpus-ipc` crate (`0.1`, `features = ["zmq"]`). The default path uses the in-memory stub backend and does not need ZeroMQ.
@@ -222,7 +255,7 @@ Live restore copies LIF weights, membrane, `last_spike`, `decay_rate`, and `thre
 
 CPU-only integration coverage (no GPU) lives in `tests/thalamic_brainstem_smoke.rs` and is gated on `--features corpus-ipc` so default stub tests never need `libzmq`.
 
-The Thalamic fixture (`tests/fixtures/thalamic_producer.rs`) produces `IpcMessage::Stimuli(StimulusBatch)` from simulated telemetry. It does not import `neuromod` or own a `SpikingNetwork`. Brainstem restores a Distill sidecar JSON checkpoint before ticking, preserves `valid_mask` and `session_id` across the wire, and rejects incompatible schema/JSON loudly. A separate assertion keeps the fixture's safety flag healthy when Brainstem/transport is absent, and a later publish cannot clobber a thermal fault.
+The Thalamic fixture (`tests/fixtures/thalamic_producer.rs`) produces `IpcMessage::Stimuli(StimulusBatch)` from simulated telemetry. It does not import `neuromod` or own a `SpikingNetwork`. Brainstem restores a Distill sidecar JSON checkpoint before ticking, preserves `valid_mask` and `session_id` across the wire, and rejects incompatible schema/JSON loudly. A separate assertion keeps the fixture's safety flag healthy when Brainstem/transport is absent, and a later publish cannot clobber a thermal fault. Dropping the producer and constructing a new one (Thalamic restart) resets only that process-local safety flag; Brainstem health stays liveness/readiness/checkpoint and never inherits thermal/power duty.
 
 ```bash
 CC=gcc CXX=g++ cargo test --locked --features corpus-ipc --test thalamic_brainstem_smoke
@@ -344,7 +377,7 @@ restorecon -Rv ~/.config/soma
 
 ## Role and boundary matrix
 
-`brainstem-daemon` is the **headless runtime process** for the Limen spiking-neural-network stack. It owns inference-time execution, stimulus ingestion, spike publication, and neuromodulator-driven network stepping. It does not own training, trading, mining, or hardware control.
+`brainstem-daemon` is the **headless runtime process** for the Limen spiking-neural-network stack. It owns inference-time execution, stimulus ingestion, spike publication, and neuromodulator-driven network stepping. It does not own training, trading, mining, or hardware control. The [responsibility and failure-domain diagram](#responsibility-and-failure-domains) is the short form of this table.
 
 | Concern | Owned by `brainstem-daemon` | Not owned |
 |---|---|---|
