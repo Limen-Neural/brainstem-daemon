@@ -1,6 +1,9 @@
 # Brainstem Daemon
 
 [![CI](https://github.com/Limen-Neural/brainstem-daemon/actions/workflows/ci.yml/badge.svg)](https://github.com/Limen-Neural/brainstem-daemon/actions/workflows/ci.yml)
+[![Codecov](https://codecov.io/gh/Limen-Neural/brainstem-daemon/graph/badge.svg)](https://codecov.io/gh/Limen-Neural/brainstem-daemon)
+[![Codacy](https://app.codacy.com/gh/Limen-Neural/brainstem-daemon/badge.svg)](https://app.codacy.com/gh/Limen-Neural/brainstem-daemon/dashboard)
+[![Maintainability](https://qlty.sh/gh/Limen-Neural/projects/brainstem-daemon/maintainability.svg)](https://qlty.sh/gh/Limen-Neural/projects/brainstem-daemon)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Crates.io](https://img.shields.io/crates/v/brainstem-daemon.svg)](https://crates.io/crates/brainstem-daemon)
 [![docs.rs](https://docs.rs/brainstem-daemon/badge.svg)](https://docs.rs/brainstem-daemon)
