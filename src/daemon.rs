@@ -765,26 +765,25 @@ impl OccurrenceLimiter {
     /// Return the number suppressed since the preceding emission.
     ///
     /// `key` identifies the diagnostic payload (e.g. hashed error text). A key
-    /// change resets the occurrence counter so a new failure is not hidden
-    /// behind the previous identity's interval, but `last_emitted_at` is kept
-    /// so `min_gap` still applies. A new identity therefore emits once as
-    /// soon as the floor allows — not faster than `min_gap`, and without
-    /// waiting for the next occurrence-interval boundary.
+    /// change resets suppression, including `last_emitted_at`, so a new failure
+    /// identity re-emits immediately instead of being hidden behind the
+    /// previous key's interval or `min_gap`. Repeats of the *same* key still
+    /// require both the occurrence interval and `min_gap`.
     fn record(&mut self, key: u64, now: time::Instant) -> Option<u64> {
         if self.last_key != Some(key) {
             self.occurrences = 0;
             self.emitted = 0;
             self.last_key = Some(key);
+            self.last_emitted_at = None;
         }
         self.occurrences = self.occurrences.saturating_add(1);
-        let first_for_key = self.emitted == 0;
         let count_due =
             self.occurrences == 1 || (self.occurrences - 1).is_multiple_of(self.interval);
         let time_due = match self.last_emitted_at {
             None => true,
             Some(prev) => now.saturating_duration_since(prev) >= self.min_gap,
         };
-        if (first_for_key || count_due) && time_due {
+        if self.occurrences == 1 || (count_due && time_due) {
             let suppressed = self.occurrences.saturating_sub(self.emitted + 1);
             self.emitted = self.occurrences;
             self.last_emitted_at = Some(now);
@@ -1620,48 +1619,25 @@ channels = 16
 
         assert_eq!(stats.receive_errors, 6);
         // First identity emits once; four repeats are suppressed; the new
-        // identity must emit immediately instead of waiting for the interval.
-        // `TickDiagnostics::new` uses min_gap = 0, so the floor is a no-op here.
+        // identity must emit immediately instead of waiting for the interval
+        // or min_gap (TickDiagnostics::new uses min_gap = 0, and production
+        // Default also clears last_emitted_at on key change).
         assert_eq!(stats.diagnostic_emissions, 2);
         assert_eq!(stats.suppressed_diagnostics, 4);
     }
 
     #[test]
-    fn limiter_preserves_min_gap_across_key_changes() {
-        let gap = Duration::from_millis(100);
-        let mut limiter = OccurrenceLimiter::new(1_000, gap);
+    fn limiter_emits_new_key_immediately_even_with_min_gap() {
+        let mut limiter = OccurrenceLimiter::new(1_000, Duration::from_secs(1));
         let t0 = time::Instant::now();
-
+        assert!(limiter.record(1, t0).is_some());
         assert!(
-            limiter.record(1, t0).is_some(),
-            "first identity emits on first occurrence"
+            limiter.record(2, t0).is_some(),
+            "a new identity re-emits immediately; min_gap is per-key"
         );
         assert!(
             limiter.record(2, t0).is_none(),
-            "a new identity at the same instant is held by min_gap"
-        );
-        assert!(
-            limiter.record(3, t0 + Duration::from_millis(50)).is_none(),
-            "changing keys still cannot beat min_gap"
-        );
-        assert!(
-            limiter.record(3, t0 + gap).is_some(),
-            "a new identity emits once min_gap has elapsed"
-        );
-    }
-
-    #[test]
-    fn limiter_emits_deferred_new_key_once_min_gap_elapses() {
-        let gap = Duration::from_millis(100);
-        let mut limiter = OccurrenceLimiter::new(1_000, gap);
-        let t0 = time::Instant::now();
-
-        assert!(limiter.record(1, t0).is_some());
-        assert!(limiter.record(2, t0 + Duration::from_millis(10)).is_none());
-        assert!(limiter.record(2, t0 + Duration::from_millis(20)).is_none());
-        assert!(
-            limiter.record(2, t0 + gap).is_some(),
-            "after min_gap, emit the new identity without waiting for the occurrence interval"
+            "repeats of the same key are held by min_gap"
         );
     }
 
