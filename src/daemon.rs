@@ -800,11 +800,9 @@ impl OccurrenceLimiter {
 }
 
 fn diagnostic_key(message: &str) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::default();
-    message.hash(&mut hasher);
-    hasher.finish()
+    message.bytes().fold(0u64, |hash, byte| {
+        hash.wrapping_mul(31).wrapping_add(u64::from(byte))
+    })
 }
 
 #[derive(Debug)]
