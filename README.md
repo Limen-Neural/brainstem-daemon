@@ -184,6 +184,12 @@ block_timeout_ms    = 5
 max_payload_len     = 4096
 ```
 
+`log_level` accepts only the five levels shown above; target directives belong
+in `RUST_LOG`. When set, `RUST_LOG` takes precedence over the TOML level and may
+use normal `tracing_subscriber` filter syntax (for example,
+`brainstem_daemon=debug,info`). If `RUST_LOG` is invalid, startup prints one
+diagnostic to stderr and safely falls back to the validated TOML level.
+
 ### Backends (temporary)
 
 Default Cargo features are empty (`default = []` in `Cargo.toml`). That path uses the in-memory **stub** backend (`StubStimulusSource` + `NoopSpikeSink`) and does **not** need ZeroMQ. The optional `corpus-ipc` feature (same as `--all-features` today) pulls `corpus-ipc` **from crates.io** (`0.1`, `features = ["zmq"]`) plus this crate's optional `zmq` dependency. Published `corpus-ipc` compiles libzmq via `zmq-sys` / `zeromq-src` (a C++ compiler is required; a system `libzmq` package is not). It does not vendor ZeroMQ as a git submodule.
@@ -211,7 +217,7 @@ Health snapshots, probe paths, and the transition table live in [`docs/health.md
 | `runtime_mode` | used (`live` restores a Spikenaut sidecar before ticks; `simulation` builds a blank network) | used (same gate; independent of ZMQ) |
 | `lif_count`, `izh_count`, `channels` | used (checked against the checkpoint in live mode) | used |
 | `tick_rate_hz` | used | used |
-| `log_level` | binary tracing init only; unused by `::new()` / `run` | binary tracing init only; unused by `::new()` / `run` |
+| `log_level` | validated by constructors (`::new` / `try_with_backend`); binary tracing default, overridden by a valid `RUST_LOG`; library `run` does not initialize tracing | same |
 | `services` | used (`ServiceRegistry`) | used |
 | `control_bind` | optional HTTP control surface; unset = no listener | same |
 | `ingress` | used (bounded class queues in the tick loop; health reports aggregate fill) | used (same queues wrap backend packets before the network step) |
@@ -369,6 +375,7 @@ Stop it gracefully with `Ctrl-C` (SIGINT) on all platforms. On Unix, `kill` (SIG
    [Service]
    ExecStart=%h/.cargo/bin/brainstem-daemon --config %h/.config/soma/daemon.toml
    Restart=on-failure
+   # Optional: overrides daemon.toml log_level; supports EnvFilter directives.
    Environment=RUST_LOG=info
 
    [Install]

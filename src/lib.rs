@@ -9,6 +9,7 @@ pub mod control;
 pub mod daemon;
 pub mod health;
 pub mod ingress;
+pub mod logging;
 pub mod registry;
 pub mod runtime;
 
