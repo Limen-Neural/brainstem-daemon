@@ -217,7 +217,7 @@ Health snapshots, probe paths, and the transition table live in [`docs/health.md
 | `runtime_mode` | used (`live` restores a Spikenaut sidecar before ticks; `simulation` builds a blank network) | used (same gate; independent of ZMQ) |
 | `lif_count`, `izh_count`, `channels` | used (checked against the checkpoint in live mode) | used |
 | `tick_rate_hz` | used | used |
-| `log_level` | validated binary tracing default; overridden by a valid `RUST_LOG`; unused by `::new()` / `run` | same |
+| `log_level` | validated by constructors (`::new` / `try_with_backend`); binary tracing default, overridden by a valid `RUST_LOG`; library `run` does not initialize tracing | same |
 | `services` | used (`ServiceRegistry`) | used |
 | `control_bind` | optional HTTP control surface; unset = no listener | same |
 | `ingress` | used (bounded class queues in the tick loop; health reports aggregate fill) | used (same queues wrap backend packets before the network step) |

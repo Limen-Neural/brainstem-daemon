@@ -106,6 +106,7 @@ impl DaemonConfig {
 
 /// Observable counters from a bounded tick run (smoke / integration harness).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RuntimeStats {
     pub ticks: u64,
     pub accepted_batches: u64,
@@ -283,6 +284,7 @@ impl BrainstemDaemon {
             time::Instant::now() + Duration::from_secs(60),
             Duration::from_secs(60),
         );
+        heartbeat.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
         let mut shutdown = std::pin::pin!(shutdown_signal());
 
@@ -311,6 +313,7 @@ impl BrainstemDaemon {
                         receive_errors = stats.receive_errors,
                         emit_errors = stats.emit_errors,
                         dropped_spikes = stats.dropped_spikes,
+                        diagnostic_emissions = stats.diagnostic_emissions,
                         suppressed_diagnostics = stats.suppressed_diagnostics,
                         "runtime heartbeat and shed summary"
                     );
@@ -730,29 +733,57 @@ struct TickReport<'a> {
 }
 
 const DIAGNOSTIC_INTERVAL: u64 = 1_000;
+/// Floor for diagnostic re-emission so high tick rates cannot flood logs.
+const DIAGNOSTIC_MIN_GAP: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
 struct OccurrenceLimiter {
     interval: u64,
+    min_gap: Duration,
     occurrences: u64,
     emitted: u64,
+    last_key: Option<u64>,
+    last_emitted_at: Option<time::Instant>,
 }
 
 impl OccurrenceLimiter {
     fn new(interval: u64) -> Self {
         Self {
             interval,
+            // Unit tests construct via TickDiagnostics::new(interval) and need
+            // pure count-based emission; production Default applies DIAGNOSTIC_MIN_GAP.
+            min_gap: Duration::ZERO,
             occurrences: 0,
             emitted: 0,
+            last_key: None,
+            last_emitted_at: None,
         }
     }
 
     /// Return the number suppressed since the preceding emission.
-    fn record(&mut self) -> Option<u64> {
+    ///
+    /// `key` identifies the diagnostic payload (e.g. hashed error text). A key
+    /// change resets suppression so a new failure is not hidden behind the
+    /// previous one's interval. Re-emission also requires `min_gap` so a high
+    /// `tick_rate_hz` cannot turn the occurrence interval into a log flood.
+    fn record(&mut self, key: u64, now: time::Instant) -> Option<u64> {
+        if self.last_key != Some(key) {
+            self.occurrences = 0;
+            self.emitted = 0;
+            self.last_key = Some(key);
+            self.last_emitted_at = None;
+        }
         self.occurrences = self.occurrences.saturating_add(1);
-        if self.occurrences == 1 || (self.occurrences - 1).is_multiple_of(self.interval) {
+        let count_due =
+            self.occurrences == 1 || (self.occurrences - 1).is_multiple_of(self.interval);
+        let time_due = match self.last_emitted_at {
+            None => true,
+            Some(prev) => now.saturating_duration_since(prev) >= self.min_gap,
+        };
+        if self.occurrences == 1 || (count_due && time_due) {
             let suppressed = self.occurrences.saturating_sub(self.emitted + 1);
             self.emitted = self.occurrences;
+            self.last_emitted_at = Some(now);
             Some(suppressed)
         } else {
             None
@@ -763,6 +794,14 @@ impl OccurrenceLimiter {
     fn suppressed(&self) -> u64 {
         self.occurrences.saturating_sub(self.emitted)
     }
+}
+
+fn diagnostic_key(message: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    message.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[derive(Debug)]
@@ -789,7 +828,18 @@ impl TickDiagnostics {
 
 impl Default for TickDiagnostics {
     fn default() -> Self {
-        Self::new(DIAGNOSTIC_INTERVAL)
+        // Inline construction (avoid `Self::new` in `Default` for DeepSource RS-W1090).
+        let mut receive = OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL);
+        let mut emit = OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL);
+        let mut dropped = OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL);
+        receive.min_gap = DIAGNOSTIC_MIN_GAP;
+        emit.min_gap = DIAGNOSTIC_MIN_GAP;
+        dropped.min_gap = DIAGNOSTIC_MIN_GAP;
+        Self {
+            receive,
+            emit,
+            dropped,
+        }
     }
 }
 
@@ -813,12 +863,14 @@ fn run_tick(
         Err(e) => {
             stats.receive_errors = stats.receive_errors.saturating_add(1);
             stats.rejected_batches += 1;
-            match diagnostics.receive.record() {
+            let msg = format!("{e}");
+            let now = time::Instant::now();
+            match diagnostics.receive.record(diagnostic_key(&msg), now) {
                 Some(suppressed) => {
                     stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
                     warn!(
                         total = stats.receive_errors,
-                        suppressed, "Failed to receive from stimulus source: {e}"
+                        suppressed, "Failed to receive from stimulus source: {msg}"
                     );
                 }
                 None => {
@@ -895,14 +947,16 @@ fn run_tick(
     }
     if dropped > 0 {
         stats.dropped_spikes = stats.dropped_spikes.saturating_add(dropped as u64);
-        match diagnostics.dropped.record() {
+        let msg = "dropped spikes with out-of-range IDs";
+        let now = time::Instant::now();
+        match diagnostics.dropped.record(diagnostic_key(msg), now) {
             Some(suppressed) => {
                 stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
                 warn!(
                     dropped_this_tick = dropped,
                     total_dropped_spikes = stats.dropped_spikes,
                     suppressed,
-                    "dropped spikes with out-of-range IDs (network may be larger than u16)"
+                    "{msg} (network may be larger than u16)"
                 );
             }
             None => {
@@ -925,12 +979,14 @@ fn run_tick(
     //   expectations (CollectingSpikeSink) and wire behavior stable.
     if let Err(e) = sink.emit(spike_buf, now) {
         stats.emit_errors = stats.emit_errors.saturating_add(1);
-        match diagnostics.emit.record() {
+        let msg = format!("{e}");
+        let now_diag = time::Instant::now();
+        match diagnostics.emit.record(diagnostic_key(&msg), now_diag) {
             Some(suppressed) => {
                 stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
                 error!(
                     total = stats.emit_errors,
-                    suppressed, "Failed to emit spikes: {e}"
+                    suppressed, "Failed to emit spikes: {msg}"
                 );
             }
             None => {

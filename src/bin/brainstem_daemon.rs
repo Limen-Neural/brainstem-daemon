@@ -60,8 +60,10 @@ fn main() -> anyhow::Result<()> {
     runtime.block_on(run(cfg, config_path))
 }
 
+const RUST_LOG_ENV: &str = "RUST_LOG";
+
 async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
-    let rust_log = std::env::var("RUST_LOG").ok();
+    let rust_log = std::env::var(RUST_LOG_ENV).ok();
     let resolved = brainstem_daemon::logging::resolve_filter(&cfg.log_level, rust_log.as_deref())?;
     if let Some(diagnostic) = resolved.fallback_diagnostic {
         eprintln!("{diagnostic}");
