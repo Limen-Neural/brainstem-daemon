@@ -14,7 +14,6 @@ use brainstem_daemon::daemon::{CORPUS_IPC_READOUT_ENV, LEGACY_SPIKENAUT_READOUT_
 use anyhow::Context;
 use clap::Parser;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
 
 /// CLI arguments.
 #[derive(Parser, Debug)]
@@ -62,10 +61,13 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
+    let rust_log = std::env::var("RUST_LOG").ok();
+    let resolved = brainstem_daemon::logging::resolve_filter(&cfg.log_level, rust_log.as_deref())?;
+    if let Some(diagnostic) = resolved.fallback_diagnostic {
+        eprintln!("{diagnostic}");
+    }
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_new(cfg.log_level.clone()).unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(resolved.filter)
         .init();
 
     info!("Loaded config from {}", config_path.display());

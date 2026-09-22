@@ -25,6 +25,7 @@ use crate::health::{
     CheckpointIdentity, FatalCode, HealthEvent, HealthHandle, HealthLimits, HealthSnapshot,
 };
 use crate::ingress::{BoundedIngress, IngressConfig, MessageClass, OverflowPolicy};
+use crate::logging::validate_log_level;
 use crate::registry::{ServiceConfig, ServiceRegistry};
 
 /// Env var read by crates.io `corpus-ipc` 0.1 `ZmqIpcBackend::initialize`.
@@ -97,6 +98,8 @@ impl DaemonConfig {
             .with_context(|| format!("failed to read config from {}", path.display()))?;
         let cfg: Self = toml::from_str(&data)
             .with_context(|| format!("failed to parse config from {}", path.display()))?;
+        validate_log_level(&cfg.log_level)
+            .with_context(|| format!("invalid config from {}", path.display()))?;
         Ok(cfg)
     }
 }
@@ -107,6 +110,16 @@ pub struct RuntimeStats {
     pub ticks: u64,
     pub accepted_batches: u64,
     pub rejected_batches: u64,
+    /// Total backend receive failures, including rate-limited repeats.
+    pub receive_errors: u64,
+    /// Total spike emission failures, including rate-limited repeats.
+    pub emit_errors: u64,
+    /// Total spikes discarded because their IDs did not fit the wire type.
+    pub dropped_spikes: u64,
+    /// Tick diagnostics actually emitted after rate limiting.
+    pub diagnostic_emissions: u64,
+    /// Recurring diagnostic occurrences suppressed by rate limiting.
+    pub suppressed_diagnostics: u64,
     pub last_batch_id: Option<u64>,
     pub last_valid_mask: Option<Vec<bool>>,
     pub loaded_checkpoint: Option<ModelProvenance>,
@@ -163,6 +176,7 @@ impl BrainstemDaemon {
 
     /// Fallibly build a daemon with an explicit backend pair (for tests and custom backends).
     pub fn try_with_backend(mut config: DaemonConfig, backend: BackendPair) -> Result<Self> {
+        validate_log_level(&config.log_level)?;
         validate_neuron_count(&config)?;
 
         config.ingress.validate()?;
@@ -264,6 +278,11 @@ impl BrainstemDaemon {
         let mut stimuli = vec![0.0; cfg.channels];
         let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
         let mut stats = RuntimeStats::default();
+        let mut diagnostics = TickDiagnostics::default();
+        let mut heartbeat = time::interval_at(
+            time::Instant::now() + Duration::from_secs(60),
+            Duration::from_secs(60),
+        );
 
         let mut shutdown = std::pin::pin!(shutdown_signal());
 
@@ -280,7 +299,20 @@ impl BrainstemDaemon {
                         &mut TickReport {
                             health: &health,
                             stats: &mut stats,
+                            diagnostics: &mut diagnostics,
                         },
+                    );
+                }
+                _ = heartbeat.tick() => {
+                    info!(
+                        ticks = stats.ticks,
+                        accepted_batches = stats.accepted_batches,
+                        rejected_batches = stats.rejected_batches,
+                        receive_errors = stats.receive_errors,
+                        emit_errors = stats.emit_errors,
+                        dropped_spikes = stats.dropped_spikes,
+                        suppressed_diagnostics = stats.suppressed_diagnostics,
+                        "runtime heartbeat and shed summary"
                     );
                 }
                 _ = &mut shutdown => {
@@ -357,6 +389,7 @@ fn drive_ticks(
 ) {
     let mut stimuli = vec![0.0; channels];
     let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
+    let mut diagnostics = TickDiagnostics::default();
     for _ in 0..ticks {
         run_tick(
             &mut *backend.source,
@@ -365,7 +398,11 @@ fn drive_ticks(
             &mut stimuli,
             &mut spike_buf,
             ingress,
-            &mut TickReport { health, stats },
+            &mut TickReport {
+                health,
+                stats,
+                diagnostics: &mut diagnostics,
+            },
         );
     }
 }
@@ -689,6 +726,71 @@ fn validate_restored_pair(
 struct TickReport<'a> {
     health: &'a HealthHandle,
     stats: &'a mut RuntimeStats,
+    diagnostics: &'a mut TickDiagnostics,
+}
+
+const DIAGNOSTIC_INTERVAL: u64 = 1_000;
+
+#[derive(Debug)]
+struct OccurrenceLimiter {
+    interval: u64,
+    occurrences: u64,
+    emitted: u64,
+}
+
+impl OccurrenceLimiter {
+    fn new(interval: u64) -> Self {
+        Self {
+            interval,
+            occurrences: 0,
+            emitted: 0,
+        }
+    }
+
+    /// Return the number suppressed since the preceding emission.
+    fn record(&mut self) -> Option<u64> {
+        self.occurrences = self.occurrences.saturating_add(1);
+        if self.occurrences == 1 || (self.occurrences - 1).is_multiple_of(self.interval) {
+            let suppressed = self.occurrences.saturating_sub(self.emitted + 1);
+            self.emitted = self.occurrences;
+            Some(suppressed)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(test)]
+    fn suppressed(&self) -> u64 {
+        self.occurrences.saturating_sub(self.emitted)
+    }
+}
+
+#[derive(Debug)]
+struct TickDiagnostics {
+    receive: OccurrenceLimiter,
+    emit: OccurrenceLimiter,
+    dropped: OccurrenceLimiter,
+}
+
+impl TickDiagnostics {
+    fn new(interval: u64) -> Self {
+        Self {
+            receive: OccurrenceLimiter::new(interval),
+            emit: OccurrenceLimiter::new(interval),
+            dropped: OccurrenceLimiter::new(interval),
+        }
+    }
+
+    #[cfg(test)]
+    fn suppressed_total(&self) -> u64 {
+        self.receive.suppressed() + self.emit.suppressed() + self.dropped.suppressed()
+    }
+}
+
+impl Default for TickDiagnostics {
+    fn default() -> Self {
+        Self::new(DIAGNOSTIC_INTERVAL)
+    }
 }
 
 fn run_tick(
@@ -700,13 +802,29 @@ fn run_tick(
     ingress: &BoundedIngress,
     report: &mut TickReport<'_>,
 ) {
-    let TickReport { health, stats } = report;
+    let TickReport {
+        health,
+        stats,
+        diagnostics,
+    } = report;
     let backend_packet = match source.next_ingress() {
         Ok(Some(p)) => Some(p),
         Ok(None) => None,
         Err(e) => {
-            warn!("Failed to receive from stimulus source: {e}");
+            stats.receive_errors = stats.receive_errors.saturating_add(1);
             stats.rejected_batches += 1;
+            match diagnostics.receive.record() {
+                Some(suppressed) => {
+                    stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
+                    warn!(
+                        total = stats.receive_errors,
+                        suppressed, "Failed to receive from stimulus source: {e}"
+                    );
+                }
+                None => {
+                    stats.suppressed_diagnostics = stats.suppressed_diagnostics.saturating_add(1);
+                }
+            }
             None
         }
     };
@@ -776,10 +894,21 @@ fn run_tick(
         }
     }
     if dropped > 0 {
-        warn!(
-            "dropped {} spikes with out-of-range IDs this tick (network may be larger than u16)",
-            dropped
-        );
+        stats.dropped_spikes = stats.dropped_spikes.saturating_add(dropped as u64);
+        match diagnostics.dropped.record() {
+            Some(suppressed) => {
+                stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
+                warn!(
+                    dropped_this_tick = dropped,
+                    total_dropped_spikes = stats.dropped_spikes,
+                    suppressed,
+                    "dropped spikes with out-of-range IDs (network may be larger than u16)"
+                );
+            }
+            None => {
+                stats.suppressed_diagnostics = stats.suppressed_diagnostics.saturating_add(1);
+            }
+        }
     }
 
     if spike_buf.is_empty() && !spike_ids.is_empty() {
@@ -795,7 +924,19 @@ fn run_tick(
     // - We deliberately do not suppress empty batches here to keep test
     //   expectations (CollectingSpikeSink) and wire behavior stable.
     if let Err(e) = sink.emit(spike_buf, now) {
-        warn!("Failed to emit spikes: {e}");
+        stats.emit_errors = stats.emit_errors.saturating_add(1);
+        match diagnostics.emit.record() {
+            Some(suppressed) => {
+                stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
+                error!(
+                    total = stats.emit_errors,
+                    suppressed, "Failed to emit spikes: {e}"
+                );
+            }
+            None => {
+                stats.suppressed_diagnostics = stats.suppressed_diagnostics.saturating_add(1);
+            }
+        }
         health.apply(HealthEvent::Fatal {
             code: FatalCode::Unspecified,
             detail: e.to_string(),
@@ -878,6 +1019,7 @@ pub(crate) fn run_tick_for_test(
         &mut TickReport {
             health: &health,
             stats: &mut RuntimeStats::default(),
+            diagnostics: &mut TickDiagnostics::default(),
         },
     );
 }
@@ -965,6 +1107,35 @@ control_bind = "127.0.0.1:9464"
         )
         .expect("toml");
         assert_eq!(cfg.control_bind.as_deref(), Some("127.0.0.1:9464"));
+    }
+
+    #[test]
+    fn config_load_rejects_unknown_log_level() {
+        let path = write_config_toml(
+            "invalid-log-level",
+            r#"
+tick_rate_hz = 1000
+log_level = "verbose"
+spine_sub_port = 5555
+spine_pub_port = 5556
+model_path = "/tmp/model.mem"
+lif_count = 1
+izh_count = 0
+channels = 1
+"#,
+        );
+
+        let err = DaemonConfig::load(&path).unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("invalid log_level \"verbose\""),
+            "{message}"
+        );
+        assert!(
+            message.contains("error, warn, info, debug, trace"),
+            "{message}"
+        );
+        std::fs::remove_file(path).ok();
     }
 
     #[test]
@@ -1279,6 +1450,7 @@ channels = 16
             &mut TickReport {
                 health: &health,
                 stats: &mut RuntimeStats::default(),
+                diagnostics: &mut TickDiagnostics::default(),
             },
         );
 
@@ -1297,6 +1469,52 @@ channels = 16
             snap.input_freshness.age_ms.is_none(),
             "empty stub packets must not count as ingress"
         );
+    }
+
+    #[test]
+    fn repeated_receive_errors_are_bounded_and_fully_counted() {
+        struct FailingSource;
+        impl StimulusSource for FailingSource {
+            fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
+                bail!("synthetic receive failure")
+            }
+
+            fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let ingress = BoundedIngress::new(IngressConfig::default()).unwrap();
+        let health = HealthHandle::started(HealthLimits::default());
+        let mut source = FailingSource;
+        let mut sink = CollectingSpikeSink::new();
+        let mut network = SpikingNetwork::with_dimensions(1, 0, 1);
+        let mut stimuli = [0.0];
+        let mut spike_buf = Vec::new();
+        let mut stats = RuntimeStats::default();
+        let mut diagnostics = TickDiagnostics::new(10);
+
+        for _ in 0..25 {
+            run_tick(
+                &mut source,
+                &mut network,
+                &mut sink,
+                &mut stimuli,
+                &mut spike_buf,
+                &ingress,
+                &mut TickReport {
+                    health: &health,
+                    stats: &mut stats,
+                    diagnostics: &mut diagnostics,
+                },
+            );
+        }
+
+        assert_eq!(stats.receive_errors, 25);
+        assert_eq!(stats.rejected_batches, 25);
+        assert_eq!(stats.diagnostic_emissions, 3);
+        assert_eq!(stats.suppressed_diagnostics, 22);
+        assert_eq!(diagnostics.suppressed_total(), 4);
     }
 
     struct ScriptedStimulusSource {
@@ -1584,6 +1802,7 @@ block_timeout_ms = 0
             &mut super::TickReport {
                 health: &health,
                 stats: &mut RuntimeStats::default(),
+                diagnostics: &mut super::TickDiagnostics::default(),
             },
         );
 
@@ -1636,6 +1855,7 @@ block_timeout_ms = 0
             &mut super::TickReport {
                 health: &health,
                 stats: &mut RuntimeStats::default(),
+                diagnostics: &mut super::TickDiagnostics::default(),
             },
         );
 
