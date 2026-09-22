@@ -105,6 +105,10 @@ impl DaemonConfig {
 }
 
 /// Observable counters from a bounded tick run (smoke / integration harness).
+///
+/// Marked `#[non_exhaustive]` so added counters stay source-compatible. Construct
+/// with [`RuntimeStats::default`] or struct-update syntax:
+/// `RuntimeStats { ticks: 1, ..Default::default() }`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RuntimeStats {
@@ -747,12 +751,10 @@ struct OccurrenceLimiter {
 }
 
 impl OccurrenceLimiter {
-    fn new(interval: u64) -> Self {
+    fn new(interval: u64, min_gap: Duration) -> Self {
         Self {
             interval,
-            // Unit tests construct via TickDiagnostics::new(interval) and need
-            // pure count-based emission; production Default applies DIAGNOSTIC_MIN_GAP.
-            min_gap: Duration::ZERO,
+            min_gap,
             occurrences: 0,
             emitted: 0,
             last_key: None,
@@ -812,11 +814,13 @@ struct TickDiagnostics {
 }
 
 impl TickDiagnostics {
+    /// Count-based limiter for tests (`min_gap` is zero so emission is deterministic).
+    #[cfg(test)]
     fn new(interval: u64) -> Self {
         Self {
-            receive: OccurrenceLimiter::new(interval),
-            emit: OccurrenceLimiter::new(interval),
-            dropped: OccurrenceLimiter::new(interval),
+            receive: OccurrenceLimiter::new(interval, Duration::ZERO),
+            emit: OccurrenceLimiter::new(interval, Duration::ZERO),
+            dropped: OccurrenceLimiter::new(interval, Duration::ZERO),
         }
     }
 
@@ -828,17 +832,10 @@ impl TickDiagnostics {
 
 impl Default for TickDiagnostics {
     fn default() -> Self {
-        // Inline construction (avoid `Self::new` in `Default` for DeepSource RS-W1090).
-        let mut receive = OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL);
-        let mut emit = OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL);
-        let mut dropped = OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL);
-        receive.min_gap = DIAGNOSTIC_MIN_GAP;
-        emit.min_gap = DIAGNOSTIC_MIN_GAP;
-        dropped.min_gap = DIAGNOSTIC_MIN_GAP;
         Self {
-            receive,
-            emit,
-            dropped,
+            receive: OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL, DIAGNOSTIC_MIN_GAP),
+            emit: OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL, DIAGNOSTIC_MIN_GAP),
+            dropped: OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL, DIAGNOSTIC_MIN_GAP),
         }
     }
 }
@@ -1571,6 +1568,59 @@ channels = 16
         assert_eq!(stats.diagnostic_emissions, 3);
         assert_eq!(stats.suppressed_diagnostics, 22);
         assert_eq!(diagnostics.suppressed_total(), 4);
+    }
+
+    #[test]
+    fn receive_limiter_emits_immediately_when_error_identity_changes() {
+        struct SequenceSource {
+            n: usize,
+        }
+        impl StimulusSource for SequenceSource {
+            fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
+                self.n += 1;
+                if self.n <= 5 {
+                    bail!("transient failure")
+                } else {
+                    bail!("connection lost")
+                }
+            }
+
+            fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let ingress = BoundedIngress::new(IngressConfig::default()).unwrap();
+        let health = HealthHandle::started(HealthLimits::default());
+        let mut source = SequenceSource { n: 0 };
+        let mut sink = CollectingSpikeSink::new();
+        let mut network = SpikingNetwork::with_dimensions(1, 0, 1);
+        let mut stimuli = [0.0];
+        let mut spike_buf = Vec::new();
+        let mut stats = RuntimeStats::default();
+        let mut diagnostics = TickDiagnostics::new(1_000);
+
+        for _ in 0..6 {
+            run_tick(
+                &mut source,
+                &mut network,
+                &mut sink,
+                &mut stimuli,
+                &mut spike_buf,
+                &ingress,
+                &mut TickReport {
+                    health: &health,
+                    stats: &mut stats,
+                    diagnostics: &mut diagnostics,
+                },
+            );
+        }
+
+        assert_eq!(stats.receive_errors, 6);
+        // First identity emits once; four repeats are suppressed; the new
+        // identity must emit immediately instead of waiting for the interval.
+        assert_eq!(stats.diagnostic_emissions, 2);
+        assert_eq!(stats.suppressed_diagnostics, 4);
     }
 
     struct ScriptedStimulusSource {
