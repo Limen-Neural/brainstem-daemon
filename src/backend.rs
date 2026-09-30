@@ -363,23 +363,93 @@ mod zmq_impl {
     }
     unsafe impl Send for SafeSocket {}
 
+    /// Application-side send counters observed by [`ZmqSpikeSink`].
+    ///
+    /// These count only what the publisher itself can observe at the moment it
+    /// hands a batch to (or withholds it from) ZeroMQ. They do NOT and cannot
+    /// measure subscriber-side PUB loss (see [`ZmqSpikeSink`] docs).
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct SinkSendStats {
+        /// `send()` was actually called on the socket (a frame was handed to ZeroMQ).
+        pub attempted: u64,
+        /// An empty batch was withheld because the empty-batch policy suppresses empties.
+        pub suppressed: u64,
+        /// `send()` returned an error.
+        pub failed: u64,
+    }
+
+    /// ZeroMQ PUB spike egress.
+    ///
+    /// # Loss semantics (read carefully)
+    ///
+    /// This sink accounts for exactly three **application-side** outcomes that
+    /// the publisher can directly observe, exposed via [`Self::stats`]:
+    ///
+    /// - `attempted`: `send()` was called (a frame was handed to ZeroMQ);
+    /// - `suppressed`: an empty batch was withheld under the empty-batch policy
+    ///   (`send_empty_batches == false`), so no frame was handed to ZeroMQ;
+    /// - `failed`: `send()` returned an error.
+    ///
+    /// It does **not** measure subscriber-side delivery. ZeroMQ PUB is
+    /// best-effort: it silently drops messages for subscribers that are slow,
+    /// absent, or over the send high-water mark (SNDHWM). That subscriber-side
+    /// loss is **inherently not observable by the publisher** — an `attempted`
+    /// send that returns `Ok` says the frame was accepted into ZeroMQ's egress,
+    /// not that any subscriber received it. Do not read these counters as a
+    /// delivery guarantee or a measure of dropped-at-subscriber messages.
     pub struct ZmqSpikeSink {
         socket: std::sync::Mutex<SafeSocket>,
         /// Reusable buffer to convert to corpus-ipc event type without allocating every tick.
         corpus_buf: Vec<CorpusSpikeEvent>,
+        /// When `false`, empty spike batches are suppressed (not sent) and
+        /// counted as `suppressed`. Defaults to `true` (send empty batches),
+        /// preserving the historical always-send behavior.
+        send_empty_batches: bool,
+        /// Application-side send accounting (see [`SinkSendStats`]).
+        stats: SinkSendStats,
     }
 
     impl ZmqSpikeSink {
+        /// Construct a sink that always sends, including empty batches.
+        ///
+        /// Backward-compatible with existing callers/tests that relied on the
+        /// original always-send behavior.
         pub fn new(socket: ::zmq::Socket) -> Self {
+            Self::with_policy(socket, true)
+        }
+
+        /// Construct a sink with an explicit empty-batch policy.
+        ///
+        /// When `send_empty_batches` is `false`, `emit(&[])` is suppressed (no
+        /// frame is sent) and counted as `suppressed`.
+        pub fn with_policy(socket: ::zmq::Socket, send_empty_batches: bool) -> Self {
             Self {
                 socket: std::sync::Mutex::new(SafeSocket { socket }),
                 corpus_buf: Vec::new(),
+                send_empty_batches,
+                stats: SinkSendStats::default(),
             }
+        }
+
+        /// Snapshot of the application-side send counters.
+        ///
+        /// See the type-level docs: these reflect only attempted / suppressed /
+        /// failed sends the publisher can observe, never subscriber-side PUB loss.
+        pub fn stats(&self) -> SinkSendStats {
+            self.stats
         }
     }
 
     impl SpikeSink for ZmqSpikeSink {
         fn emit(&mut self, spikes: &[SpikeEvent], batch_time: std::time::Duration) -> Result<()> {
+            // Documented empty-batch suppression policy: when configured to
+            // suppress empties, an empty batch is not handed to ZeroMQ. This is
+            // an application-side decision the publisher fully observes.
+            if spikes.is_empty() && !self.send_empty_batches {
+                self.stats.suppressed += 1;
+                return Ok(());
+            }
+
             // Use the tick-level timestamp passed by run_tick so batch metadata
             // stays aligned with the SpikeEvent.time values in this batch.
             let batch_id = batch_time.as_millis() as u64;
@@ -413,7 +483,16 @@ mod zmq_impl {
                 .socket
                 .lock()
                 .map_err(|_| anyhow::anyhow!("ZMQ socket mutex poisoned"))?;
-            guard.socket.send(payload, 0)?;
+            // `send()` returning Ok means the frame was accepted into ZeroMQ's
+            // egress, NOT that any subscriber received it. Subscriber-side drops
+            // (slow/absent/over-SNDHWM) are silent and unobservable here.
+            self.stats.attempted += 1;
+            if let Err(e) = guard.socket.send(payload, 0) {
+                self.stats.failed += 1;
+                // Preserve existing behavior: propagate the error so run_tick's
+                // emit_errors path and fatal handling still apply.
+                return Err(anyhow::anyhow!("ZMQ PUB send failed: {e}"));
+            }
             Ok(())
         }
     }
@@ -628,8 +707,247 @@ mod zmq_impl {
                 "the non-finite modulator frame must be surfaced as a rejected/skip outcome"
             );
         }
+
+        // ─────────────────────────────────────────────────────────────────
+        // PUB / ZmqSpikeSink egress tests (issue #68 / LIM-1320).
+        //
+        // These mirror the SUB-side `bind_loopback`/`get_last_endpoint`
+        // pattern but for the sink side: the sink owns a PUB socket bound on
+        // `tcp://127.0.0.1:*`, and a SUB receiver connects to that endpoint.
+
+        /// Build a `ZmqSpikeSink` over a PUB socket bound on loopback with the
+        /// given empty-batch policy, and return the sink plus the resolved
+        /// endpoint so tests can attach a subscriber.
+        fn bind_sink(send_empty_batches: bool) -> (ZmqSpikeSink, String) {
+            bind_sink_with_hwm(send_empty_batches, 1000)
+        }
+
+        /// Like [`bind_sink`] but with an explicit send high-water mark, so
+        /// tests can force the over-SNDHWM drop path with a small bound.
+        fn bind_sink_with_hwm(send_empty_batches: bool, sndhwm: i32) -> (ZmqSpikeSink, String) {
+            let context = ::zmq::Context::new();
+            let pub_socket = context.socket(::zmq::PUB).unwrap();
+            // Apply the same bounded-lifecycle options the binary sets.
+            pub_socket.set_sndhwm(sndhwm).unwrap();
+            pub_socket.set_linger(0).unwrap();
+            pub_socket.bind("tcp://127.0.0.1:*").unwrap();
+            let endpoint = match pub_socket.get_last_endpoint().unwrap() {
+                Ok(ep) => ep,
+                Err(bytes) => String::from_utf8(bytes).expect("endpoint utf8"),
+            };
+            let sink = ZmqSpikeSink::with_policy(pub_socket, send_empty_batches);
+            (sink, endpoint)
+        }
+
+        fn connect_subscriber(endpoint: &str) -> ::zmq::Socket {
+            let context = ::zmq::Context::new();
+            let sub = context.socket(::zmq::SUB).unwrap();
+            sub.set_subscribe(b"").unwrap();
+            sub.set_rcvhwm(16).unwrap();
+            sub.connect(endpoint).unwrap();
+            // Allow the PUB/SUB connection to settle before publishing.
+            std::thread::sleep(Duration::from_millis(150));
+            sub
+        }
+
+        fn sample_spikes() -> Vec<SpikeEvent> {
+            vec![
+                SpikeEvent {
+                    channel: 0,
+                    time: 7,
+                    strength: 1.0,
+                },
+                SpikeEvent {
+                    channel: 3,
+                    time: 9,
+                    strength: 0.5,
+                },
+            ]
+        }
+
+        /// Poll a SUB socket for one frame, tolerating startup slop.
+        fn recv_frame(sub: &::zmq::Socket) -> Option<Vec<u8>> {
+            for _ in 0..50 {
+                match sub.recv_bytes(::zmq::DONTWAIT) {
+                    Ok(buf) => return Some(buf),
+                    Err(::zmq::Error::EAGAIN) => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(e) => panic!("SUB recv failed: {e}"),
+                }
+            }
+            None
+        }
+
+        #[test]
+        fn no_subscriber_emit_is_ok_and_counts_attempted() {
+            // With no connected subscriber, PUB does not error; the frame is
+            // silently dropped by ZeroMQ. That drop is NOT observable here — we
+            // can only assert the application-side `attempted` count.
+            let (mut sink, _endpoint) = bind_sink(true);
+            for _ in 0..3 {
+                sink.emit(&sample_spikes(), Duration::from_millis(1))
+                    .expect("emit with no subscriber must be Ok (loss is silent/unobservable)");
+            }
+            let stats = sink.stats();
+            assert_eq!(stats.attempted, 3);
+            assert_eq!(stats.failed, 0);
+            assert_eq!(stats.suppressed, 0);
+        }
+
+        #[test]
+        fn empty_batch_policy_sends_when_enabled() {
+            let (mut sink, endpoint) = bind_sink(true);
+            let sub = connect_subscriber(&endpoint);
+
+            sink.emit(&[], Duration::from_millis(2))
+                .expect("empty emit must be Ok when send_empty_batches=true");
+            let stats = sink.stats();
+            assert_eq!(stats.attempted, 1);
+            assert_eq!(stats.suppressed, 0);
+
+            let buf = recv_frame(&sub).expect("subscriber must receive the empty-batch frame");
+            let msg: IpcMessage = serde_json::from_slice(&buf).expect("deserialize IpcMessage");
+            match msg {
+                IpcMessage::Spikes(batch) => assert!(batch.spikes.is_empty()),
+                other => panic!("expected Spikes, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn empty_batch_policy_suppresses_when_disabled() {
+            let (mut sink, endpoint) = bind_sink(false);
+            let sub = connect_subscriber(&endpoint);
+
+            sink.emit(&[], Duration::from_millis(2))
+                .expect("suppressed empty emit still returns Ok");
+            let stats = sink.stats();
+            assert_eq!(stats.suppressed, 1);
+            assert_eq!(stats.attempted, 0);
+            assert_eq!(stats.failed, 0);
+
+            assert!(
+                recv_frame(&sub).is_none(),
+                "no frame must be delivered when the empty batch is suppressed"
+            );
+
+            // A non-empty batch still sends under the suppress-empties policy.
+            sink.emit(&sample_spikes(), Duration::from_millis(3))
+                .expect("non-empty emit must send under suppress-empties policy");
+            assert_eq!(sink.stats().attempted, 1);
+            assert!(
+                recv_frame(&sub).is_some(),
+                "the non-empty batch must still be delivered"
+            );
+        }
+
+        #[test]
+        fn slow_or_disconnected_subscriber_drops_are_not_observable() {
+            // Connect a subscriber, then drop it, then keep emitting. The
+            // publisher cannot observe the subscriber-side drops: every emit
+            // still returns Ok and only `attempted` advances.
+            let (mut sink, endpoint) = bind_sink(true);
+            let sub = connect_subscriber(&endpoint);
+            drop(sub);
+
+            for _ in 0..5 {
+                sink.emit(&sample_spikes(), Duration::from_millis(1))
+                    .expect("emit to a disconnected subscriber must remain Ok");
+            }
+            let stats = sink.stats();
+            assert_eq!(
+                stats.attempted, 5,
+                "only application-side attempts are counted"
+            );
+            assert_eq!(stats.failed, 0);
+            assert_eq!(stats.suppressed, 0);
+        }
+
+        #[test]
+        fn slow_connected_subscriber_over_sndhwm_drops_are_not_observable() {
+            // A subscriber CONNECTS but then STOPS READING while the publisher
+            // emits far more than SNDHWM batches. Once the per-subscriber send
+            // queue fills, ZeroMQ silently drops on the PUB side. That loss is
+            // NOT observable to the publisher: every emit still returns Ok and
+            // only `attempted` advances (failed == 0, suppressed == 0).
+            let (mut sink, endpoint) = bind_sink_with_hwm(true, 2);
+            // Connect and subscribe, then never call recv on it.
+            let _slow_sub = connect_subscriber(&endpoint);
+
+            // Emit well beyond SNDHWM (2) so the send queue is guaranteed to
+            // overflow. Bounded, deterministic loop; no timing dependence.
+            let emit_count = 50;
+            for _ in 0..emit_count {
+                sink.emit(&sample_spikes(), Duration::from_millis(1))
+                    .expect("emit to a slow (connected, non-reading) subscriber must remain Ok");
+            }
+
+            let stats = sink.stats();
+            assert_eq!(
+                stats.attempted, emit_count,
+                "every application-side attempt is counted even when ZeroMQ drops over SNDHWM"
+            );
+            assert_eq!(
+                stats.failed, 0,
+                "over-HWM drops are silent on the PUB side; emit must not report failure"
+            );
+            assert_eq!(stats.suppressed, 0);
+        }
+
+        #[test]
+        fn sink_teardown_is_bounded_by_finite_linger() {
+            // With a finite LINGER (0), constructing, emitting with no
+            // subscriber, then dropping the sink must complete promptly and not
+            // hang on pending PUB messages. This is the observable, testable
+            // proxy for signal-driven teardown not blocking on egress.
+            let (mut sink, _endpoint) = bind_sink(true);
+            for _ in 0..10 {
+                sink.emit(&sample_spikes(), Duration::from_millis(1))
+                    .expect("emit before teardown");
+            }
+            let start = std::time::Instant::now();
+            drop(sink);
+            assert!(
+                start.elapsed() < Duration::from_secs(2),
+                "finite LINGER must bound sink teardown; took {:?}",
+                start.elapsed()
+            );
+        }
+
+        #[test]
+        fn wire_payload_is_preserved_round_trip() {
+            // Prove the unversioned tagged-JSON payload is unchanged: emit one
+            // non-empty batch and deserialize the received bytes back into
+            // corpus_ipc::IpcMessage, asserting Spikes with the expected
+            // batch_id/timestamp derived from batch_time and the same spikes.
+            let (mut sink, endpoint) = bind_sink(true);
+            let sub = connect_subscriber(&endpoint);
+
+            let batch_time = Duration::from_millis(1234);
+            let spikes = sample_spikes();
+            sink.emit(&spikes, batch_time)
+                .expect("emit non-empty batch");
+
+            let buf = recv_frame(&sub).expect("subscriber must receive the frame");
+            let msg: IpcMessage = serde_json::from_slice(&buf).expect("deserialize IpcMessage");
+            match msg {
+                IpcMessage::Spikes(batch) => {
+                    assert_eq!(batch.session_id, None);
+                    assert_eq!(batch.batch_id, batch_time.as_millis() as u64);
+                    assert_eq!(batch.timestamp, batch_time.as_nanos() as u64);
+                    assert!(batch.metadata.is_none());
+                    assert_eq!(batch.spikes.len(), spikes.len());
+                    for (got, want) in batch.spikes.iter().zip(spikes.iter()) {
+                        assert_eq!(got.channel, want.channel);
+                        assert_eq!(got.time, want.time);
+                        assert!((got.strength - want.strength).abs() < f32::EPSILON);
+                    }
+                }
+                other => panic!("expected Spikes, got {other:?}"),
+            }
+        }
     }
 }
 
 #[cfg(feature = "corpus-ipc")]
-pub use zmq_impl::{ZmqSpikeSink, ZmqStimulusSource};
+pub use zmq_impl::{SinkSendStats, ZmqSpikeSink, ZmqStimulusSource};

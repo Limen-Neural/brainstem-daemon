@@ -158,6 +158,11 @@ log_level      = "info"    # error|warn|info|debug|trace
 # ZMQ (still required in TOML; no-ops under the default stub backend)
 spine_sub_port = 5555      # stimuli in
 spine_pub_port = 5556      # spikes out
+# Built-in PUB lifecycle (all optional; corpus-ipc only, no-ops under stub).
+# spine_pub_bind_host        = "127.0.0.1"  # loopback default; use "0.0.0.0" to expose broadly
+# spine_pub_sndhwm           = 1000         # explicit finite send high-water mark
+# spine_pub_linger_ms        = 0            # finite LINGER: drop pending on close (bounded teardown)
+# spine_pub_send_empty_batches = true       # send a frame every tick even with zero spikes
 
 # Service registry (optional; empty by default)
 # Trading/mining-specific adapters are intentionally excluded from defaults.
@@ -201,7 +206,7 @@ Default Cargo features are empty (`default = []` in `Cargo.toml`). That path use
 | Cargo flags | Wired backend | `libzmq` | Binary (`brainstem-daemon`) | Library `BrainstemDaemon::new()` / `try_new()` |
 |---|---|---|---|---|
 | default / `--no-default-features` | stub | not required | no backend sockets by default; `control_bind` opens the control listener; logs `🔌 Using stub backend` | stub |
-| `--features corpus-ipc` | ZMQ / `corpus-ipc` | required | SUB via env, PUB on `spine_pub_port`; logs `📡 Using ZMQ corpus-ipc backend` | **still stub** |
+| `--features corpus-ipc` | ZMQ / `corpus-ipc` | required | SUB via env, PUB on `spine_pub_bind_host:spine_pub_port` (loopback by default); logs `📡 Using ZMQ corpus-ipc backend` | **still stub** |
 | `--all-features` | same as `corpus-ipc` | required | same as `--features corpus-ipc` | **still stub** |
 
 Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`. Those always inject `BackendPair::stub()`. Only `src/bin/brainstem_daemon.rs` constructs `ZmqStimulusSource` + `ZmqSpikeSink` when `corpus-ipc` is on.
@@ -222,7 +227,11 @@ Health snapshots, probe paths, and the transition table live in [`docs/health.md
 | `control_bind` | optional HTTP control surface; unset = no listener | same |
 | `ingress` | used (bounded class queues in the tick loop; health reports aggregate fill) | used (same queues wrap backend packets before the network step) |
 | `spine_sub_port` | parsed, **no-op** | sets `CORPUS_IPC_ZMQ_READOUT_IPC` to `tcp://127.0.0.1:<port>` (also sets legacy `SPIKENAUT_ZMQ_READOUT_IPC` for compatibility) |
-| `spine_pub_port` | parsed, **no-op** | binds ZMQ PUB `tcp://*:<port>` |
+| `spine_pub_port` | parsed, **no-op** | binds ZMQ PUB `tcp://<spine_pub_bind_host>:<port>` (loopback by default) |
+| `spine_pub_bind_host` | parsed, **no-op** | PUB bind host; default `127.0.0.1` (loopback). Set `0.0.0.0` (or a specific interface) to opt in to broader exposure |
+| `spine_pub_sndhwm` | parsed, **no-op** | explicit finite send high-water mark applied to the PUB socket before bind (default `1000`) |
+| `spine_pub_linger_ms` | parsed, **no-op** | finite LINGER (ms) applied before bind so teardown/shutdown cannot block (default `0` = drop pending on close) |
+| `spine_pub_send_empty_batches` | parsed, **no-op** | empty-batch policy; `true` (default) sends a frame every tick even with zero spikes, `false` suppresses empty batches at the sink |
 | `model_path` | used in **live** mode (sidecar JSON); ignored in **simulation** (`StubStimulusSource::initialize` still ignores it) | same live/simulation gate, then passed literally to `initialize` (no `~` expansion); the ZMQ SUB source connects and ignores `_model_path` |
 
 **Settings that only take effect with `corpus-ipc`** (the `brainstem-daemon` binary built `--features corpus-ipc`):
@@ -237,6 +246,14 @@ Health snapshots, probe paths, and the transition table live in [`docs/health.md
 - `SPIKENAUT_ZMQ_READOUT_IPC` (const `LEGACY_SPIKENAUT_READOUT_ENV`; the binary still sets this alongside `CORPUS_IPC_ZMQ_READOUT_IPC` for older tooling)
 
 Under stub those ZMQ TOML keys are still parsed. The env vars are unset by the default binary. Nothing in this crate reads them without the `corpus-ipc` feature.
+
+##### PUB lifecycle, bind default, and loss semantics
+
+The built-in `corpus-ipc` PUB egress is explicitly bounded. Before bind it sets a finite send high-water mark (`spine_pub_sndhwm`) and a finite LINGER (`spine_pub_linger_ms`, default `0` so close/teardown drops pending messages instead of blocking), then binds to `tcp://<spine_pub_bind_host>:<spine_pub_port>` — loopback (`127.0.0.1`) by default, so broader exposure such as `0.0.0.0` requires explicit configuration.
+
+Empty-batch policy: `spine_pub_send_empty_batches` (default `true`) makes the sink publish a frame every tick even when the batch has zero spikes, preserving the current behavior for subscribers that rely on per-tick / heartbeat frames. Set it to `false` to suppress empty batches at the sink.
+
+The sink accounts for three **application-side** send outcomes it can directly observe: `attempted` (a frame was handed to ZeroMQ), `suppressed` (an empty batch withheld under the policy), and `failed` (`send()` returned an error). It does **not** and cannot measure subscriber-side delivery: ZeroMQ PUB is best-effort and silently drops messages for subscribers that are slow, absent, or over `SNDHWM`. That subscriber-side loss is inherently not observable by the publisher, so it is documented as best-effort and never reported as a measured count.
 
 ZMQ SUB ingress decodes unversioned JSON `IpcMessage` frames (`Stimuli` / `Neuromodulators`) through crates.io `corpus-ipc` 0.1 types. Width, schema token `corpus-ipc.stimulus.v1`, freshness, and future timestamps are rejected without stopping the tick loop. Modulation-only frames are drained in the same tick so they do not consume a sensory period.
 
