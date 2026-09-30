@@ -935,6 +935,37 @@ fn run_tick(
     let packet = drained.into_packet();
     apply_queue_pressure(health, ingress);
 
+    // Second fail-closed finite gate, on the drained/merged packet. The
+    // backend-packet gate above only sees `source.next_ingress()`; packets
+    // injected through the public `BoundedIngress` handle
+    // (`BrainstemDaemon::ingress()` -> `enqueue`/`try_enqueue`) never pass it
+    // and surface only here, in the drained packet. This drained packet is the
+    // single choke point through which both the admitted-backend path and the
+    // direct-enqueue path flow, so validating it before `decode_inputs` closes
+    // the direct-ingress path required by issue #66. Modulators are validated
+    // here too, before any held/cached or network state is updated.
+    if let Some(offender) = crate::ingress::first_non_finite(&packet) {
+        stats.rejected_batches += 1;
+        let msg = format!("Rejected non-finite ingress: {offender}");
+        let now = time::Instant::now();
+        match diagnostics.non_finite.record(diagnostic_key(&msg), now) {
+            Some(suppressed) => {
+                stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
+                warn!(total = stats.rejected_batches, suppressed, "{msg}");
+            }
+            None => {
+                stats.suppressed_diagnostics = stats.suppressed_diagnostics.saturating_add(1);
+            }
+        }
+        // Skip the step for this tick without touching the network: do not call
+        // `network.step`, do not count a successful tick (`stats.ticks`), and do
+        // not emit a spike batch for the rejected input. The daemon stays live
+        // and keeps ticking (not fatal), mirroring the safe no-step exit used
+        // when there is nothing valid to publish.
+        health.apply(HealthEvent::TickSucceeded);
+        return;
+    }
+
     let modulators = decode_inputs(&packet, stimuli);
 
     // Note: decode_inputs already zero-fills any remaining channels when packet.stimuli is shorter.
@@ -1822,6 +1853,96 @@ channels = 16
         assert_eq!(stats.accepted_batches, 0);
         assert_eq!(sink.emitted.len(), 1);
         assert!(health.snapshot().input_freshness.age_ms.is_none());
+    }
+
+    /// Reproduces the reported #66 gap: a non-finite packet injected through the
+    /// public `BoundedIngress` handle bypasses the backend-packet gate (the
+    /// backend source here yields `None`) and would previously reach
+    /// `network.step` via the drained packet, tripping the fatal shutdown. The
+    /// drained-packet gate must reject it, keep the daemon live, count it as a
+    /// rejected batch, and never advance a successful tick for it.
+    fn assert_direct_enqueue_non_finite_rejected(class: MessageClass, packet: IngressPacket) {
+        // Backend source contributes nothing this tick; the only non-finite
+        // data comes from the direct `enqueue`, exercising the path that never
+        // passed the backend-packet gate.
+        struct NoneSource;
+        impl StimulusSource for NoneSource {
+            fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
+                Ok(None)
+            }
+            fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let ingress = BoundedIngress::new(IngressConfig::default()).unwrap();
+        let health = HealthHandle::started(HealthLimits::default());
+        let mut source = NoneSource;
+        let mut sink = CollectingSpikeSink::new();
+        let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
+        let mut stimuli = vec![0.0; 2];
+        let mut spike_buf = Vec::new();
+        let mut stats = RuntimeStats::default();
+        let mut diagnostics = TickDiagnostics::new(1_000);
+
+        // Inject directly through the SAME ingress handle passed to run_tick.
+        assert!(ingress.enqueue(class, packet).accepted());
+
+        run_tick(
+            &mut source,
+            &mut network,
+            &mut sink,
+            &mut stimuli,
+            &mut spike_buf,
+            &ingress,
+            &mut TickReport {
+                health: &health,
+                stats: &mut stats,
+                diagnostics: &mut diagnostics,
+            },
+        );
+
+        // Daemon stays live (not fatal) and the rejected input never drove
+        // network.step: no successful tick advanced and no spike batch emitted.
+        let snap = health.snapshot();
+        assert!(
+            snap.live,
+            "daemon must stay live after direct non-finite enqueue"
+        );
+        assert_eq!(stats.rejected_batches, 1);
+        assert_eq!(
+            stats.ticks, 0,
+            "rejected input must not advance a network tick"
+        );
+        assert!(sink.emitted.is_empty(), "no spike batch for rejected input");
+        // Held network state is untouched (modulators validated before decode).
+        assert_eq!(network.modulators, NeuroModulators::default());
+    }
+
+    #[test]
+    fn direct_enqueue_non_finite_stimulus_is_rejected_not_fatal() {
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_direct_enqueue_non_finite_rejected(
+                MessageClass::Sensory,
+                IngressPacket {
+                    stimuli: vec![value, 0.0],
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn direct_enqueue_non_finite_modulator_is_rejected_not_fatal() {
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_direct_enqueue_non_finite_rejected(
+                MessageClass::Reward,
+                IngressPacket {
+                    modulators: Some(vec![value, 0.0, 0.0, 0.0]),
+                    ..Default::default()
+                },
+            );
+        }
     }
 
     #[test]
