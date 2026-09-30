@@ -189,164 +189,113 @@ mod tests {
         path
     }
 
-    #[test]
-    fn config_parses_optional_control_bind() {
-        let cfg: DaemonConfig = toml::from_str(
+    /// Common valid config body with the given `log_level` and no PUB socket
+    /// keys, followed by `extra` lines that add or override a single key under
+    /// test. Centralizes the shared TOML so each case only spells out what it
+    /// varies.
+    fn config_toml_with_log_level(log_level: &str, extra: &str) -> String {
+        format!(
             r#"
 tick_rate_hz = 1000
-log_level = "info"
+log_level = "{log_level}"
 spine_sub_port = 5555
 spine_pub_port = 5556
 model_path = "/tmp/model.mem"
 lif_count = 1
 izh_count = 0
 channels = 1
-control_bind = "127.0.0.1:9464"
-"#,
+{extra}"#
         )
-        .expect("toml");
+    }
+
+    /// Common valid config body with `log_level = "info"`. See
+    /// [`config_toml_with_log_level`].
+    fn base_config_toml(extra: &str) -> String {
+        config_toml_with_log_level("info", extra)
+    }
+
+    /// Load a config built from [`base_config_toml`] via a temp file, cleaning
+    /// up the file before returning the result.
+    fn load_base_config(stem: &str, extra: &str) -> Result<DaemonConfig> {
+        let path = write_config_toml(stem, &base_config_toml(extra));
+        let result = DaemonConfig::load(&path);
+        let _ = std::fs::remove_file(&path);
+        result
+    }
+
+    #[test]
+    fn config_parses_optional_control_bind() {
+        let cfg: DaemonConfig =
+            toml::from_str(&base_config_toml("control_bind = \"127.0.0.1:9464\"")).expect("toml");
         assert_eq!(cfg.control_bind.as_deref(), Some("127.0.0.1:9464"));
     }
 
     #[test]
-    fn config_load_rejects_unknown_log_level() {
-        let path = write_config_toml(
-            "invalid-log-level",
-            r#"
-tick_rate_hz = 1000
-log_level = "verbose"
-spine_sub_port = 5555
-spine_pub_port = 5556
-model_path = "/tmp/model.mem"
-lif_count = 1
-izh_count = 0
-channels = 1
-"#,
-        );
-
-        let err = DaemonConfig::load(&path).unwrap_err();
-        let message = format!("{err:#}");
-        assert!(
-            message.contains("invalid log_level \"verbose\""),
-            "{message}"
-        );
-        assert!(
-            message.contains("error, warn, info, debug, trace"),
-            "{message}"
-        );
-        std::fs::remove_file(path).ok();
-    }
-
-    #[test]
     fn omitted_runtime_mode_deserializes_as_live() {
-        let text = r#"
-tick_rate_hz = 1000
-log_level = "info"
-spine_sub_port = 5555
-spine_pub_port = 5556
-model_path = "snn_model.json"
-lif_count = 16
-izh_count = 0
-channels = 16
-"#;
-        let cfg: DaemonConfig = toml::from_str(text).expect("toml");
+        let cfg: DaemonConfig = toml::from_str(&base_config_toml("")).expect("toml");
         assert_eq!(cfg.runtime_mode, RuntimeMode::Live);
     }
 
     #[test]
-    fn config_load_rejects_zero_sndhwm() {
-        let path = write_config_toml(
-            "sndhwm-zero",
-            r#"
-tick_rate_hz = 1000
-log_level = "info"
-spine_sub_port = 5555
-spine_pub_port = 5556
-model_path = "/tmp/model.mem"
-lif_count = 1
-izh_count = 0
-channels = 1
-spine_pub_sndhwm = 0
-"#,
-        );
-        let err = DaemonConfig::load(&path).unwrap_err();
-        let _ = std::fs::remove_file(&path);
-        let message = format!("{err:#}");
-        assert!(
-            message.contains("spine_pub_sndhwm must be > 0"),
-            "{message}"
-        );
-    }
+    fn config_load_rejects_invalid_pub_socket_and_log_options() {
+        // Each case varies a single aspect of the shared valid body and must be
+        // rejected by DaemonConfig::load with an error mentioning the offending
+        // field/reason. Substrings preserve the per-case assertions the
+        // individual tests used to make. `log_level` is threaded through the
+        // shared body so the invalid-log-level case can vary it without
+        // duplicating the `log_level` key.
+        let cases: &[(&str, &str, &str, &[&str])] = &[
+            (
+                "invalid-log-level",
+                "verbose",
+                "",
+                &[
+                    "invalid log_level \"verbose\"",
+                    "error, warn, info, debug, trace",
+                ],
+            ),
+            (
+                "sndhwm-zero",
+                "info",
+                "spine_pub_sndhwm = 0",
+                &["spine_pub_sndhwm must be > 0"],
+            ),
+            (
+                "sndhwm-negative",
+                "info",
+                "spine_pub_sndhwm = -1",
+                &["spine_pub_sndhwm must be > 0"],
+            ),
+            (
+                "linger-negative",
+                "info",
+                "spine_pub_linger_ms = -1",
+                &["spine_pub_linger_ms must be >= 0"],
+            ),
+        ];
 
-    #[test]
-    fn config_load_rejects_negative_sndhwm() {
-        let path = write_config_toml(
-            "sndhwm-negative",
-            r#"
-tick_rate_hz = 1000
-log_level = "info"
-spine_sub_port = 5555
-spine_pub_port = 5556
-model_path = "/tmp/model.mem"
-lif_count = 1
-izh_count = 0
-channels = 1
-spine_pub_sndhwm = -1
-"#,
-        );
-        let err = DaemonConfig::load(&path).unwrap_err();
-        let _ = std::fs::remove_file(&path);
-        let message = format!("{err:#}");
-        assert!(
-            message.contains("spine_pub_sndhwm must be > 0"),
-            "{message}"
-        );
-    }
-
-    #[test]
-    fn config_load_rejects_negative_linger() {
-        let path = write_config_toml(
-            "linger-negative",
-            r#"
-tick_rate_hz = 1000
-log_level = "info"
-spine_sub_port = 5555
-spine_pub_port = 5556
-model_path = "/tmp/model.mem"
-lif_count = 1
-izh_count = 0
-channels = 1
-spine_pub_linger_ms = -1
-"#,
-        );
-        let err = DaemonConfig::load(&path).unwrap_err();
-        let _ = std::fs::remove_file(&path);
-        let message = format!("{err:#}");
-        assert!(
-            message.contains("spine_pub_linger_ms must be >= 0"),
-            "{message}"
-        );
+        for (stem, log_level, extra, expected_substrings) in cases {
+            let path = write_config_toml(stem, &config_toml_with_log_level(log_level, extra));
+            let result = DaemonConfig::load(&path);
+            let _ = std::fs::remove_file(&path);
+            let err = result
+                .err()
+                .unwrap_or_else(|| panic!("expected `{stem}` config to be rejected"));
+            let message = format!("{err:#}");
+            for needle in *expected_substrings {
+                assert!(
+                    message.contains(needle),
+                    "case `{stem}`: expected error to contain {needle:?}, got {message}"
+                );
+            }
+        }
     }
 
     #[test]
     fn config_load_accepts_defaults_without_pub_socket_keys() {
         // Backward compat: a minimal TOML omitting the PUB socket keys keeps the
         // safe defaults (sndhwm 1000, linger 0) and loads cleanly.
-        let path = write_config_toml(
-            "pub-defaults",
-            r#"
-tick_rate_hz = 1000
-log_level = "info"
-spine_sub_port = 5555
-spine_pub_port = 5556
-model_path = "/tmp/model.mem"
-lif_count = 1
-izh_count = 0
-channels = 1
-"#,
-        );
-        let cfg = DaemonConfig::load(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
+        let cfg = load_base_config("pub-defaults", "").expect("load minimal config");
         assert_eq!(cfg.spine_pub_sndhwm, 1000);
         assert_eq!(cfg.spine_pub_linger_ms, 0);
         assert_eq!(cfg.spine_pub_bind_host, "127.0.0.1");
@@ -354,23 +303,11 @@ channels = 1
 
     #[test]
     fn config_load_accepts_zero_linger_explicitly() {
-        let path = write_config_toml(
+        let cfg = load_base_config(
             "linger-zero",
-            r#"
-tick_rate_hz = 1000
-log_level = "info"
-spine_sub_port = 5555
-spine_pub_port = 5556
-model_path = "/tmp/model.mem"
-lif_count = 1
-izh_count = 0
-channels = 1
-spine_pub_sndhwm = 4
-spine_pub_linger_ms = 0
-"#,
-        );
-        let cfg = DaemonConfig::load(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
+            "spine_pub_sndhwm = 4\nspine_pub_linger_ms = 0",
+        )
+        .expect("load explicit-zero-linger config");
         assert_eq!(cfg.spine_pub_sndhwm, 4);
         assert_eq!(cfg.spine_pub_linger_ms, 0);
     }
