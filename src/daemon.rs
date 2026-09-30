@@ -55,6 +55,37 @@ pub struct DaemonConfig {
     pub log_level: String,
     pub spine_sub_port: u16,
     pub spine_pub_port: u16,
+    /// Bind host for the built-in `corpus-ipc` ZMQ PUB listener.
+    ///
+    /// Defaults to loopback (`127.0.0.1`) so the daemon does not expose the
+    /// spike egress socket on all interfaces implicitly. Set to `0.0.0.0` (or a
+    /// specific interface address) to opt in to broader exposure. Parsed but a
+    /// no-op under the stub backend (mirrors `spine_pub_port`); only the
+    /// `corpus-ipc` PUB path consumes it.
+    #[serde(default = "default_spine_pub_bind_host")]
+    pub spine_pub_bind_host: String,
+    /// Explicit finite send high-water mark (SNDHWM) applied to the PUB socket
+    /// before bind. Bounds how many outbound messages ZeroMQ queues per
+    /// subscriber before it silently drops. Parsed but a no-op under the stub
+    /// backend; only the `corpus-ipc` PUB path consumes it.
+    #[serde(default = "default_spine_pub_sndhwm")]
+    pub spine_pub_sndhwm: i32,
+    /// Finite LINGER (milliseconds) applied to the PUB socket before bind so
+    /// teardown and signal shutdown cannot block indefinitely on pending
+    /// messages. `0` (the default) drops any pending messages on close, the
+    /// safe bounded default for a best-effort PUB. Parsed but a no-op under the
+    /// stub backend; only the `corpus-ipc` PUB path consumes it.
+    #[serde(default = "default_spine_pub_linger_ms")]
+    pub spine_pub_linger_ms: i32,
+    /// Empty-spike-batch compatibility policy for the PUB egress.
+    ///
+    /// `true` (the default) preserves the current behavior where the tick loop
+    /// emits a frame every tick even when the batch has zero spikes, so
+    /// subscribers relying on per-tick / heartbeat frames keep working. Set to
+    /// `false` to suppress empty batches at the sink. Parsed but a no-op under
+    /// the stub backend; only the `corpus-ipc` PUB path consumes it.
+    #[serde(default = "default_spine_pub_send_empty_batches")]
+    pub spine_pub_send_empty_batches: bool,
     pub model_path: PathBuf,
     pub lif_count: usize,
     pub izh_count: usize,
@@ -76,6 +107,26 @@ pub struct DaemonConfig {
     /// repository's only HTTP listener; do not add a second server beside it.
     #[serde(default)]
     pub control_bind: Option<String>,
+}
+
+/// Default PUB bind host: loopback, requiring explicit opt-in for broader exposure.
+fn default_spine_pub_bind_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+/// Default finite send high-water mark for the PUB socket.
+fn default_spine_pub_sndhwm() -> i32 {
+    1000
+}
+
+/// Default finite LINGER (ms) for the PUB socket: drop pending on close.
+fn default_spine_pub_linger_ms() -> i32 {
+    0
+}
+
+/// Default empty-batch policy: send empty batches (preserves current behavior).
+fn default_spine_pub_send_empty_batches() -> bool {
+    true
 }
 
 impl DaemonConfig {
@@ -1203,6 +1254,10 @@ mod tests {
             log_level: "info".to_string(),
             spine_sub_port: 5555,
             spine_pub_port: 5556,
+            spine_pub_bind_host: "127.0.0.1".to_string(),
+            spine_pub_sndhwm: 1000,
+            spine_pub_linger_ms: 0,
+            spine_pub_send_empty_batches: true,
             model_path: PathBuf::from("/tmp/model.mem"),
             lif_count: 16,
             izh_count: 5,
