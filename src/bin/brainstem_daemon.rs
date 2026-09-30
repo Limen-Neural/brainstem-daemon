@@ -110,7 +110,8 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("ZMQ linger: {e}"))?;
         // Loopback by default (`spine_pub_bind_host` = 127.0.0.1); broader
         // exposure (e.g. 0.0.0.0) requires explicit configuration.
-        let pub_endpoint = format!("tcp://{}:{}", cfg.spine_pub_bind_host, cfg.spine_pub_port);
+        let pub_endpoint =
+            brainstem_daemon::daemon::pub_endpoint(&cfg.spine_pub_bind_host, cfg.spine_pub_port);
         pub_socket
             .bind(&pub_endpoint)
             .map_err(|e| anyhow::anyhow!("failed to bind ZMQ PUB on {pub_endpoint}: {e}"))?;

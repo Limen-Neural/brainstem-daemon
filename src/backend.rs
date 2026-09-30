@@ -719,10 +719,16 @@ mod zmq_impl {
         /// given empty-batch policy, and return the sink plus the resolved
         /// endpoint so tests can attach a subscriber.
         fn bind_sink(send_empty_batches: bool) -> (ZmqSpikeSink, String) {
+            bind_sink_with_hwm(send_empty_batches, 1000)
+        }
+
+        /// Like [`bind_sink`] but with an explicit send high-water mark, so
+        /// tests can force the over-SNDHWM drop path with a small bound.
+        fn bind_sink_with_hwm(send_empty_batches: bool, sndhwm: i32) -> (ZmqSpikeSink, String) {
             let context = ::zmq::Context::new();
             let pub_socket = context.socket(::zmq::PUB).unwrap();
             // Apply the same bounded-lifecycle options the binary sets.
-            pub_socket.set_sndhwm(1000).unwrap();
+            pub_socket.set_sndhwm(sndhwm).unwrap();
             pub_socket.set_linger(0).unwrap();
             pub_socket.bind("tcp://127.0.0.1:*").unwrap();
             let endpoint = match pub_socket.get_last_endpoint().unwrap() {
@@ -854,6 +860,37 @@ mod zmq_impl {
                 "only application-side attempts are counted"
             );
             assert_eq!(stats.failed, 0);
+            assert_eq!(stats.suppressed, 0);
+        }
+
+        #[test]
+        fn slow_connected_subscriber_over_sndhwm_drops_are_not_observable() {
+            // A subscriber CONNECTS but then STOPS READING while the publisher
+            // emits far more than SNDHWM batches. Once the per-subscriber send
+            // queue fills, ZeroMQ silently drops on the PUB side. That loss is
+            // NOT observable to the publisher: every emit still returns Ok and
+            // only `attempted` advances (failed == 0, suppressed == 0).
+            let (mut sink, endpoint) = bind_sink_with_hwm(true, 2);
+            // Connect and subscribe, then never call recv on it.
+            let _slow_sub = connect_subscriber(&endpoint);
+
+            // Emit well beyond SNDHWM (2) so the send queue is guaranteed to
+            // overflow. Bounded, deterministic loop; no timing dependence.
+            let emit_count = 50;
+            for _ in 0..emit_count {
+                sink.emit(&sample_spikes(), Duration::from_millis(1))
+                    .expect("emit to a slow (connected, non-reading) subscriber must remain Ok");
+            }
+
+            let stats = sink.stats();
+            assert_eq!(
+                stats.attempted, emit_count,
+                "every application-side attempt is counted even when ZeroMQ drops over SNDHWM"
+            );
+            assert_eq!(
+                stats.failed, 0,
+                "over-HWM drops are silent on the PUB side; emit must not report failure"
+            );
             assert_eq!(stats.suppressed, 0);
         }
 
