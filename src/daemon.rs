@@ -602,6 +602,14 @@ fn packet_carries_input(packet: &IngressPacket) -> bool {
             .is_some_and(|mods| !mods.is_empty())
 }
 
+/// Whether a backend packet should refresh `input_freshness`.
+///
+/// Finite rejected packets still count as observed ingress. Non-finite
+/// payloads (live or already-`rejected`) are dropped and must not.
+fn observes_ingress(packet: &IngressPacket) -> bool {
+    packet_carries_input(packet) && crate::ingress::first_non_finite(packet).is_none()
+}
+
 fn apply_queue_pressure(health: &HealthHandle, ingress: &BoundedIngress) {
     let metrics = ingress.metrics();
     let cfg = ingress.config();
@@ -739,6 +747,13 @@ struct TickReport<'a> {
 const DIAGNOSTIC_INTERVAL: u64 = 1_000;
 /// Floor for diagnostic re-emission so high tick rates cannot flood logs.
 const DIAGNOSTIC_MIN_GAP: Duration = Duration::from_secs(1);
+/// Stable limiter identity for non-finite ingress warnings.
+///
+/// Must not include the offending vector index: [`OccurrenceLimiter::record`]
+/// resets counters on a key change, so hashing the formatted message would let
+/// a source that alternates NaN between indices bypass the count interval and
+/// the one-second minimum gap.
+const NON_FINITE_DIAGNOSTIC_CATEGORY: &str = "rejected non-finite ingress";
 
 #[derive(Debug)]
 struct OccurrenceLimiter {
@@ -829,7 +844,10 @@ fn record_non_finite_rejection(
     stats.rejected_batches += 1;
     let msg = format!("Rejected non-finite ingress: {offender}");
     let now = time::Instant::now();
-    match diagnostics.non_finite.record(diagnostic_key(&msg), now) {
+    match diagnostics
+        .non_finite
+        .record(diagnostic_key(NON_FINITE_DIAGNOSTIC_CATEGORY), now)
+    {
         Some(suppressed) => {
             stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
             warn!(total = stats.rejected_batches, suppressed, "{msg}");
@@ -838,6 +856,31 @@ fn record_non_finite_rejection(
             stats.suppressed_diagnostics = stats.suppressed_diagnostics.saturating_add(1);
         }
     }
+}
+
+/// Count accepted/rejected batches and admit onto class queues.
+///
+/// Already-rejected packets with a non-finite payload are counted once here
+/// and not admitted, so the drained-packet gate cannot increment
+/// `rejected_batches` again. Finite rejected packets still admit.
+fn account_and_admit_backend_packet(
+    packet: IngressPacket,
+    stats: &mut RuntimeStats,
+    ingress: &BoundedIngress,
+) {
+    if packet.rejected {
+        stats.rejected_batches += 1;
+        if crate::ingress::first_non_finite(&packet).is_none() {
+            ingress.admit_backend_packet(packet);
+        }
+        return;
+    }
+    if packet.batch_id.is_some() {
+        stats.accepted_batches += 1;
+        stats.last_batch_id = packet.batch_id;
+        stats.last_valid_mask.clone_from(&packet.valid_mask);
+    }
+    ingress.admit_backend_packet(packet);
 }
 
 #[derive(Debug)]
@@ -923,7 +966,9 @@ fn run_tick(
     // reach `network.step` (which errors on non-finite and would be treated as
     // fatal). Modulators are validated before any held/cached or network state
     // is updated. An already-`rejected` packet is left to the existing
-    // `rejected_batches` accounting below. Finite inputs are untouched.
+    // `rejected_batches` accounting below and is not admitted when it also
+    // carries a non-finite payload, so the drained-packet gate cannot count
+    // it a second time. Finite inputs are untouched.
     let mut backend_packet = backend_packet;
     if let Some(offender) = backend_packet.as_ref().and_then(backend_non_finite) {
         record_non_finite_rejection(offender, stats, diagnostics);
@@ -934,7 +979,7 @@ fn run_tick(
         backend_packet = None;
     }
 
-    if backend_packet.as_ref().is_some_and(packet_carries_input) {
+    if backend_packet.as_ref().is_some_and(observes_ingress) {
         health.apply(HealthEvent::IngressObserved);
     }
 
@@ -943,14 +988,7 @@ fn run_tick(
     // `None` (skip or error) does not enqueue a placeholder that could evict
     // in-process sensory. decode_inputs zero-fills when drain yields no stimuli.
     if let Some(packet) = backend_packet {
-        if packet.rejected {
-            stats.rejected_batches += 1;
-        } else if packet.batch_id.is_some() {
-            stats.accepted_batches += 1;
-            stats.last_batch_id = packet.batch_id;
-            stats.last_valid_mask.clone_from(&packet.valid_mask);
-        }
-        ingress.admit_backend_packet(packet);
+        account_and_admit_backend_packet(packet, stats, ingress);
     }
     let drained = ingress.drain_for_tick();
     observe_control_envelopes(&drained.control);
@@ -1954,6 +1992,120 @@ channels = 16
                 },
             );
         }
+    }
+
+    #[test]
+    fn non_finite_limiter_is_stable_across_alternating_indices() {
+        // The warning text includes the offending index, but the limiter key
+        // must not: an alternating-index source would otherwise reset
+        // OccurrenceLimiter and emit on every tick.
+        struct AlternatingNanSource {
+            tick: usize,
+        }
+        impl StimulusSource for AlternatingNanSource {
+            fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
+                let mut stimuli = vec![0.0, 0.0];
+                stimuli[self.tick % 2] = f32::NAN;
+                self.tick += 1;
+                Ok(Some(IngressPacket {
+                    stimuli,
+                    batch_id: Some(1),
+                    ..Default::default()
+                }))
+            }
+            fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let ingress = BoundedIngress::new(IngressConfig::default()).unwrap();
+        let health = HealthHandle::started(HealthLimits::default());
+        let mut source = AlternatingNanSource { tick: 0 };
+        let mut sink = CollectingSpikeSink::new();
+        let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
+        let mut stimuli = vec![0.0; 2];
+        let mut spike_buf = Vec::new();
+        let mut stats = RuntimeStats::default();
+        let mut diagnostics = TickDiagnostics::new(10);
+
+        for _ in 0..25 {
+            run_tick(
+                &mut source,
+                &mut network,
+                &mut sink,
+                &mut stimuli,
+                &mut spike_buf,
+                &ingress,
+                &mut TickReport {
+                    health: &health,
+                    stats: &mut stats,
+                    diagnostics: &mut diagnostics,
+                },
+            );
+        }
+
+        assert_eq!(stats.rejected_batches, 25);
+        assert_eq!(stats.accepted_batches, 0);
+        // Same cadence as a fixed-index source (emit at 1, 11, 21).
+        assert_eq!(stats.diagnostic_emissions, 3);
+        assert_eq!(stats.suppressed_diagnostics, 22);
+        assert_eq!(diagnostics.suppressed_total(), 4);
+        assert!(health.snapshot().live);
+    }
+
+    #[test]
+    fn already_rejected_non_finite_packet_is_counted_once() {
+        for packet in [
+            IngressPacket {
+                rejected: true,
+                stimuli: vec![f32::NAN],
+                batch_id: Some(3),
+                ..Default::default()
+            },
+            IngressPacket {
+                rejected: true,
+                stimuli: vec![0.0],
+                modulators: Some(vec![f32::INFINITY, 0.0, 0.0, 0.0]),
+                batch_id: Some(4),
+                ..Default::default()
+            },
+        ] {
+            let (sink, stats, _diag, health, _network) = drive_repeating(packet, 3, 1_000);
+            assert_eq!(
+                stats.rejected_batches, 3,
+                "already-rejected non-finite must not double-count"
+            );
+            assert_eq!(stats.accepted_batches, 0);
+            // Dropping the packet is equivalent to skip/None: the loop continues
+            // on zero-filled stimuli (same as a rejected empty frame).
+            assert_eq!(stats.ticks, 3);
+            assert_eq!(sink.emitted.len(), 3);
+            assert!(health.snapshot().live);
+            assert!(
+                health.snapshot().input_freshness.age_ms.is_none(),
+                "already-rejected non-finite must not count as fresh ingress"
+            );
+        }
+    }
+
+    #[test]
+    fn already_rejected_finite_packet_is_counted_once_and_still_ticks() {
+        let packet = IngressPacket {
+            rejected: true,
+            stimuli: vec![0.5],
+            batch_id: Some(5),
+            ..Default::default()
+        };
+        let (sink, stats, _diag, health, _network) = drive_repeating(packet, 2, 1_000);
+        assert_eq!(stats.rejected_batches, 2);
+        assert_eq!(stats.accepted_batches, 0);
+        assert_eq!(stats.ticks, 2);
+        assert_eq!(sink.emitted.len(), 2);
+        assert!(health.snapshot().live);
+        assert!(
+            health.snapshot().input_freshness.age_ms.is_some(),
+            "finite rejected packets still refresh input freshness"
+        );
     }
 
     #[test]
