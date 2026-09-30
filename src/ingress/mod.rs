@@ -38,6 +38,59 @@ use crate::backend::IngressPacket;
 
 use queue::{BoundedQueue, WaitMode};
 
+/// First non-finite (`NaN`, `+Inf`, or `-Inf`) value found in an [`IngressPacket`].
+///
+/// Returned by [`first_non_finite`] so the tick loop can reject and count a
+/// live invalid packet before it reaches `SpikingNetwork::step` (which would
+/// otherwise be a fatal error). The index identifies the offending element
+/// within its respective vector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NonFiniteInput {
+    /// A stimulus value at `packet.stimuli[index]` is not finite.
+    Stimulus {
+        /// Index into `packet.stimuli`.
+        index: usize,
+    },
+    /// A modulator value at `packet.modulators[index]` is not finite.
+    Modulator {
+        /// Index into `packet.modulators`.
+        index: usize,
+    },
+}
+
+impl std::fmt::Display for NonFiniteInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stimulus { index } => write!(f, "non-finite stimulus at index {index}"),
+            Self::Modulator { index } => write!(f, "non-finite modulator at index {index}"),
+        }
+    }
+}
+
+/// Return the first non-finite (`NaN`, `+Inf`, or `-Inf`) value in `packet`.
+///
+/// Scans `packet.stimuli` first, then `packet.modulators` (when `Some`),
+/// returning the first offender or `None` when every present value is finite.
+///
+/// This is a fail-closed check: stimuli are scanned regardless of
+/// `packet.valid_mask`, so a non-finite value is flagged even in a masked-out
+/// (`false`) slot. Masking is a downstream decode concern and is not a reason
+/// to admit `NaN`/`Inf` into the network. Empty stimuli with `None` modulators
+/// returns `None` (an empty packet is accepted). A modulator vector shorter than
+/// [`crate::backend::NEUROMODULATOR_COUNT`](crate::backend::NEUROMODULATOR_COUNT)
+/// is still fully scanned for the elements that are present.
+pub fn first_non_finite(packet: &IngressPacket) -> Option<NonFiniteInput> {
+    if let Some(index) = packet.stimuli.iter().position(|v| !v.is_finite()) {
+        return Some(NonFiniteInput::Stimulus { index });
+    }
+    if let Some(mods) = packet.modulators.as_ref()
+        && let Some(index) = mods.iter().position(|v| !v.is_finite())
+    {
+        return Some(NonFiniteInput::Modulator { index });
+    }
+    None
+}
+
 /// Hard cap so a TOML typo cannot request an enormous `VecDeque`.
 pub const MAX_QUEUE_CAPACITY: usize = 16_384;
 
