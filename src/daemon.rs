@@ -55,37 +55,6 @@ pub struct DaemonConfig {
     pub log_level: String,
     pub spine_sub_port: u16,
     pub spine_pub_port: u16,
-    /// Bind host for the built-in `corpus-ipc` ZMQ PUB listener.
-    ///
-    /// Defaults to loopback (`127.0.0.1`) so the daemon does not expose the
-    /// spike egress socket on all interfaces implicitly. Set to `0.0.0.0` (or a
-    /// specific interface address) to opt in to broader exposure. Parsed but a
-    /// no-op under the stub backend (mirrors `spine_pub_port`); only the
-    /// `corpus-ipc` PUB path consumes it.
-    #[serde(default = "default_spine_pub_bind_host")]
-    pub spine_pub_bind_host: String,
-    /// Explicit finite send high-water mark (SNDHWM) applied to the PUB socket
-    /// before bind. Bounds how many outbound messages ZeroMQ queues per
-    /// subscriber before it silently drops. Parsed but a no-op under the stub
-    /// backend; only the `corpus-ipc` PUB path consumes it.
-    #[serde(default = "default_spine_pub_sndhwm")]
-    pub spine_pub_sndhwm: i32,
-    /// Finite LINGER (milliseconds) applied to the PUB socket before bind so
-    /// teardown and signal shutdown cannot block indefinitely on pending
-    /// messages. `0` (the default) drops any pending messages on close, the
-    /// safe bounded default for a best-effort PUB. Parsed but a no-op under the
-    /// stub backend; only the `corpus-ipc` PUB path consumes it.
-    #[serde(default = "default_spine_pub_linger_ms")]
-    pub spine_pub_linger_ms: i32,
-    /// Empty-spike-batch compatibility policy for the PUB egress.
-    ///
-    /// `true` (the default) preserves the current behavior where the tick loop
-    /// emits a frame every tick even when the batch has zero spikes, so
-    /// subscribers relying on per-tick / heartbeat frames keep working. Set to
-    /// `false` to suppress empty batches at the sink. Parsed but a no-op under
-    /// the stub backend; only the `corpus-ipc` PUB path consumes it.
-    #[serde(default = "default_spine_pub_send_empty_batches")]
-    pub spine_pub_send_empty_batches: bool,
     pub model_path: PathBuf,
     pub lif_count: usize,
     pub izh_count: usize,
@@ -109,26 +78,6 @@ pub struct DaemonConfig {
     pub control_bind: Option<String>,
 }
 
-/// Default PUB bind host: loopback, requiring explicit opt-in for broader exposure.
-fn default_spine_pub_bind_host() -> String {
-    "127.0.0.1".to_string()
-}
-
-/// Default finite send high-water mark for the PUB socket.
-fn default_spine_pub_sndhwm() -> i32 {
-    1000
-}
-
-/// Default finite LINGER (ms) for the PUB socket: drop pending on close.
-fn default_spine_pub_linger_ms() -> i32 {
-    0
-}
-
-/// Default empty-batch policy: send empty batches (preserves current behavior).
-fn default_spine_pub_send_empty_batches() -> bool {
-    true
-}
-
 impl DaemonConfig {
     /// Load daemon configuration from a TOML file.
     pub fn load(path: &std::path::Path) -> Result<Self> {
@@ -150,8 +99,6 @@ impl DaemonConfig {
         let cfg: Self = toml::from_str(&data)
             .with_context(|| format!("failed to parse config from {}", path.display()))?;
         validate_log_level(&cfg.log_level)
-            .with_context(|| format!("invalid config from {}", path.display()))?;
-        validate_pub_socket_opts(&cfg)
             .with_context(|| format!("invalid config from {}", path.display()))?;
         Ok(cfg)
     }
@@ -709,41 +656,6 @@ fn log_model_provenance(config: &DaemonConfig, provenance: &ModelProvenance) {
     }
 }
 
-/// Fail closed on PUB socket options whose libzmq-valid sentinel values would
-/// defeat the bounded PUB lifecycle guarantee.
-///
-/// `spine_pub_sndhwm` must be `> 0`: `0` disables the send high-water mark
-/// (unbounded buffering) and negatives are nonsensical. `spine_pub_linger_ms`
-/// must be `>= 0`: a negative value requests infinite LINGER, which can block
-/// shutdown indefinitely; `0` (the default) is the safe drop-on-close default.
-pub(crate) fn validate_pub_socket_opts(config: &DaemonConfig) -> Result<()> {
-    if config.spine_pub_sndhwm <= 0 {
-        bail!(
-            "spine_pub_sndhwm must be > 0 (0 disables the send high-water mark, which defeats the bounded PUB lifecycle)"
-        );
-    }
-    if config.spine_pub_linger_ms < 0 {
-        bail!(
-            "spine_pub_linger_ms must be >= 0 (a negative value requests infinite LINGER, which can block shutdown indefinitely)"
-        );
-    }
-    Ok(())
-}
-
-/// Build a ZeroMQ TCP endpoint string, bracketing IPv6 literal hosts.
-///
-/// ZeroMQ TCP endpoints require IPv6 literals to be bracketed
-/// (`tcp://[::1]:5556`); an unbracketed `format!("tcp://{host}:{port}")` on
-/// `::1` yields the invalid `tcp://::1:5556`. IPv4 literals and hostnames have
-/// no `:` and are emitted unchanged; already-bracketed hosts are left as-is.
-pub fn pub_endpoint(host: &str, port: u16) -> String {
-    if host.contains(':') && !host.starts_with('[') {
-        format!("tcp://[{host}]:{port}")
-    } else {
-        format!("tcp://{host}:{port}")
-    }
-}
-
 pub(crate) fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
     let total = config
         .lif_count
@@ -1291,10 +1203,6 @@ mod tests {
             log_level: "info".to_string(),
             spine_sub_port: 5555,
             spine_pub_port: 5556,
-            spine_pub_bind_host: "127.0.0.1".to_string(),
-            spine_pub_sndhwm: 1000,
-            spine_pub_linger_ms: 0,
-            spine_pub_send_empty_batches: true,
             model_path: PathBuf::from("/tmp/model.mem"),
             lif_count: 16,
             izh_count: 5,
@@ -2604,152 +2512,6 @@ block_timeout_ms = 0
         assert_eq!(stimuli, vec![0.3, 0.4]);
         assert_eq!(ingress.metrics().sensory.depth, 0);
         assert_eq!(sink.emitted.len(), 1);
-    }
-
-    #[test]
-    fn config_load_rejects_zero_sndhwm() {
-        let path = write_config_toml(
-            "sndhwm-zero",
-            r#"
-tick_rate_hz = 1000
-log_level = "info"
-spine_sub_port = 5555
-spine_pub_port = 5556
-model_path = "/tmp/model.mem"
-lif_count = 1
-izh_count = 0
-channels = 1
-spine_pub_sndhwm = 0
-"#,
-        );
-        let err = DaemonConfig::load(&path).unwrap_err();
-        let _ = std::fs::remove_file(&path);
-        let message = format!("{err:#}");
-        assert!(
-            message.contains("spine_pub_sndhwm must be > 0"),
-            "{message}"
-        );
-    }
-
-    #[test]
-    fn config_load_rejects_negative_sndhwm() {
-        let path = write_config_toml(
-            "sndhwm-negative",
-            r#"
-tick_rate_hz = 1000
-log_level = "info"
-spine_sub_port = 5555
-spine_pub_port = 5556
-model_path = "/tmp/model.mem"
-lif_count = 1
-izh_count = 0
-channels = 1
-spine_pub_sndhwm = -1
-"#,
-        );
-        let err = DaemonConfig::load(&path).unwrap_err();
-        let _ = std::fs::remove_file(&path);
-        let message = format!("{err:#}");
-        assert!(
-            message.contains("spine_pub_sndhwm must be > 0"),
-            "{message}"
-        );
-    }
-
-    #[test]
-    fn config_load_rejects_negative_linger() {
-        let path = write_config_toml(
-            "linger-negative",
-            r#"
-tick_rate_hz = 1000
-log_level = "info"
-spine_sub_port = 5555
-spine_pub_port = 5556
-model_path = "/tmp/model.mem"
-lif_count = 1
-izh_count = 0
-channels = 1
-spine_pub_linger_ms = -1
-"#,
-        );
-        let err = DaemonConfig::load(&path).unwrap_err();
-        let _ = std::fs::remove_file(&path);
-        let message = format!("{err:#}");
-        assert!(
-            message.contains("spine_pub_linger_ms must be >= 0"),
-            "{message}"
-        );
-    }
-
-    #[test]
-    fn config_load_accepts_defaults_without_pub_socket_keys() {
-        // Backward compat: a minimal TOML omitting the PUB socket keys keeps the
-        // safe defaults (sndhwm 1000, linger 0) and loads cleanly.
-        let path = write_config_toml(
-            "pub-defaults",
-            r#"
-tick_rate_hz = 1000
-log_level = "info"
-spine_sub_port = 5555
-spine_pub_port = 5556
-model_path = "/tmp/model.mem"
-lif_count = 1
-izh_count = 0
-channels = 1
-"#,
-        );
-        let cfg = DaemonConfig::load(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
-        assert_eq!(cfg.spine_pub_sndhwm, 1000);
-        assert_eq!(cfg.spine_pub_linger_ms, 0);
-        assert_eq!(cfg.spine_pub_bind_host, "127.0.0.1");
-    }
-
-    #[test]
-    fn config_load_accepts_zero_linger_explicitly() {
-        let path = write_config_toml(
-            "linger-zero",
-            r#"
-tick_rate_hz = 1000
-log_level = "info"
-spine_sub_port = 5555
-spine_pub_port = 5556
-model_path = "/tmp/model.mem"
-lif_count = 1
-izh_count = 0
-channels = 1
-spine_pub_sndhwm = 4
-spine_pub_linger_ms = 0
-"#,
-        );
-        let cfg = DaemonConfig::load(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
-        assert_eq!(cfg.spine_pub_sndhwm, 4);
-        assert_eq!(cfg.spine_pub_linger_ms, 0);
-    }
-
-    #[test]
-    fn pub_endpoint_brackets_ipv6_literals() {
-        assert_eq!(super::pub_endpoint("::1", 5556), "tcp://[::1]:5556");
-        assert_eq!(super::pub_endpoint("fe80::1", 5556), "tcp://[fe80::1]:5556");
-    }
-
-    #[test]
-    fn pub_endpoint_leaves_ipv4_and_hostnames_unbracketed() {
-        assert_eq!(
-            super::pub_endpoint("127.0.0.1", 5556),
-            "tcp://127.0.0.1:5556"
-        );
-        assert_eq!(super::pub_endpoint("0.0.0.0", 5556), "tcp://0.0.0.0:5556");
-        assert_eq!(
-            super::pub_endpoint("localhost", 5556),
-            "tcp://localhost:5556"
-        );
-    }
-
-    #[test]
-    fn pub_endpoint_leaves_already_bracketed_hosts_untouched() {
-        assert_eq!(super::pub_endpoint("[::1]", 5556), "tcp://[::1]:5556");
     }
 
     // Sends a real SIGTERM to this test process, so it's `#[ignore]`d by default:

@@ -89,10 +89,6 @@ tick_rate_hz   = 1000
 log_level      = "info"
 spine_sub_port = 5555
 spine_pub_port = 5556
-spine_pub_bind_host          = "127.0.0.1"  # PUB bind host; loopback default, "0.0.0.0" to expose broadly
-spine_pub_sndhwm             = 1000         # explicit finite send high-water mark
-spine_pub_linger_ms          = 0            # finite LINGER: drop pending on close (bounded teardown)
-spine_pub_send_empty_batches = true         # send a frame every tick even with zero spikes
 model_path     = "/var/lib/soma/snn_model.json"  # Distill sidecar JSON; `~` is not expanded
 ```
 

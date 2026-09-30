@@ -98,32 +98,17 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
         let pub_socket = zmq_context
             .socket(zmq::PUB)
             .map_err(|e| anyhow::anyhow!("failed to create ZMQ PUB socket: {e}"))?;
-        // Bounded PUB lifecycle: set an explicit finite send high-water mark and
-        // a finite LINGER before bind (mirrors the SUB-side style in
-        // ZmqStimulusSource::connect). The finite LINGER keeps teardown and
-        // signal shutdown from blocking indefinitely on pending messages.
         pub_socket
-            .set_sndhwm(cfg.spine_pub_sndhwm)
-            .map_err(|e| anyhow::anyhow!("ZMQ sndhwm: {e}"))?;
-        pub_socket
-            .set_linger(cfg.spine_pub_linger_ms)
-            .map_err(|e| anyhow::anyhow!("ZMQ linger: {e}"))?;
-        // Loopback by default (`spine_pub_bind_host` = 127.0.0.1); broader
-        // exposure (e.g. 0.0.0.0) requires explicit configuration.
-        let pub_endpoint =
-            brainstem_daemon::daemon::pub_endpoint(&cfg.spine_pub_bind_host, cfg.spine_pub_port);
-        pub_socket
-            .bind(&pub_endpoint)
-            .map_err(|e| anyhow::anyhow!("failed to bind ZMQ PUB on {pub_endpoint}: {e}"))?;
+            .bind(&format!("tcp://*:{}", cfg.spine_pub_port))
+            .map_err(|e| {
+                anyhow::anyhow!("failed to bind ZMQ PUB on {}: {e}", cfg.spine_pub_port)
+            })?;
 
-        info!("📡 Using ZMQ corpus-ipc backend (spine ports active, PUB bound on {pub_endpoint})");
+        info!("📡 Using ZMQ corpus-ipc backend (spine ports active)");
 
         BackendPair {
             source: Box::new(source),
-            sink: Box::new(brainstem_daemon::backend::ZmqSpikeSink::with_policy(
-                pub_socket,
-                cfg.spine_pub_send_empty_batches,
-            )),
+            sink: Box::new(brainstem_daemon::backend::ZmqSpikeSink::new(pub_socket)),
         }
     };
 
