@@ -9,7 +9,8 @@ use crate::backend::IngressPacket;
 
 use super::{
     BoundedIngress, ClassMetrics, EnqueueOutcome, IngressConfig, MAX_BLOCK_TIMEOUT_MS,
-    MAX_PAYLOAD_LEN, MAX_QUEUE_CAPACITY, MessageClass, OverflowPolicy,
+    MAX_PAYLOAD_LEN, MAX_QUEUE_CAPACITY, MessageClass, NonFiniteInput, OverflowPolicy,
+    first_non_finite,
 };
 
 fn wait_until(timeout: Duration, mut pred: impl FnMut() -> bool) -> bool {
@@ -424,6 +425,36 @@ fn admit_skips_empty_backend_placeholder() {
     assert_eq!(ingress.metrics().sensory.depth, 1);
     assert_eq!(ingress.metrics().reward.depth, 0);
     assert_eq!(ingress.pop(MessageClass::Sensory).unwrap().stimuli[0], 7.0);
+}
+
+#[test]
+fn first_non_finite_is_the_choke_point_for_direct_ingress() {
+    // The direct enqueue / admit_backend_packet path drains through run_tick,
+    // which uses `first_non_finite` as the single rejection choke point. This
+    // documents that contract against packets shaped like the direct helpers.
+
+    // Existing finite direct-ingress helpers are accepted (None).
+    assert_eq!(first_non_finite(&pkt(1.0)), None);
+    assert_eq!(first_non_finite(&reward_pkt(0.5)), None);
+
+    // A stimulus packet with a non-finite value is flagged.
+    let mut bad = pkt(f32::NAN);
+    assert_eq!(
+        first_non_finite(&bad),
+        Some(NonFiniteInput::Stimulus { index: 0 })
+    );
+    bad.stimuli = vec![f32::INFINITY];
+    assert_eq!(
+        first_non_finite(&bad),
+        Some(NonFiniteInput::Stimulus { index: 0 })
+    );
+
+    // A reward/modulator packet with a non-finite value is flagged.
+    let bad_reward = reward_pkt(f32::NEG_INFINITY);
+    assert_eq!(
+        first_non_finite(&bad_reward),
+        Some(NonFiniteInput::Modulator { index: 0 })
+    );
 }
 
 #[test]

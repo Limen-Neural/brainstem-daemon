@@ -804,11 +804,48 @@ fn diagnostic_key(message: &str) -> u64 {
     })
 }
 
+/// Non-finite offender in a live backend packet, or `None` when the packet is
+/// already `rejected` (left to the existing `rejected_batches` accounting) or
+/// carries only finite values. Flattens the backend-gate condition so the check
+/// is a single `Option` combinator instead of a multi-branch `let`-chain.
+fn backend_non_finite(packet: &IngressPacket) -> Option<crate::ingress::NonFiniteInput> {
+    if packet.rejected {
+        return None;
+    }
+    crate::ingress::first_non_finite(packet)
+}
+
+/// Record one non-finite ingress rejection: bump `rejected_batches`, format the
+/// shared diagnostic message, and emit-or-suppress through the bounded
+/// `non_finite` rate limiter. Shared by both fail-closed gates in `run_tick`
+/// (backend packet and drained packet) so the counting/logging is byte-for-byte
+/// identical. Callers own the surrounding control flow (dropping the backend
+/// packet, or the `TickSucceeded` + early return on the drained gate).
+fn record_non_finite_rejection(
+    offender: crate::ingress::NonFiniteInput,
+    stats: &mut RuntimeStats,
+    diagnostics: &mut TickDiagnostics,
+) {
+    stats.rejected_batches += 1;
+    let msg = format!("Rejected non-finite ingress: {offender}");
+    let now = time::Instant::now();
+    match diagnostics.non_finite.record(diagnostic_key(&msg), now) {
+        Some(suppressed) => {
+            stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
+            warn!(total = stats.rejected_batches, suppressed, "{msg}");
+        }
+        None => {
+            stats.suppressed_diagnostics = stats.suppressed_diagnostics.saturating_add(1);
+        }
+    }
+}
+
 #[derive(Debug)]
 struct TickDiagnostics {
     receive: OccurrenceLimiter,
     emit: OccurrenceLimiter,
     dropped: OccurrenceLimiter,
+    non_finite: OccurrenceLimiter,
 }
 
 impl TickDiagnostics {
@@ -819,12 +856,16 @@ impl TickDiagnostics {
             receive: OccurrenceLimiter::new(interval, Duration::ZERO),
             emit: OccurrenceLimiter::new(interval, Duration::ZERO),
             dropped: OccurrenceLimiter::new(interval, Duration::ZERO),
+            non_finite: OccurrenceLimiter::new(interval, Duration::ZERO),
         }
     }
 
     #[cfg(test)]
     fn suppressed_total(&self) -> u64 {
-        self.receive.suppressed() + self.emit.suppressed() + self.dropped.suppressed()
+        self.receive.suppressed()
+            + self.emit.suppressed()
+            + self.dropped.suppressed()
+            + self.non_finite.suppressed()
     }
 }
 
@@ -834,6 +875,7 @@ impl Default for TickDiagnostics {
             receive: OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL, DIAGNOSTIC_MIN_GAP),
             emit: OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL, DIAGNOSTIC_MIN_GAP),
             dropped: OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL, DIAGNOSTIC_MIN_GAP),
+            non_finite: OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL, DIAGNOSTIC_MIN_GAP),
         }
     }
 }
@@ -876,6 +918,22 @@ fn run_tick(
         }
     };
 
+    // Fail-closed finite gate: a live packet carrying any non-finite stimulus
+    // or modulator (NaN/+/-Inf) is rejected and counted here, before it can
+    // reach `network.step` (which errors on non-finite and would be treated as
+    // fatal). Modulators are validated before any held/cached or network state
+    // is updated. An already-`rejected` packet is left to the existing
+    // `rejected_batches` accounting below. Finite inputs are untouched.
+    let mut backend_packet = backend_packet;
+    if let Some(offender) = backend_packet.as_ref().and_then(backend_non_finite) {
+        record_non_finite_rejection(offender, stats, diagnostics);
+        // Drop the packet for this tick: skip IngressObserved, do not
+        // admit/enqueue it, do not count it accepted, and do not reach
+        // network.step. decode_inputs then zero-fills (identical to a
+        // skip / backend `None`).
+        backend_packet = None;
+    }
+
     if backend_packet.as_ref().is_some_and(packet_carries_input) {
         health.apply(HealthEvent::IngressObserved);
     }
@@ -898,6 +956,26 @@ fn run_tick(
     observe_control_envelopes(&drained.control);
     let packet = drained.into_packet();
     apply_queue_pressure(health, ingress);
+
+    // Second fail-closed finite gate, on the drained/merged packet. The
+    // backend-packet gate above only sees `source.next_ingress()`; packets
+    // injected through the public `BoundedIngress` handle
+    // (`BrainstemDaemon::ingress()` -> `enqueue`/`try_enqueue`) never pass it
+    // and surface only here, in the drained packet. This drained packet is the
+    // single choke point through which both the admitted-backend path and the
+    // direct-enqueue path flow, so validating it before `decode_inputs` closes
+    // the direct-ingress path required by issue #66. Modulators are validated
+    // here too, before any held/cached or network state is updated.
+    if let Some(offender) = crate::ingress::first_non_finite(&packet) {
+        record_non_finite_rejection(offender, stats, diagnostics);
+        // Skip the step for this tick without touching the network: do not call
+        // `network.step`, do not count a successful tick (`stats.ticks`), and do
+        // not emit a spike batch for the rejected input. The daemon stays live
+        // and keeps ticking (not fatal), mirroring the safe no-step exit used
+        // when there is nothing valid to publish.
+        health.apply(HealthEvent::TickSucceeded);
+        return;
+    }
 
     let modulators = decode_inputs(&packet, stimuli);
 
@@ -1619,6 +1697,322 @@ channels = 16
         // identity must emit immediately instead of waiting for the interval.
         assert_eq!(stats.diagnostic_emissions, 2);
         assert_eq!(stats.suppressed_diagnostics, 4);
+    }
+
+    // ── Non-finite ingress rejection (issue #66) ─────────────────────────────
+
+    /// Source that yields the same (cloned) packet on every tick, for driving
+    /// the run_tick non-finite gate deterministically.
+    struct RepeatingSource {
+        packet: IngressPacket,
+    }
+    impl StimulusSource for RepeatingSource {
+        fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
+            Ok(Some(self.packet.clone()))
+        }
+        fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Drive `ticks` ticks with the same packet through a fresh 1-channel
+    /// network, returning the collected sink, stats, diagnostics, and health.
+    fn drive_repeating(
+        packet: IngressPacket,
+        ticks: usize,
+        interval: u64,
+    ) -> (
+        CollectingSpikeSink,
+        RuntimeStats,
+        TickDiagnostics,
+        HealthHandle,
+        SpikingNetwork,
+    ) {
+        let ingress = BoundedIngress::new(IngressConfig::default()).unwrap();
+        let health = HealthHandle::started(HealthLimits::default());
+        let mut source = RepeatingSource { packet };
+        let mut sink = CollectingSpikeSink::new();
+        let mut network = SpikingNetwork::with_dimensions(1, 0, 1);
+        let mut stimuli = [0.0];
+        let mut spike_buf = Vec::new();
+        let mut stats = RuntimeStats::default();
+        let mut diagnostics = TickDiagnostics::new(interval);
+        for _ in 0..ticks {
+            run_tick(
+                &mut source,
+                &mut network,
+                &mut sink,
+                &mut stimuli,
+                &mut spike_buf,
+                &ingress,
+                &mut TickReport {
+                    health: &health,
+                    stats: &mut stats,
+                    diagnostics: &mut diagnostics,
+                },
+            );
+        }
+        (sink, stats, diagnostics, health, network)
+    }
+
+    fn assert_non_finite_stimulus_rejected(value: f32) {
+        let packet = IngressPacket {
+            stimuli: vec![value],
+            batch_id: Some(7),
+            ..Default::default()
+        };
+        let (sink, stats, diagnostics, health, _network) = drive_repeating(packet, 25, 10);
+
+        // Counted as rejected, never accepted, and the daemon keeps ticking
+        // (25 successful ticks emitted, not fatal).
+        assert_eq!(stats.rejected_batches, 25, "value {value:?}");
+        assert_eq!(stats.accepted_batches, 0, "value {value:?}");
+        assert!(stats.last_batch_id.is_none(), "value {value:?}");
+        assert_eq!(stats.ticks, 25, "value {value:?}");
+        assert_eq!(sink.emitted.len(), 25, "value {value:?}");
+
+        let snap = health.snapshot();
+        assert!(snap.live, "daemon must stay live: value {value:?}");
+        assert!(
+            snap.input_freshness.age_ms.is_none(),
+            "rejected input must not count as fresh ingress: value {value:?}"
+        );
+
+        // Diagnostics are rate-limited exactly like the receive-error path
+        // (interval 10 over 25 occurrences: emit at 1, 11, 21).
+        assert_eq!(stats.diagnostic_emissions, 3, "value {value:?}");
+        assert_eq!(stats.suppressed_diagnostics, 22, "value {value:?}");
+        assert_eq!(diagnostics.suppressed_total(), 4, "value {value:?}");
+    }
+
+    #[test]
+    fn non_finite_stimulus_is_rejected_and_bounded() {
+        assert_non_finite_stimulus_rejected(f32::NAN);
+        assert_non_finite_stimulus_rejected(f32::INFINITY);
+        assert_non_finite_stimulus_rejected(f32::NEG_INFINITY);
+    }
+
+    #[test]
+    fn non_finite_modulator_is_rejected_and_state_untouched() {
+        let packet = IngressPacket {
+            stimuli: vec![0.0],
+            modulators: Some(vec![f32::NAN, 0.0, 0.0, 0.0]),
+            batch_id: Some(9),
+            ..Default::default()
+        };
+        let (sink, stats, _diag, health, network) = drive_repeating(packet, 3, 1_000);
+
+        assert_eq!(stats.rejected_batches, 3);
+        assert_eq!(stats.accepted_batches, 0);
+        assert_eq!(sink.emitted.len(), 3);
+        assert!(health.snapshot().live);
+        // Modulators are validated before any network/held state update, so the
+        // network's modulator snapshot stays at its default.
+        assert_eq!(network.modulators, NeuroModulators::default());
+    }
+
+    #[test]
+    fn finite_wrong_width_packet_is_accepted_not_rejected() {
+        // stimuli length (3) != channels (1): still ACCEPTED; decode_inputs
+        // truncates. accepted_batches increments only because batch_id is Some.
+        let packet = IngressPacket {
+            stimuli: vec![0.1, 0.2, 0.3],
+            batch_id: Some(11),
+            ..Default::default()
+        };
+        let (sink, stats, _diag, _health, _network) = drive_repeating(packet, 1, 1_000);
+        assert_eq!(stats.rejected_batches, 0);
+        assert_eq!(stats.accepted_batches, 1);
+        assert_eq!(stats.last_batch_id, Some(11));
+        assert_eq!(sink.emitted.len(), 1);
+
+        // Same shape but no batch_id: accepted (not rejected) but uncounted,
+        // exactly as today.
+        let packet = IngressPacket {
+            stimuli: vec![0.1, 0.2, 0.3],
+            ..Default::default()
+        };
+        let (_sink, stats, _diag, _health, _network) = drive_repeating(packet, 1, 1_000);
+        assert_eq!(stats.rejected_batches, 0);
+        assert_eq!(stats.accepted_batches, 0);
+    }
+
+    #[test]
+    fn non_finite_in_masked_slot_is_still_rejected() {
+        // Fail-closed: a non-finite value in a valid_mask==false slot is still
+        // rejected. Masking does not neutralize the finite check.
+        let packet = IngressPacket {
+            stimuli: vec![f32::NAN],
+            valid_mask: Some(vec![false]),
+            batch_id: Some(13),
+            ..Default::default()
+        };
+        let (sink, stats, _diag, _health, _network) = drive_repeating(packet, 2, 1_000);
+        assert_eq!(stats.rejected_batches, 2);
+        assert_eq!(stats.accepted_batches, 0);
+        assert!(stats.last_valid_mask.is_none());
+        assert_eq!(sink.emitted.len(), 2);
+    }
+
+    #[test]
+    fn empty_input_is_accepted_and_ticks() {
+        // Empty stimuli + None modulators (the stub default) is accepted and
+        // ticks with zeroed stimuli; nothing is rejected.
+        let (sink, stats, _diag, health, _network) =
+            drive_repeating(IngressPacket::default(), 1, 1_000);
+        assert_eq!(stats.rejected_batches, 0);
+        assert_eq!(stats.accepted_batches, 0);
+        assert_eq!(sink.emitted.len(), 1);
+        assert!(health.snapshot().input_freshness.age_ms.is_none());
+    }
+
+    /// Reproduces the reported #66 gap: a non-finite packet injected through the
+    /// public `BoundedIngress` handle bypasses the backend-packet gate (the
+    /// backend source here yields `None`) and would previously reach
+    /// `network.step` via the drained packet, tripping the fatal shutdown. The
+    /// drained-packet gate must reject it, keep the daemon live, count it as a
+    /// rejected batch, and never advance a successful tick for it.
+    fn assert_direct_enqueue_non_finite_rejected(class: MessageClass, packet: IngressPacket) {
+        // Backend source contributes nothing this tick; the only non-finite
+        // data comes from the direct `enqueue`, exercising the path that never
+        // passed the backend-packet gate.
+        struct NoneSource;
+        impl StimulusSource for NoneSource {
+            fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
+                Ok(None)
+            }
+            fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let ingress = BoundedIngress::new(IngressConfig::default()).unwrap();
+        let health = HealthHandle::started(HealthLimits::default());
+        let mut source = NoneSource;
+        let mut sink = CollectingSpikeSink::new();
+        let mut network = SpikingNetwork::with_dimensions(2, 0, 2);
+        let mut stimuli = vec![0.0; 2];
+        let mut spike_buf = Vec::new();
+        let mut stats = RuntimeStats::default();
+        let mut diagnostics = TickDiagnostics::new(1_000);
+
+        // Inject directly through the SAME ingress handle passed to run_tick.
+        assert!(ingress.enqueue(class, packet).accepted());
+
+        run_tick(
+            &mut source,
+            &mut network,
+            &mut sink,
+            &mut stimuli,
+            &mut spike_buf,
+            &ingress,
+            &mut TickReport {
+                health: &health,
+                stats: &mut stats,
+                diagnostics: &mut diagnostics,
+            },
+        );
+
+        // Daemon stays live (not fatal) and the rejected input never drove
+        // network.step: no successful tick advanced and no spike batch emitted.
+        let snap = health.snapshot();
+        assert!(
+            snap.live,
+            "daemon must stay live after direct non-finite enqueue"
+        );
+        assert_eq!(stats.rejected_batches, 1);
+        assert_eq!(
+            stats.ticks, 0,
+            "rejected input must not advance a network tick"
+        );
+        assert!(sink.emitted.is_empty(), "no spike batch for rejected input");
+        // Held network state is untouched (modulators validated before decode).
+        assert_eq!(network.modulators, NeuroModulators::default());
+    }
+
+    #[test]
+    fn direct_enqueue_non_finite_stimulus_is_rejected_not_fatal() {
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_direct_enqueue_non_finite_rejected(
+                MessageClass::Sensory,
+                IngressPacket {
+                    stimuli: vec![value, 0.0],
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn direct_enqueue_non_finite_modulator_is_rejected_not_fatal() {
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_direct_enqueue_non_finite_rejected(
+                MessageClass::Reward,
+                IngressPacket {
+                    modulators: Some(vec![value, 0.0, 0.0, 0.0]),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn first_non_finite_classifies_ingress_packets() {
+        use crate::ingress::{NonFiniteInput, first_non_finite};
+
+        // Empty packet and finite packet: accepted (None).
+        assert_eq!(first_non_finite(&IngressPacket::default()), None);
+        let finite = IngressPacket {
+            stimuli: vec![0.0, 1.0, -2.5],
+            modulators: Some(vec![0.1, 0.2, 0.3, 0.4]),
+            ..Default::default()
+        };
+        assert_eq!(first_non_finite(&finite), None);
+
+        // NaN/Inf/-Inf in stimuli report the first offending index.
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let packet = IngressPacket {
+                stimuli: vec![0.0, value, 3.0],
+                ..Default::default()
+            };
+            assert_eq!(
+                first_non_finite(&packet),
+                Some(NonFiniteInput::Stimulus { index: 1 }),
+                "value {value:?}"
+            );
+        }
+
+        // Non-finite only in modulators reports a Modulator offender.
+        let packet = IngressPacket {
+            stimuli: vec![0.0, 1.0],
+            modulators: Some(vec![0.0, f32::NAN, 0.0, 0.0]),
+            ..Default::default()
+        };
+        assert_eq!(
+            first_non_finite(&packet),
+            Some(NonFiniteInput::Modulator { index: 1 })
+        );
+
+        // A non-finite value in a masked-out slot is still flagged (fail-closed).
+        let packet = IngressPacket {
+            stimuli: vec![f32::INFINITY],
+            valid_mask: Some(vec![false]),
+            ..Default::default()
+        };
+        assert_eq!(
+            first_non_finite(&packet),
+            Some(NonFiniteInput::Stimulus { index: 0 })
+        );
+
+        // A short modulator tail is still fully scanned for present elements.
+        let packet = IngressPacket {
+            modulators: Some(vec![0.0, f32::NAN]),
+            ..Default::default()
+        };
+        assert_eq!(
+            first_non_finite(&packet),
+            Some(NonFiniteInput::Modulator { index: 1 })
+        );
     }
 
     struct ScriptedStimulusSource {
