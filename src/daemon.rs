@@ -602,6 +602,14 @@ fn packet_carries_input(packet: &IngressPacket) -> bool {
             .is_some_and(|mods| !mods.is_empty())
 }
 
+/// Whether a backend packet should refresh `input_freshness`.
+///
+/// Finite rejected packets still count as observed ingress. Non-finite
+/// payloads (live or already-`rejected`) are dropped and must not.
+fn observes_ingress(packet: &IngressPacket) -> bool {
+    packet_carries_input(packet) && crate::ingress::first_non_finite(packet).is_none()
+}
+
 fn apply_queue_pressure(health: &HealthHandle, ingress: &BoundedIngress) {
     let metrics = ingress.metrics();
     let cfg = ingress.config();
@@ -850,6 +858,31 @@ fn record_non_finite_rejection(
     }
 }
 
+/// Count accepted/rejected batches and admit onto class queues.
+///
+/// Already-rejected packets with a non-finite payload are counted once here
+/// and not admitted, so the drained-packet gate cannot increment
+/// `rejected_batches` again. Finite rejected packets still admit.
+fn account_and_admit_backend_packet(
+    packet: IngressPacket,
+    stats: &mut RuntimeStats,
+    ingress: &BoundedIngress,
+) {
+    if packet.rejected {
+        stats.rejected_batches += 1;
+        if crate::ingress::first_non_finite(&packet).is_none() {
+            ingress.admit_backend_packet(packet);
+        }
+        return;
+    }
+    if packet.batch_id.is_some() {
+        stats.accepted_batches += 1;
+        stats.last_batch_id = packet.batch_id;
+        stats.last_valid_mask.clone_from(&packet.valid_mask);
+    }
+    ingress.admit_backend_packet(packet);
+}
+
 #[derive(Debug)]
 struct TickDiagnostics {
     receive: OccurrenceLimiter,
@@ -946,7 +979,7 @@ fn run_tick(
         backend_packet = None;
     }
 
-    if backend_packet.as_ref().is_some_and(packet_carries_input) {
+    if backend_packet.as_ref().is_some_and(observes_ingress) {
         health.apply(HealthEvent::IngressObserved);
     }
 
@@ -955,22 +988,7 @@ fn run_tick(
     // `None` (skip or error) does not enqueue a placeholder that could evict
     // in-process sensory. decode_inputs zero-fills when drain yields no stimuli.
     if let Some(packet) = backend_packet {
-        if packet.rejected {
-            stats.rejected_batches += 1;
-            // Already counted. Drop a non-finite payload so the drained-packet
-            // gate cannot increment `rejected_batches` again. Finite rejected
-            // packets still admit (unchanged).
-            if crate::ingress::first_non_finite(&packet).is_none() {
-                ingress.admit_backend_packet(packet);
-            }
-        } else {
-            if packet.batch_id.is_some() {
-                stats.accepted_batches += 1;
-                stats.last_batch_id = packet.batch_id;
-                stats.last_valid_mask.clone_from(&packet.valid_mask);
-            }
-            ingress.admit_backend_packet(packet);
-        }
+        account_and_admit_backend_packet(packet, stats, ingress);
     }
     let drained = ingress.drain_for_tick();
     observe_control_envelopes(&drained.control);
@@ -2063,6 +2081,10 @@ channels = 16
             assert_eq!(stats.ticks, 3);
             assert_eq!(sink.emitted.len(), 3);
             assert!(health.snapshot().live);
+            assert!(
+                health.snapshot().input_freshness.age_ms.is_none(),
+                "already-rejected non-finite must not count as fresh ingress"
+            );
         }
     }
 
@@ -2080,6 +2102,10 @@ channels = 16
         assert_eq!(stats.ticks, 2);
         assert_eq!(sink.emitted.len(), 2);
         assert!(health.snapshot().live);
+        assert!(
+            health.snapshot().input_freshness.age_ms.is_some(),
+            "finite rejected packets still refresh input freshness"
+        );
     }
 
     #[test]
