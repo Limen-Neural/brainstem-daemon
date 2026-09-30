@@ -804,6 +804,42 @@ fn diagnostic_key(message: &str) -> u64 {
     })
 }
 
+/// Non-finite offender in a live backend packet, or `None` when the packet is
+/// already `rejected` (left to the existing `rejected_batches` accounting) or
+/// carries only finite values. Flattens the backend-gate condition so the check
+/// is a single `Option` combinator instead of a multi-branch `let`-chain.
+fn backend_non_finite(packet: &IngressPacket) -> Option<crate::ingress::NonFiniteInput> {
+    if packet.rejected {
+        return None;
+    }
+    crate::ingress::first_non_finite(packet)
+}
+
+/// Record one non-finite ingress rejection: bump `rejected_batches`, format the
+/// shared diagnostic message, and emit-or-suppress through the bounded
+/// `non_finite` rate limiter. Shared by both fail-closed gates in `run_tick`
+/// (backend packet and drained packet) so the counting/logging is byte-for-byte
+/// identical. Callers own the surrounding control flow (dropping the backend
+/// packet, or the `TickSucceeded` + early return on the drained gate).
+fn record_non_finite_rejection(
+    offender: crate::ingress::NonFiniteInput,
+    stats: &mut RuntimeStats,
+    diagnostics: &mut TickDiagnostics,
+) {
+    stats.rejected_batches += 1;
+    let msg = format!("Rejected non-finite ingress: {offender}");
+    let now = time::Instant::now();
+    match diagnostics.non_finite.record(diagnostic_key(&msg), now) {
+        Some(suppressed) => {
+            stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
+            warn!(total = stats.rejected_batches, suppressed, "{msg}");
+        }
+        None => {
+            stats.suppressed_diagnostics = stats.suppressed_diagnostics.saturating_add(1);
+        }
+    }
+}
+
 #[derive(Debug)]
 struct TickDiagnostics {
     receive: OccurrenceLimiter,
@@ -889,22 +925,8 @@ fn run_tick(
     // is updated. An already-`rejected` packet is left to the existing
     // `rejected_batches` accounting below. Finite inputs are untouched.
     let mut backend_packet = backend_packet;
-    if let Some(packet) = backend_packet.as_ref()
-        && !packet.rejected
-        && let Some(offender) = crate::ingress::first_non_finite(packet)
-    {
-        stats.rejected_batches += 1;
-        let msg = format!("Rejected non-finite ingress: {offender}");
-        let now = time::Instant::now();
-        match diagnostics.non_finite.record(diagnostic_key(&msg), now) {
-            Some(suppressed) => {
-                stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
-                warn!(total = stats.rejected_batches, suppressed, "{msg}");
-            }
-            None => {
-                stats.suppressed_diagnostics = stats.suppressed_diagnostics.saturating_add(1);
-            }
-        }
+    if let Some(offender) = backend_packet.as_ref().and_then(backend_non_finite) {
+        record_non_finite_rejection(offender, stats, diagnostics);
         // Drop the packet for this tick: skip IngressObserved, do not
         // admit/enqueue it, do not count it accepted, and do not reach
         // network.step. decode_inputs then zero-fills (identical to a
@@ -945,18 +967,7 @@ fn run_tick(
     // the direct-ingress path required by issue #66. Modulators are validated
     // here too, before any held/cached or network state is updated.
     if let Some(offender) = crate::ingress::first_non_finite(&packet) {
-        stats.rejected_batches += 1;
-        let msg = format!("Rejected non-finite ingress: {offender}");
-        let now = time::Instant::now();
-        match diagnostics.non_finite.record(diagnostic_key(&msg), now) {
-            Some(suppressed) => {
-                stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
-                warn!(total = stats.rejected_batches, suppressed, "{msg}");
-            }
-            None => {
-                stats.suppressed_diagnostics = stats.suppressed_diagnostics.saturating_add(1);
-            }
-        }
+        record_non_finite_rejection(offender, stats, diagnostics);
         // Skip the step for this tick without touching the network: do not call
         // `network.step`, do not count a successful tick (`stats.ticks`), and do
         // not emit a spike batch for the rejected input. The daemon stays live

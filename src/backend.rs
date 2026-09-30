@@ -277,6 +277,20 @@ mod zmq_impl {
                 packet.modulators.clone_from(&self.last_modulators);
             }
         }
+
+        /// Cache `mods` for idle replay, or reject the frame when they are
+        /// non-finite (issue #66: never cache or replay non-finite modulators).
+        /// Returns `Some(skip_packet)` for the caller to return on rejection, or
+        /// `None` when the modulators were held successfully. Shared by both
+        /// held-modulator branches in `next_ingress` so the warn message and
+        /// `skip_ingress(true)` reject path stay identical.
+        fn hold_or_reject(&mut self, mods: &[f32]) -> Option<Option<IngressPacket>> {
+            if self.hold_modulators(mods) {
+                return None;
+            }
+            tracing::warn!("Rejected ingress frame: non-finite modulator value");
+            Some(self.skip_ingress(true))
+        }
     }
 
     impl StimulusSource for ZmqStimulusSource {
@@ -294,31 +308,22 @@ mod zmq_impl {
                     Ok(buf) => match accept_ipc_json(&buf, &policy, Self::now_ns()) {
                         Ok(packet) if packet.stimuli.is_empty() && packet.modulators.is_some() => {
                             if let Some(mods) = packet.modulators.as_ref()
-                                && !self.hold_modulators(mods)
+                                && let Some(skip) = self.hold_or_reject(mods)
                             {
-                                // Non-finite modulators must never be cached or
-                                // replayed (issue #66). Reject this frame like
-                                // any other invalid frame instead of holding it.
-                                tracing::warn!(
-                                    "Rejected ingress frame: non-finite modulator value"
-                                );
-                                return Ok(self.skip_ingress(true));
+                                return Ok(skip);
                             }
                             // Modulation-only: keep draining so a Stimuli frame
                             // in the same tick is not delayed by one period.
                             continue;
                         }
                         Ok(mut packet) => {
-                            if let Some(mods) = packet.modulators.as_ref() {
-                                if !self.hold_modulators(mods) {
-                                    // See above: never cache non-finite modulators.
-                                    tracing::warn!(
-                                        "Rejected ingress frame: non-finite modulator value"
-                                    );
-                                    return Ok(self.skip_ingress(true));
+                            match packet.modulators.as_ref() {
+                                Some(mods) => {
+                                    if let Some(skip) = self.hold_or_reject(mods) {
+                                        return Ok(skip);
+                                    }
                                 }
-                            } else {
-                                self.attach_held_modulators(&mut packet);
+                                None => self.attach_held_modulators(&mut packet),
                             }
                             return Ok(Some(packet));
                         }
