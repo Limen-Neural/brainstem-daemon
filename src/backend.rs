@@ -242,10 +242,22 @@ mod zmq_impl {
                 .as_nanos() as u64
         }
 
-        fn hold_modulators(&mut self, mods: &[f32]) {
+        /// Cache `mods` as the held modulator vector, replayed on idle ticks.
+        ///
+        /// Returns `false` (and caches nothing) when any value is non-finite
+        /// (NaN or ±Inf). This is the belt-and-suspenders guard required by
+        /// issue #66: modulators must be validated before any held/cached state
+        /// is updated, so a bad vector can never be replayed. The typed wire
+        /// path already rejects non-finite modulators at deserialization, but
+        /// this guard also protects any future non-typed producer.
+        fn hold_modulators(&mut self, mods: &[f32]) -> bool {
+            if mods.iter().any(|v| !v.is_finite()) {
+                return false;
+            }
             let dst = self.last_modulators.get_or_insert_with(Vec::new);
             dst.clear();
             dst.extend_from_slice(mods);
+            true
         }
 
         fn skip_ingress(&self, rejected: bool) -> Option<IngressPacket> {
@@ -281,8 +293,16 @@ mod zmq_impl {
                 match recvd {
                     Ok(buf) => match accept_ipc_json(&buf, &policy, Self::now_ns()) {
                         Ok(packet) if packet.stimuli.is_empty() && packet.modulators.is_some() => {
-                            if let Some(mods) = packet.modulators.as_ref() {
-                                self.hold_modulators(mods);
+                            if let Some(mods) = packet.modulators.as_ref()
+                                && !self.hold_modulators(mods)
+                            {
+                                // Non-finite modulators must never be cached or
+                                // replayed (issue #66). Reject this frame like
+                                // any other invalid frame instead of holding it.
+                                tracing::warn!(
+                                    "Rejected ingress frame: non-finite modulator value"
+                                );
+                                return Ok(self.skip_ingress(true));
                             }
                             // Modulation-only: keep draining so a Stimuli frame
                             // in the same tick is not delayed by one period.
@@ -290,7 +310,13 @@ mod zmq_impl {
                         }
                         Ok(mut packet) => {
                             if let Some(mods) = packet.modulators.as_ref() {
-                                self.hold_modulators(mods);
+                                if !self.hold_modulators(mods) {
+                                    // See above: never cache non-finite modulators.
+                                    tracing::warn!(
+                                        "Rejected ingress frame: non-finite modulator value"
+                                    );
+                                    return Ok(self.skip_ingress(true));
+                                }
                             } else {
                                 self.attach_held_modulators(&mut packet);
                             }
@@ -542,6 +568,60 @@ mod zmq_impl {
             assert!(idle.stimuli.is_empty());
             assert!(!idle.rejected);
             assert_eq!(idle.modulators.as_deref(), Some(&[0.4, 0.3, 0.2, 1.0][..]));
+        }
+
+        #[test]
+        fn non_finite_modulators_are_never_held_or_replayed() {
+            // Invariant (issue #66): a non-finite modulator frame must never be
+            // cached into `last_modulators` and replayed on idle ticks.
+            //
+            // Layer that rejects it here: the corpus-ipc typed DESERIALIZE layer.
+            // A `NeuromodulatorSnapshot` with a non-finite field cannot even be
+            // built into a wire frame with valid JSON — `serde_json` encodes NaN
+            // as `null`, and `NeuromodulatorSnapshot`'s validating deserialize
+            // (`check_range` -> `check_finite`) rejects it. So `accept_ipc_json`
+            // returns an error and `next_ingress` takes the invalid-frame arm
+            // (`warn!("Rejected ingress frame: ..")` + `skip_ingress(true)`)
+            // before `hold_modulators` is ever called. The `hold_modulators`
+            // finite guard is the belt-and-suspenders backstop for any future
+            // non-typed path.
+            let (publisher, mut source) = bind_loopback(4);
+            let snapshot = NeuromodulatorSnapshot {
+                tick: 1,
+                dopamine: f32::NAN,
+                cortisol: 0.3,
+                acetylcholine: 0.2,
+                tempo: 1.0,
+            };
+            let frame =
+                serde_json::to_vec(&IpcMessage::Neuromodulators(snapshot)).expect("serialize");
+            publisher.send(&frame, 0).unwrap();
+
+            // The frame is rejected (skipped), never held. Because nothing is
+            // cached, subsequent ticks return `None` (no held modulators, no
+            // stimuli), and no idle tick ever replays the bad vector.
+            let mut saw_rejected = false;
+            for _ in 0..50 {
+                match source.next_ingress().expect("ingress must not hard-fail") {
+                    Some(packet) => {
+                        // A rejected/skip packet may carry the (still None) held
+                        // modulators, but must never carry the NaN vector.
+                        assert!(
+                            packet.modulators.is_none(),
+                            "non-finite modulators must never be held/replayed, got {:?}",
+                            packet.modulators
+                        );
+                        if packet.rejected {
+                            saw_rejected = true;
+                        }
+                    }
+                    None => std::thread::sleep(Duration::from_millis(10)),
+                }
+            }
+            assert!(
+                saw_rejected,
+                "the non-finite modulator frame must be surfaced as a rejected/skip outcome"
+            );
         }
     }
 }

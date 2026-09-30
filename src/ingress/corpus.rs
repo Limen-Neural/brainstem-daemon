@@ -317,4 +317,67 @@ mod tests {
         let err = accept_ipc_message(IpcMessage::Ping, &policy(), 1_000).unwrap_err();
         assert_eq!(err, IngressError::UnexpectedVariant("Ping"));
     }
+
+    // ── Non-finite typed-IPC rejection (issue #66) ───────────────────────────
+    //
+    // Observed layering (verified against corpus-ipc 0.1.0):
+    //   * The direct decoded-struct path (`accept_ipc_message`) rejects a
+    //     non-finite `values` entry inside `accept_stimulus_batch` via
+    //     `batch.validate()` -> `check_finite_slice("values", ..)`, surfaced as
+    //     `IngressError::Stimulus(_)`.
+    //   * The JSON wire path (`accept_ipc_json`) never even reaches that check:
+    //     `serde_json` serializes NaN/±Inf as `null`, so a non-finite value
+    //     cannot round-trip and `de_values` fails to parse `null` as `f32`,
+    //     surfaced as `IngressError::Deserialize(_)`.
+    // Both layers reject the frame; the invariant is that a non-finite stimulus
+    // value is never admitted, regardless of its `valid_mask` slot.
+
+    #[test]
+    fn non_finite_stimulus_value_is_rejected_by_validate_on_decoded_struct() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut batch = sample_batch();
+            batch.values = vec![bad, 0.0, 0.25, 0.5];
+            let err = accept_ipc_message(IpcMessage::Stimuli(batch), &policy(), 1_000).unwrap_err();
+            // batch.validate() -> check_finite_slice produces Stimulus(_).
+            assert!(
+                matches!(err, IngressError::Stimulus(_)),
+                "expected Stimulus(_) for {bad:?}, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_finite_stimulus_in_masked_slot_is_still_rejected() {
+        // Fail-closed: the typed layer's `check_finite_slice` scans every value
+        // regardless of `valid_mask`, so a non-finite value in a masked-out
+        // (false) slot is still rejected rather than admitted as a placeholder.
+        let mut batch = sample_batch();
+        batch.values = vec![0.0, f32::NAN, 0.25, 0.5];
+        batch.valid_mask = Some(vec![true, false, true, true]);
+        let err = accept_ipc_message(IpcMessage::Stimuli(batch), &policy(), 1_000).unwrap_err();
+        match err {
+            IngressError::Stimulus(msg) => assert!(
+                msg.contains("values[1]"),
+                "expected the masked slot index in the error, got {msg}"
+            ),
+            other => panic!("expected Stimulus(_) for masked non-finite value, got {other}"),
+        }
+    }
+
+    #[test]
+    fn non_finite_stimulus_value_cannot_round_trip_json() {
+        // On the wire, NaN/±Inf serialize to JSON `null`, so the frame is
+        // rejected at the deserialize layer (`de_values` cannot parse `null`
+        // as f32) before `accept_stimulus_batch`/`validate()` is reached.
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut batch = sample_batch();
+            batch.values = vec![bad, 0.0, 0.25, 0.5];
+            let bytes = serde_json::to_vec(&IpcMessage::Stimuli(batch)).unwrap();
+            let err = accept_ipc_json(&bytes, &policy(), 1_000).unwrap_err();
+            assert!(
+                matches!(err, IngressError::Deserialize(_)),
+                "expected Deserialize(_) for wire {bad:?}, got {err:?}"
+            );
+        }
+    }
 }
