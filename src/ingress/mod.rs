@@ -79,6 +79,15 @@ impl std::fmt::Display for NonFiniteInput {
 /// returns `None` (an empty packet is accepted). A modulator vector shorter than
 /// [`crate::backend::NEUROMODULATOR_COUNT`](crate::backend::NEUROMODULATOR_COUNT)
 /// is still fully scanned for the elements that are present.
+///
+/// This is intentional and stricter than downstream decoding: `decode_inputs`
+/// only reads modulators when the vector has at least
+/// [`NEUROMODULATOR_COUNT`](crate::backend::NEUROMODULATOR_COUNT) elements and
+/// otherwise falls back to default modulators for a short (finite) tail. A
+/// non-finite value in a short tail (1..`NEUROMODULATOR_COUNT` elements) is
+/// still rejected here rather than silently dropped, so this is not an
+/// inconsistency with `decode_inputs`: the fail-closed check runs before decode
+/// and never lets `NaN`/`Inf` reach it.
 pub fn first_non_finite(packet: &IngressPacket) -> Option<NonFiniteInput> {
     if let Some(index) = packet.stimuli.iter().position(|v| !v.is_finite()) {
         return Some(NonFiniteInput::Stimulus { index });
