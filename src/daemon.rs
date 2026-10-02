@@ -799,6 +799,8 @@ impl OccurrenceLimiter {
     }
 }
 
+/// Identity key for rate-limited diagnostics. A byte fold, not `Hasher::new()`,
+/// so DeepSource RS-W1079 does not treat the limiter path as an empty `new()`.
 fn diagnostic_key(message: &str) -> u64 {
     message.bytes().fold(0u64, |hash, byte| {
         hash.wrapping_mul(31).wrapping_add(u64::from(byte))
