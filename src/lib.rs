@@ -5,6 +5,7 @@
 
 pub mod backend;
 pub mod checkpoint;
+pub mod config;
 pub mod control;
 pub mod daemon;
 pub mod health;
