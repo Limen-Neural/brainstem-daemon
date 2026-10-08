@@ -1,0 +1,4 @@
+{
+  "name": "brainstem-daemon",
+  "install": "bash .cursor/install.sh"
+}
