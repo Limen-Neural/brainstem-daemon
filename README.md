@@ -148,7 +148,7 @@ model_path     = "/var/lib/soma/snn_model.json"  # Distill sidecar JSON; `~` is 
 runtime_mode   = "live"    # default when omitted; "simulation" is the only blank-network path
 
 # Runtime
-tick_rate_hz   = 1000      # loop frequency
+tick_rate_hz   = 1000      # loop frequency, inclusive range 1..=1_000_000 Hz
 log_level      = "info"    # error|warn|info|debug|trace
 
 # Optional process control surface (unset = no extra socket; historical default).
@@ -188,6 +188,46 @@ telemetry_policy    = "drop_oldest"
 block_timeout_ms    = 5
 max_payload_len     = 4096
 ```
+
+### Configuration validity and migration
+
+`DaemonConfig::load`, fallible daemon constructors, and `restore_network` use
+the same `DaemonConfig::validate()` gate, before network allocation or checkpoint
+reads. The binary validates before creating its runtime, initializing a backend,
+or binding PUB/control sockets. Both timed and bounded (`run_for_ticks`) runs
+require a validated constructor. Raw `toml::from_str` and Rust struct literals
+do not validate automatically; library callers should call `validate()` **before
+constructing a custom backend pair**, since the daemon cannot undo sockets or
+other side effects the caller already created. Infallible `new`/`with_backend`
+constructors panic on invalid configuration; prefer `try_new`/`try_with_backend`.
+
+The supported dimensions are:
+
+- `tick_rate_hz`: 1 through 1,000,000 inclusive, including for bounded runs.
+- `lif_count + izh_count`: 1 through 65,535 inclusive (the existing spike-ID
+  bound). Either count may be zero in simulation, but not both. Live mode remains
+  LIF-only (`izh_count = 0`) and dimensions must match the checkpoint.
+- `channels`: 1 through `ingress.max_payload_len` inclusive (4,096 by default;
+  the ingress hard maximum is 1,048,576). A full-width stimulus must fit ingress.
+- `(lif_count + izh_count) * channels`: at most `MAX_NETWORK_INPUTS` = 1,048,576
+  weight/per-input-state slots. Checked addition and multiplication reject
+  overflow without attempting a huge allocation. The product limit bounds the
+  dense model, not just a single packet; it is not a byte-size limit.
+- `control_bind`, when set: numeric IPv4 `IP:port` or IPv6 `[address]:port`.
+  PUB bind hosts accept IP literals (IPv6 with or without brackets), DNS
+  hostnames, or `*`; no URL scheme or port. Syntax is checked without DNS or
+  socket I/O; address availability and hostname resolution can still fail at
+  bind time. PUB option syntax and bounded-lifecycle settings are validated
+  even under stub, but remain no-ops there and do not require libzmq.
+
+Migration: configurations that previously reached late runtime failures (or
+bypassed them in a bounded/simulation run) now fail at load/construction. Replace
+zero dimensions with a real minimal network, reduce oversized dimensions, or
+raise `ingress.max_payload_len` within its hard cap when a supported full-width
+input exceeds the default. A minimal simulation uses `runtime_mode = "simulation"`,
+`lif_count = 1`, `izh_count = 0`, and `channels = 1` with the other required keys
+from the example above; `model_path` is still required but unused for restore.
+The existing 16×16 live sidecar path remains supported.
 
 `log_level` accepts only the five levels shown above; target directives belong
 in `RUST_LOG`. When set, `RUST_LOG` takes precedence over the TOML level and may
@@ -388,10 +428,13 @@ Stop it gracefully with `Ctrl-C` (SIGINT) on all platforms. On Unix, `kill` (SIG
    [Unit]
    Description=Soma Spiking Network Daemon
    After=network.target
+   StartLimitIntervalSec=60
+   StartLimitBurst=3
 
    [Service]
    ExecStart=%h/.cargo/bin/brainstem-daemon --config %h/.config/soma/daemon.toml
    Restart=on-failure
+   RestartSec=5s
    # Optional: overrides daemon.toml log_level; supports EnvFilter directives.
    Environment=RUST_LOG=info
 
@@ -403,6 +446,17 @@ Stop it gracefully with `Ctrl-C` (SIGINT) on all platforms. On Unix, `kill` (SIG
    systemctl --user daemon-reload
    systemctl --user enable --now brainstem-daemon
    ```
+
+Invalid configuration exits with status `1` and a field-specific diagnostic,
+before health endpoints exist. This is **not** a special permanent-error exit
+classification: `Restart=on-failure` also retries configuration failures.
+For immediate startup failures, the unit above spaces retries by five seconds
+and allows at most three starts within sixty seconds, then leaves the service failed.
+The interval expiring does not itself schedule another retry. Inspect
+`journalctl --user -u brainstem-daemon`, fix the configuration/checkpoint or bind
+conflict, then run `systemctl --user reset-failed brainstem-daemon` and
+`systemctl --user restart brainstem-daemon`. Restarting with the same invalid
+configuration cannot repair a permanent startup error.
 
 ### SELinux
 
