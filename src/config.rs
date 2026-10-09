@@ -140,6 +140,7 @@ impl DaemonConfig {
             );
         }
         validate_log_level(&self.log_level)?;
+        validate_pub_bind_host(&self.spine_pub_bind_host)?;
         validate_pub_socket_opts(self)?;
         if let Some(bind) = &self.control_bind {
             bind.parse::<std::net::SocketAddr>().with_context(|| {
@@ -207,22 +208,27 @@ fn validate_dimensions(config: &DaemonConfig) -> Result<()> {
     Ok(())
 }
 
-/// Fail closed on PUB socket options whose libzmq-valid sentinel values would
-/// defeat the bounded PUB lifecycle guarantee.
-///
-/// `spine_pub_sndhwm` must be `> 0`: `0` disables the send high-water mark
-/// (unbounded buffering) and negatives are nonsensical. `spine_pub_linger_ms`
-/// must be `>= 0`: a negative value requests infinite LINGER, which can block
-/// shutdown indefinitely; `0` (the default) is the safe drop-on-close default.
-fn validate_pub_socket_opts(config: &DaemonConfig) -> Result<()> {
-    let host = &config.spine_pub_bind_host;
+/// Validate host syntax without resolving DNS or opening a socket.
+fn validate_pub_bind_host(host: &str) -> Result<()> {
     let ip = host.parse::<std::net::IpAddr>().is_ok()
         || host
             .strip_prefix('[')
             .and_then(|s| s.strip_suffix(']'))
             .is_some_and(|s| s.parse::<std::net::Ipv6Addr>().is_ok());
+    if ip || host == "*" {
+        return Ok(());
+    }
+    if is_dns_hostname(host) {
+        return Ok(());
+    }
+    bail!(
+        "invalid spine_pub_bind_host {host:?}; expected an IPv4/IPv6 address, hostname, or * (no scheme or port)"
+    );
+}
+
+fn is_dns_hostname(host: &str) -> bool {
     let name = host.strip_suffix('.').unwrap_or(host);
-    let hostname = !name.is_empty()
+    !name.is_empty()
         && name.len() <= 253
         && name.split('.').all(|label| {
             !label.is_empty()
@@ -232,12 +238,17 @@ fn validate_pub_socket_opts(config: &DaemonConfig) -> Result<()> {
                 && label
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        });
-    if !ip && !hostname && host != "*" {
-        bail!(
-            "invalid spine_pub_bind_host {host:?}; expected an IPv4/IPv6 address, hostname, or * (no scheme or port)"
-        );
-    }
+        })
+}
+
+/// Fail closed on PUB socket options whose libzmq-valid sentinel values would
+/// defeat the bounded PUB lifecycle guarantee.
+///
+/// `spine_pub_sndhwm` must be `> 0`: `0` disables the send high-water mark
+/// (unbounded buffering) and negatives are nonsensical. `spine_pub_linger_ms`
+/// must be `>= 0`: a negative value requests infinite LINGER, which can block
+/// shutdown indefinitely; `0` (the default) is the safe drop-on-close default.
+fn validate_pub_socket_opts(config: &DaemonConfig) -> Result<()> {
     if config.spine_pub_sndhwm <= 0 {
         bail!(
             "spine_pub_sndhwm must be > 0 (0 disables the send high-water mark, which defeats the bounded PUB lifecycle)"
@@ -317,53 +328,53 @@ channels = 1
         result
     }
 
+    // Each fixture replaces a valid TOML field or appends optional settings,
+    // and names the configuration error that must precede checkpoint errors.
+    const INVALID_RUNTIME_CONFIGS: &[(&str, &str, &str)] = &[
+        ("tick_rate_hz = 1000", "tick_rate_hz = 0", "tick_rate_hz"),
+        (
+            "tick_rate_hz = 1000",
+            "tick_rate_hz = 1000001",
+            "tick_rate_hz",
+        ),
+        ("channels = 1", "channels = 0", "channels"),
+        ("channels = 1", "channels = 4097", "channels"),
+        ("lif_count = 1", "lif_count = 0", "lif_count + izh_count"),
+        (
+            "lif_count = 1",
+            "lif_count = 65536",
+            "lif_count + izh_count",
+        ),
+        (
+            "lif_count = 1\nizh_count = 0\nchannels = 1",
+            "lif_count = 257\nizh_count = 0\nchannels = 4096",
+            "dimensions",
+        ),
+        ("", "control_bind = \"localhost:9464\"", "control_bind"),
+        (
+            "",
+            "spine_pub_bind_host = \"tcp://127.0.0.1\"",
+            "spine_pub_bind_host",
+        ),
+        ("", "[ingress]\nsensory_capacity = 0", "sensory"),
+        (
+            "",
+            "[ingress]\nmax_payload_len = 1048577",
+            "max_payload_len",
+        ),
+        (
+            "channels = 1",
+            "channels = 3\n[ingress]\nmax_payload_len = 2",
+            "channels",
+        ),
+    ];
+
     #[test]
     fn invalid_runtime_config_is_rejected_at_every_entry_point() {
         use crate::backend::BackendPair;
         use crate::daemon::BrainstemDaemon;
 
-        // A late or missing validator would accept TOML/constructors, or report
-        // the missing checkpoint instead of the offending configuration field.
-        let cases = [
-            ("tick_rate_hz = 1000", "tick_rate_hz = 0", "tick_rate_hz"),
-            (
-                "tick_rate_hz = 1000",
-                "tick_rate_hz = 1000001",
-                "tick_rate_hz",
-            ),
-            ("channels = 1", "channels = 0", "channels"),
-            ("channels = 1", "channels = 4097", "channels"),
-            ("lif_count = 1", "lif_count = 0", "lif_count + izh_count"),
-            (
-                "lif_count = 1",
-                "lif_count = 65536",
-                "lif_count + izh_count",
-            ),
-            (
-                "lif_count = 1\nizh_count = 0\nchannels = 1",
-                "lif_count = 257\nizh_count = 0\nchannels = 4096",
-                "dimensions",
-            ),
-            ("izh_count = 0", "izh_count = 1", "izh_count"),
-            ("", "control_bind = \"localhost:9464\"", "control_bind"),
-            (
-                "",
-                "spine_pub_bind_host = \"tcp://127.0.0.1\"",
-                "spine_pub_bind_host",
-            ),
-            ("", "[ingress]\nsensory_capacity = 0", "sensory"),
-            (
-                "",
-                "[ingress]\nmax_payload_len = 1048577",
-                "max_payload_len",
-            ),
-            (
-                "channels = 1",
-                "channels = 3\n[ingress]\nmax_payload_len = 2",
-                "channels",
-            ),
-        ];
-        for (index, (old, new, field)) in cases.into_iter().enumerate() {
+        for (index, (old, new, field)) in INVALID_RUNTIME_CONFIGS.iter().copied().enumerate() {
             let body = if old.is_empty() {
                 base_config_toml(new)
             } else {
@@ -378,9 +389,6 @@ channels = 1
             // Raw serde and Rust literals need not be validated; consumers must
             // validate them before startup, even when no timed loop is used.
             for mode in [RuntimeMode::Live, RuntimeMode::Simulation] {
-                if field == "izh_count" && mode == RuntimeMode::Simulation {
-                    continue; // Izhikevich cells are supported in simulation.
-                }
                 let mut cfg: DaemonConfig = toml::from_str(&body).unwrap();
                 cfg.runtime_mode = mode;
                 let err = BrainstemDaemon::try_new(cfg.clone())
@@ -396,6 +404,23 @@ channels = 1
                 assert!(format!("{err:#}").contains(field), "{err:#}");
             }
         }
+    }
+
+    #[test]
+    fn live_mode_rejects_izh_cells_at_load_and_construction() {
+        use crate::daemon::BrainstemDaemon;
+
+        let body = base_config_toml("").replace("izh_count = 0", "izh_count = 1");
+        let path = write_config_toml("live-izh", &body);
+        let loaded = DaemonConfig::load(&path);
+        std::fs::remove_file(path).unwrap();
+        let err = loaded.expect_err("live sidecars cannot restore Izhikevich cells");
+        assert!(format!("{err:#}").contains("izh_count"), "{err:#}");
+        let cfg: DaemonConfig = toml::from_str(&body).unwrap();
+        let err = BrainstemDaemon::try_new(cfg)
+            .err()
+            .expect("live config must fail before startup");
+        assert!(err.to_string().contains("izh_count"), "{err:#}");
     }
 
     #[test]
