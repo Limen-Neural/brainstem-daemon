@@ -21,6 +21,15 @@ not pass `--features corpus-ipc`. The Thalamic → corpus-ipc → Brainstem
 integration smoke (`tests/thalamic_brainstem_smoke.rs`) is compiled only in
 the Linux `corpus-ipc` job (`required-features = ["corpus-ipc"]`).
 
+The same job runs the CPU-only PUB qualification tests: empty/nonempty wire
+compatibility, application send counters, absent/disconnected/stalled subscribers,
+and finite-linger teardown with port reuse. `tests/pub_lifecycle.rs` is also
+feature-gated and Linux-only: it launches the real simulation-mode binary,
+waits for `/readyz` and subscriber receipt, sends SIGTERM/SIGINT, and checks clean
+exit and released PUB/control ports with bounded waits. Child processes are
+killed and reaped on failure. No external producer, checkpoint, or GPU is needed.
+The job has a 15-minute timeout as a final guard against native blocking calls.
+
 ## Skips
 
 - **macOS** and **Windows** skip the `corpus-ipc` / ZeroMQ job. That

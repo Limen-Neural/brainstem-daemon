@@ -251,9 +251,21 @@ Under stub those ZMQ TOML keys are still parsed. The env vars are unset by the d
 
 The built-in `corpus-ipc` PUB egress is explicitly bounded. Before bind it sets a finite send high-water mark (`spine_pub_sndhwm`) and a finite LINGER (`spine_pub_linger_ms`, default `0` so close/teardown drops pending messages instead of blocking), then binds to `tcp://<spine_pub_bind_host>:<spine_pub_port>` — loopback (`127.0.0.1`) by default, so broader exposure such as `0.0.0.0` requires explicit configuration.
 
-Empty-batch policy: `spine_pub_send_empty_batches` (default `true`) makes the sink publish a frame every tick even when the batch has zero spikes, preserving the current behavior for subscribers that rely on per-tick / heartbeat frames. Set it to `false` to suppress empty batches at the sink.
+Configuration loading rejects `spine_pub_sndhwm <= 0` (zero disables the queue bound) and `spine_pub_linger_ms < 0` (infinite linger). A positive linger allows pending sends a finite grace period; expiry discards anything still pending. These are queue/lifecycle bounds, not delivery guarantees or a byte-level memory cap.
 
-The sink accounts for three **application-side** send outcomes it can directly observe: `attempted` (a frame was handed to ZeroMQ), `suppressed` (an empty batch withheld under the policy), and `failed` (`send()` returned an error). It does **not** and cannot measure subscriber-side delivery: ZeroMQ PUB is best-effort and silently drops messages for subscribers that are slow, absent, or over `SNDHWM`. That subscriber-side loss is inherently not observable by the publisher, so it is documented as best-effort and never reported as a measured count.
+Empty-batch policy: `spine_pub_send_empty_batches` (default `true`) publishes an empty batch whenever the tick loop calls the sink with zero spikes, preserving per-tick / heartbeat frames on normal ticks. Rejected input or a failed tick may skip emission entirely; an empty frame is not a guaranteed clock or delivery acknowledgement. Set the key to `false` to suppress empty batches at the sink; nonempty batches still send.
+
+The wire payload remains unversioned, externally tagged `corpus-ipc` JSON, including null `session_id` and `metadata`; no `wire_version` / `payload` envelope is added. For an empty batch at 2 ms:
+
+```json
+{"Spikes":{"session_id":null,"batch_id":2,"timestamp":2000000,"spikes":[],"metadata":null}}
+```
+
+Nonempty `spikes` entries retain `channel`, `time`, and `strength`.
+
+`ZmqSpikeSink::stats()` exposes three **application-side** counters: `attempted` (`send()` was called, including failed calls), `suppressed` (an empty batch withheld before sending), and `failed` (`send()` returned an error, a subset of attempts). Attempts minus failures counts local API acceptance, **not subscriber receipt**. These sink counters are not exported by the control surface; runtime `emit_errors` counts sink `Err` returns, not lost PUB frames.
+
+ZeroMQ PUB is best-effort: absent, disconnected, slow, or over-HWM subscribers can miss frames silently; pending frames can also be discarded on close/linger expiry. The publisher cannot measure those losses exactly and never reports them as measured subscriber drops. Consumers needing loss accounting must track received frames and expected batch progression themselves (allowing for deliberately suppressed/omitted ticks); reliable delivery requires a protocol with acknowledgements outside this PUB path.
 
 ZMQ SUB ingress decodes unversioned JSON `IpcMessage` frames (`Stimuli` / `Neuromodulators`) through crates.io `corpus-ipc` 0.1 types. Width, schema token `corpus-ipc.stimulus.v1`, freshness, and future timestamps are rejected without stopping the tick loop. Modulation-only frames are drained in the same tick so they do not consume a sensory period.
 

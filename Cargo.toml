@@ -57,6 +57,10 @@ path = "src/bin/brainstem_daemon.rs"
 name = "thalamic_brainstem_smoke"
 required-features = ["corpus-ipc"]
 
+[[test]]
+name = "pub_lifecycle"
+required-features = ["corpus-ipc"]
+
 # Cargo profiles (dev / release / release-with-debug / test / bench).
 # Keep settings conservative — no maximum-optimization knobs that over-promise
 # for a headless inference daemon. Aligned with the `neuromod` profile pattern.
