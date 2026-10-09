@@ -67,7 +67,7 @@ pub struct ModelProvenance {
 ///
 /// Live mode never falls back to a blank `with_dimensions()` network.
 pub fn restore_network(config: &DaemonConfig) -> Result<(SpikingNetwork, ModelProvenance)> {
-    crate::daemon::validate_neuron_count(config)?;
+    config.validate()?;
     match config.runtime_mode {
         RuntimeMode::Simulation => Ok(blank_simulation_network(config)),
         RuntimeMode::Live => load_live_checkpoint(config),
@@ -90,22 +90,11 @@ fn blank_simulation_network(config: &DaemonConfig) -> (SpikingNetwork, ModelProv
 }
 
 fn load_live_checkpoint(config: &DaemonConfig) -> Result<(SpikingNetwork, ModelProvenance)> {
-    require_live_izh_count(config)?;
     let sidecar_path = resolve_sidecar_path(&config.model_path)?;
     let (bytes, document) = parse_sidecar_file(&sidecar_path)?;
     validate_live_document(config, &document, &sidecar_path)?;
     let network = restore_spiking_network(config, &document)?;
     Ok((network, provenance_of(&document, &sidecar_path, &bytes)))
-}
-
-fn require_live_izh_count(config: &DaemonConfig) -> Result<()> {
-    if config.izh_count != 0 {
-        bail!(
-            "live Spikenaut checkpoints are LIF-only; izh_count must be 0, got {}",
-            config.izh_count
-        );
-    }
-    Ok(())
 }
 
 /// Resolve `model_path` to a sidecar JSON file.

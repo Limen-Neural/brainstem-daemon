@@ -25,7 +25,6 @@ use crate::health::{
 #[cfg(test)]
 use crate::ingress::IngressConfig;
 use crate::ingress::{BoundedIngress, MessageClass, OverflowPolicy};
-use crate::logging::validate_log_level;
 use crate::registry::ServiceRegistry;
 
 /// Env var read by crates.io `corpus-ipc` 0.1 `ZmqIpcBackend::initialize`.
@@ -100,7 +99,7 @@ impl BrainstemDaemon {
     ///
     /// # Panics
     ///
-    /// Panics if `lif_count + izh_count` exceeds [`u16::MAX`]. Prefer
+    /// Panics if configuration validation fails. Prefer
     /// [`Self::try_with_backend`] for user-provided configuration so callers can
     /// return a clear validation error instead of aborting construction.
     pub fn with_backend(config: DaemonConfig, backend: BackendPair) -> Self {
@@ -110,10 +109,7 @@ impl BrainstemDaemon {
 
     /// Fallibly build a daemon with an explicit backend pair (for tests and custom backends).
     pub fn try_with_backend(mut config: DaemonConfig, backend: BackendPair) -> Result<Self> {
-        validate_log_level(&config.log_level)?;
-        validate_neuron_count(&config)?;
-
-        config.ingress.validate()?;
+        config.validate()?;
         let ingress = BoundedIngress::new(config.ingress.clone())?;
         let services = std::mem::take(&mut config.services);
         let registry = ServiceRegistry::from_configs(services);
@@ -182,11 +178,6 @@ impl BrainstemDaemon {
         let mut backend = self.backend;
         let ingress = self.ingress;
         let health = self.health;
-
-        if cfg.tick_rate_hz == 0 || cfg.tick_rate_hz > 1_000_000 {
-            abort_startup(&ingress, &mut backend, None, None).await;
-            anyhow::bail!("tick_rate_hz must be in range 1..=1_000_000");
-        }
 
         let (control_stop, control_task) =
             match start_control(cfg.control_bind.as_deref(), health.clone()).await {
@@ -583,30 +574,6 @@ fn log_model_provenance(config: &DaemonConfig, provenance: &ModelProvenance) {
             );
         }
     }
-}
-
-pub(crate) fn validate_neuron_count(config: &DaemonConfig) -> Result<()> {
-    let total = config
-        .lif_count
-        .checked_add(config.izh_count)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "lif_count + izh_count ({} + {}) overflows usize",
-                config.lif_count,
-                config.izh_count
-            )
-        })?;
-
-    if total > u16::MAX as usize {
-        bail!(
-            "lif_count + izh_count ({} + {}) exceeds u16::MAX ({})",
-            config.lif_count,
-            config.izh_count,
-            u16::MAX
-        );
-    }
-
-    Ok(())
 }
 
 fn take_restored_network(
@@ -1360,16 +1327,14 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn run_shuts_down_ingress_when_tick_rate_invalid() {
+    #[test]
+    fn constructor_rejects_invalid_tick_rate_before_runtime_exists() {
         let mut cfg = sample_config();
         cfg.tick_rate_hz = 0;
-        let daemon = BrainstemDaemon::try_new(cfg).unwrap();
-        let ingress = daemon.ingress();
-        let result = tokio::time::timeout(Duration::from_millis(500), daemon.run()).await;
-        let inner = result.expect("run must return immediately rather than tick");
-        assert!(inner.is_err());
-        assert!(ingress.is_shutdown());
+        let err = BrainstemDaemon::try_new(cfg)
+            .err()
+            .expect("invalid tick rate");
+        assert!(err.to_string().contains("tick_rate_hz"));
     }
 
     #[tokio::test]
@@ -2384,6 +2349,7 @@ mod tests {
         let path = write_config_toml(
             "ingress-omit",
             r#"
+runtime_mode = "simulation"
 tick_rate_hz = 1000
 log_level = "info"
 spine_sub_port = 5555
@@ -2404,6 +2370,7 @@ channels = 16
         let path = write_config_toml(
             "ingress-set",
             r#"
+runtime_mode = "simulation"
 tick_rate_hz = 1000
 log_level = "info"
 spine_sub_port = 5555

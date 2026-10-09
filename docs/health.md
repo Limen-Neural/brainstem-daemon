@@ -57,6 +57,16 @@ class depths and capacities.
 Fatal and draining are sticky for **this process**. A new process starts in
 `starting` again.
 
+Configuration rejection happens earlier: `DaemonConfig::validate()` runs before
+checkpoint allocation/restoration, source initialization, or binary socket
+startup. Invalid configuration returns an error from fallible constructors and
+`restore_network`; the CLI prints the offending field and exits `1`, without
+starting the control listener or exposing a `fatal` health snapshot. A restart
+with unchanged invalid configuration fails again. Exit `1` does not suppress
+`Restart=on-failure`; use the explicit restart delay and start limits in the
+[systemd service example](../README.md#systemd-user-service-fedora-43), then fix
+the configuration before resetting the failed unit and restarting it.
+
 ## Checkpoint identity
 
 Live mode copies [`ModelProvenance::model_id`](../src/checkpoint/mod.rs) and

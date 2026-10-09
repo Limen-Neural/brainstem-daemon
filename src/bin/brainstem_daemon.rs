@@ -35,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     let config_path = cli.config.unwrap_or_else(default_config_path);
 
     let cfg = DaemonConfig::load(&config_path).map_err(|e| {
-        eprintln!("Failed to load config {}: {e}", config_path.display());
+        eprintln!("Failed to load config {}: {e:#}", config_path.display());
         std::process::exit(1);
     })?;
 
@@ -133,7 +133,7 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
         BackendPair::stub()
     };
 
-    let daemon = BrainstemDaemon::try_with_backend(cfg, pair)
-        .context("invalid daemon configuration: reduce lif_count and/or izh_count")?;
+    let daemon =
+        BrainstemDaemon::try_with_backend(cfg, pair).context("invalid daemon configuration")?;
     daemon.run_with_restored_network(network, provenance).await
 }
