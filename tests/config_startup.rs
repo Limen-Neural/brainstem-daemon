@@ -4,18 +4,11 @@
 //! Real CLI regressions: configuration errors must win over checkpoint/socket errors.
 
 use std::net::TcpListener;
+use std::path::Path;
 use std::process::Command;
 
-#[test]
-fn invalid_configuration_exits_before_checkpoint_or_socket_startup() {
-    let occupied = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = occupied.local_addr().unwrap().port();
-    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target/config-startup-tests")
-        .join(std::process::id().to_string());
-    std::fs::create_dir_all(&dir).unwrap();
-    let missing_checkpoint = dir.join("missing-snn_model.json");
-    let base = format!(
+fn startup_config(port: u16, model_path: &Path) -> String {
+    format!(
         r#"
 tick_rate_hz = 1000
 log_level = "info"
@@ -27,8 +20,19 @@ lif_count = 1
 izh_count = 0
 channels = 1
 "#,
-        missing_checkpoint.display()
-    );
+        model_path.display()
+    )
+}
+
+#[test]
+fn invalid_configuration_exits_before_checkpoint_or_socket_startup() {
+    let occupied = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = occupied.local_addr().unwrap().port();
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target/config-startup-tests")
+        .join(std::process::id().to_string());
+    std::fs::create_dir_all(&dir).unwrap();
+    let base = startup_config(port, &dir.join("missing-snn_model.json"));
     for (index, (old, new, field)) in [
         ("tick_rate_hz = 1000", "tick_rate_hz = 0", "tick_rate_hz"),
         ("channels = 1", "channels = 0", "channels"),
