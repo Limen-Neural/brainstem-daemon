@@ -145,8 +145,9 @@ crates.io line; that GitHub milestone was stub-quality work.
   fail-closed. Already-`rejected` backend frames with non-finite payloads are
   counted once and not re-admitted (#72, #73, LIM-1322 / #66).
 - **Backend vs direct-enqueue rejection:** a non-finite **backend** packet is
-  dropped before enqueue. The tick still drains anything already queued and
-  zero-fills stimuli only when that drain supplies no sensory input. A
+  dropped before enqueue. The tick still drains anything already queued,
+  copies that sensory vector, and zero-fills only channels the vector does
+  not cover (the whole buffer when the drain has no sensory input). A
   non-finite packet that surfaces only on the **drained** path (for example
   public `enqueue` / `try_enqueue`) skips `network.step` and spike emission
   for that tick while the daemon stays live.
