@@ -328,6 +328,8 @@ Every in-process channel that can feed the tick loop goes through `BoundedIngres
 
 Each lost or coalesced event increments exactly one of `rejected`, `dropped`, or `coalesced`. Snapshots also record `accepted`, `depth`, `high_water_mark`, `producer_waits`, and `producer_wait_ns` with a `class` label only. `BoundedIngress::shutdown()` unblocks waiters and refuses further enqueue.
 
+**Non-finite values (`NaN`, `±Inf`)** in stimuli or modulators are rejected before `network.step` on every path (typed `corpus-ipc`, custom `StimulusSource`, and direct `enqueue` / `try_enqueue`). Rejections bump `rejected_batches`, use rate-limited diagnostics, and do **not** count as fresh accepted sensory input (`input_freshness` is unchanged). Modulators are validated before any cached/hold state is updated; masked-out stimulus slots and short modulator vectors are still scanned fail-closed. A finite packet on the next tick is accepted normally. **Two tick outcomes:** when the bad packet came from the backend source, it is dropped before enqueue and the tick still zero-fills and steps (like a skip). When the bad packet appears only on the drained merge (typical for direct enqueue), that tick skips `network.step` and spike emission while the process stays live.
+
 The stub backend is always safe for core library builds, tests, and simulation. Example (feature-independent):
 
 ```rust

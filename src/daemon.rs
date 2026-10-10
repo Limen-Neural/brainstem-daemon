@@ -1865,6 +1865,181 @@ mod tests {
         }
     }
 
+    /// Yields one [`IngressPacket`] per tick in order, then repeats the last
+    /// packet for any further ticks.
+    struct SequenceIngressSource {
+        packets: Vec<IngressPacket>,
+        idx: usize,
+    }
+    impl StimulusSource for SequenceIngressSource {
+        fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
+            let packet = if self.idx < self.packets.len() {
+                let p = self.packets[self.idx].clone();
+                self.idx += 1;
+                p
+            } else {
+                self.packets.last().cloned().unwrap_or_default()
+            };
+            Ok(Some(packet))
+        }
+        fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn drive_sequence(
+        packets: Vec<IngressPacket>,
+        ticks: usize,
+    ) -> (
+        CollectingSpikeSink,
+        RuntimeStats,
+        HealthHandle,
+        SpikingNetwork,
+    ) {
+        let ingress = BoundedIngress::new(IngressConfig::default()).unwrap();
+        let health = HealthHandle::started(HealthLimits::default());
+        let mut source = SequenceIngressSource { packets, idx: 0 };
+        let mut sink = CollectingSpikeSink::new();
+        let mut network = SpikingNetwork::with_dimensions(1, 0, 1);
+        let mut stimuli = [0.0];
+        let mut spike_buf = Vec::new();
+        let mut stats = RuntimeStats::default();
+        let mut diagnostics = TickDiagnostics::new(1_000);
+        for _ in 0..ticks {
+            run_tick(
+                &mut source,
+                &mut network,
+                &mut sink,
+                &mut stimuli,
+                &mut spike_buf,
+                &ingress,
+                &mut TickReport {
+                    health: &health,
+                    stats: &mut stats,
+                    diagnostics: &mut diagnostics,
+                },
+            );
+        }
+        (sink, stats, health, network)
+    }
+
+    #[test]
+    fn finite_packet_after_backend_non_finite_rejection_is_accepted() {
+        let bad = IngressPacket {
+            stimuli: vec![f32::NAN],
+            batch_id: Some(1),
+            ..Default::default()
+        };
+        let good = IngressPacket {
+            stimuli: vec![0.25],
+            batch_id: Some(2),
+            ..Default::default()
+        };
+        let (sink, stats, health, _network) = drive_sequence(vec![bad, good], 2);
+
+        assert_eq!(stats.rejected_batches, 1);
+        assert_eq!(stats.accepted_batches, 1);
+        assert_eq!(stats.last_batch_id, Some(2));
+        // Backend-path rejection still zero-fills and steps; the next finite
+        // packet is accepted normally.
+        assert_eq!(stats.ticks, 2);
+        assert_eq!(sink.emitted.len(), 2);
+        assert!(
+            health.snapshot().input_freshness.age_ms.is_some(),
+            "finite packet after rejection must refresh input freshness"
+        );
+    }
+
+    #[test]
+    fn finite_packet_after_direct_enqueue_non_finite_rejection_is_accepted() {
+        struct NoneSource;
+        impl StimulusSource for NoneSource {
+            fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
+                Ok(None)
+            }
+            fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let ingress = BoundedIngress::new(IngressConfig::default()).unwrap();
+        let health = HealthHandle::started(HealthLimits::default());
+        let mut source = NoneSource;
+        let mut sink = CollectingSpikeSink::new();
+        let mut network = SpikingNetwork::with_dimensions(1, 0, 1);
+        let mut stimuli = [0.0];
+        let mut spike_buf = Vec::new();
+        let mut stats = RuntimeStats::default();
+        let mut diagnostics = TickDiagnostics::new(1_000);
+
+        assert!(
+            ingress
+                .enqueue(
+                    MessageClass::Sensory,
+                    IngressPacket {
+                        stimuli: vec![f32::NAN],
+                        batch_id: Some(10),
+                        ..Default::default()
+                    },
+                )
+                .accepted()
+        );
+        run_tick(
+            &mut source,
+            &mut network,
+            &mut sink,
+            &mut stimuli,
+            &mut spike_buf,
+            &ingress,
+            &mut TickReport {
+                health: &health,
+                stats: &mut stats,
+                diagnostics: &mut diagnostics,
+            },
+        );
+
+        assert!(
+            ingress
+                .enqueue(
+                    MessageClass::Sensory,
+                    IngressPacket {
+                        stimuli: vec![0.5],
+                        batch_id: Some(11),
+                        ..Default::default()
+                    },
+                )
+                .accepted()
+        );
+        run_tick(
+            &mut source,
+            &mut network,
+            &mut sink,
+            &mut stimuli,
+            &mut spike_buf,
+            &ingress,
+            &mut TickReport {
+                health: &health,
+                stats: &mut stats,
+                diagnostics: &mut diagnostics,
+            },
+        );
+
+        assert_eq!(stats.rejected_batches, 1);
+        // `accepted_batches` / `last_batch_id` are updated when admitting a live
+        // backend packet; direct enqueue only surfaces on the drained merge.
+        assert_eq!(stats.accepted_batches, 0);
+        assert!(stats.last_batch_id.is_none());
+        assert_eq!(
+            stats.ticks, 1,
+            "only the finite packet advances network.step"
+        );
+        assert_eq!(sink.emitted.len(), 1);
+        assert!(
+            health.snapshot().live,
+            "daemon stays live across reject then accept"
+        );
+    }
+
     #[test]
     fn non_finite_limiter_is_stable_across_alternating_indices() {
         // The warning text includes the offending index, but the limiter key
