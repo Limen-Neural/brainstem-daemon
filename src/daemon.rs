@@ -902,9 +902,9 @@ fn run_tick(
     if let Some(offender) = backend_packet.as_ref().and_then(backend_non_finite) {
         record_non_finite_rejection(offender, stats, diagnostics);
         // Drop the packet for this tick: skip IngressObserved, do not
-        // admit/enqueue it, do not count it accepted, and do not reach
-        // network.step. decode_inputs then zero-fills (identical to a
-        // skip / backend `None`).
+        // admit/enqueue it, and do not count it accepted. The tick still
+        // drains anything already queued; decode_inputs zero-fills only
+        // when that drain supplies no stimuli.
         backend_packet = None;
     }
 
@@ -1926,13 +1926,20 @@ mod tests {
         RuntimeStats,
         HealthHandle,
         SpikingNetwork,
+        Vec<f32>,
     ) {
         let mut fixture = TickFixture::new(1, 1_000);
         let mut source = SequenceIngressSource { packets, idx: 0 };
         for _ in 0..ticks {
             fixture.tick(&mut source);
         }
-        (fixture.sink, fixture.stats, fixture.health, fixture.network)
+        (
+            fixture.sink,
+            fixture.stats,
+            fixture.health,
+            fixture.network,
+            fixture.stimuli,
+        )
     }
 
     /// Backend yields nothing; each packet is injected with `enqueue` then one tick.
@@ -1972,13 +1979,13 @@ mod tests {
             batch_id: Some(2),
             ..Default::default()
         };
-        let (sink, stats, health, _network) = drive_sequence(vec![bad, good], 2);
+        let (sink, stats, health, _network, stimuli) = drive_sequence(vec![bad, good], 2);
 
         assert_eq!(stats.rejected_batches, 1);
         assert_eq!(stats.accepted_batches, 1);
         assert_eq!(stats.last_batch_id, Some(2));
-        // Backend-path rejection still zero-fills and steps; the next finite
-        // packet is accepted normally.
+        assert_eq!(stimuli, vec![0.25]);
+        // Backend-path rejection still steps; the next finite packet is decoded.
         assert_eq!(stats.ticks, 2);
         assert_eq!(sink.emitted.len(), 2);
         assert!(
@@ -2008,6 +2015,7 @@ mod tests {
         assert!(fixture.stats.last_batch_id.is_none());
         assert_eq!(fixture.stats.ticks, 1);
         assert_eq!(fixture.sink.emitted.len(), 1);
+        assert_eq!(fixture.stimuli, vec![0.5]);
         assert!(fixture.health.snapshot().live);
     }
 
