@@ -231,22 +231,21 @@ fn validate_pub_bind_host(host: &str) -> Result<()> {
 /// otherwise only fail later, once libzmq tries to bind it.
 fn is_dns_hostname(host: &str) -> bool {
     let name = host.strip_suffix('.').unwrap_or(host);
-    let last_label_is_numeric = name
-        .rsplit('.')
-        .next()
-        .is_some_and(|label| !label.is_empty() && label.bytes().all(|b| b.is_ascii_digit()));
+    let last_label = name.rsplit('.').next().unwrap_or_default();
     !name.is_empty()
-        && !last_label_is_numeric
         && name.len() <= 253
-        && name.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && !label.starts_with('-')
-                && !label.ends_with('-')
-                && label
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        })
+        && !last_label.bytes().all(|b| b.is_ascii_digit())
+        && name.split('.').all(is_dns_label)
+}
+
+fn is_dns_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.len() <= 63
+        && !label.starts_with('-')
+        && !label.ends_with('-')
+        && label
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 /// Fail closed on PUB socket options whose libzmq-valid sentinel values would
