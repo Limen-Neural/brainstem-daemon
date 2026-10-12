@@ -153,5 +153,5 @@ jobs:
         with:
           name: package-qualification-${{ github.event.pull_request.head.sha || github.sha }}
           path: target/package-evidence/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 90

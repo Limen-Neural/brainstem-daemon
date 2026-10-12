@@ -68,6 +68,9 @@ The driver runs these gates without `--allow-dirty`, `--no-verify`, or
    `--version`, simulation readiness (`/readyz`), successful bounded SIGINT
    and SIGTERM shutdown, and nonzero checkpoint-specific failures for missing
    and corrupt live checkpoints. No external IPC publisher is required.
+   A daemon that exits before readiness fails the gate, unless its log shows
+   it lost a race for a freshly allocated loopback port; then new ports are
+   tried, at most three times.
 5. Build and run a tiny external path-dependent library consumer in each mode.
    It loads simulation config, restores the blank simulation network, and
    verifies that missing live checkpoints are rejected through the public API.
