@@ -3,6 +3,8 @@
 
 from dataclasses import dataclass, field, replace
 import hashlib
+import http.client
+import itertools
 import json
 import os
 from pathlib import Path
@@ -16,7 +18,6 @@ import tarfile
 import tempfile
 import time
 import tomllib
-import urllib.error
 import urllib.request
 
 CARGO = ["cargo", "+1.98.1"]
@@ -49,6 +50,8 @@ class Gate:
     env: dict
     work: Path = field(default_factory=Path)
     version: str = ""
+    sha: str = ""
+    mode: str = ""
     timeout: int = 1800
 
     def record(self, entry):
@@ -110,7 +113,7 @@ def is_ready(control_port):
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{control_port}/readyz", timeout=0.5) as response:
             return response.status == 200 and response.read() == b"ready\n"
-    except (urllib.error.URLError, TimeoutError):
+    except (OSError, http.client.HTTPException):
         return False
 
 
@@ -126,15 +129,20 @@ def wait_ready(process, control_port, label):
     return False
 
 
-def start_ready_daemon(gate, binary, mode, label, log):
+def lost_port_race(log, attempt):
+    """True when the exited daemon could not bind a port and attempts remain."""
+    return attempt < PORT_ATTEMPTS and "address already in use" in Path(log.name).read_text().lower()
+
+
+def start_ready_daemon(gate, binary, label, log):
     """Spawn the simulation daemon and return it once ready.
 
     A premature exit fails the gate unless the log shows the daemon lost a race
     for one of its freshly allocated ports; only then are new ports tried.
     """
-    for attempt in range(1, PORT_ATTEMPTS + 1):
+    for attempt in itertools.count(1):
         config_text, control_port = daemon_config()
-        simulation = gate.write_config(f"{mode}-simulation.toml", 'runtime_mode = "simulation"\n' + config_text)
+        simulation = gate.write_config(f"{gate.mode}-simulation.toml", 'runtime_mode = "simulation"\n' + config_text)
         gate.record({"label": label, "attempt": attempt, "command": [str(binary), "--config", str(simulation)],
                      "cwd": str(gate.work)})
         process = subprocess.Popen(
@@ -149,19 +157,17 @@ def start_ready_daemon(gate, binary, mode, label, log):
             process.wait()
             raise
         # wait_ready returned only because the daemon already exited.
-        port_taken = "address already in use" in Path(log.name).read_text().lower()
-        if not port_taken or attempt == PORT_ATTEMPTS:
+        if not lost_port_race(log, attempt):
             raise RuntimeError(f"{label}: exited before readiness ({process.returncode})")
         print(f"[{label}] port race on attempt {attempt}; retrying with new ports", flush=True)
-    raise AssertionError("unreachable")
 
 
-def check_graceful_shutdown(gate, binary, mode, stop_signal):
+def check_graceful_shutdown(gate, binary, stop_signal):
     # Observe readiness, not merely survival after an arbitrary sleep. Exercise
     # both Unix shutdown signals with bounded startup and teardown.
-    label = f"{mode}-simulation-{stop_signal.name}"
+    label = f"{gate.mode}-simulation-{stop_signal.name}"
     with (gate.evidence / f"{label}.log").open("w") as log:
-        process, config_text = start_ready_daemon(gate, binary, mode, label, log)
+        process, config_text = start_ready_daemon(gate, binary, label, log)
         try:
             process.send_signal(stop_signal)
             if process.wait(timeout=10) != 0:
@@ -175,34 +181,35 @@ def check_graceful_shutdown(gate, binary, mode, stop_signal):
     return config_text
 
 
-def check_live_rejection(gate, binary, mode, config_text):
+def check_live_rejection(gate, binary, config_text):
     # Live is the default. Both missing and corrupt checkpoints must fail before
     # runtime startup; a successful exit or a hang must not pass this check.
     checkpoint = gate.work / "missing-checkpoint.json"
     for invalid in ("missing", "corrupt"):
         if invalid == "corrupt":
             checkpoint.write_text("not a checkpoint")
-        live = gate.write_config(f"{mode}-live-{invalid}.toml", config_text)
-        text = gate.run(f"{mode}-live-{invalid}", [binary, "--config", live], gate.work, expected=1)
+        live = gate.write_config(f"{gate.mode}-live-{invalid}.toml", config_text)
+        text = gate.run(f"{gate.mode}-live-{invalid}", [binary, "--config", live], gate.work, expected=1)
         if "invalid or missing Spikenaut checkpoint" not in text:
             raise RuntimeError("live rejection did not report checkpoint failure")
     checkpoint.unlink()
 
 
-def smoke(gate, binary, mode):
+def smoke(gate, binary):
     gate = replace(gate, timeout=10)
-    help_text = gate.run(f"{mode}-help", [binary, "--help"], gate.work)
+    help_text = gate.run(f"{gate.mode}-help", [binary, "--help"], gate.work)
     if "--config" not in help_text or "--version" not in help_text:
         raise RuntimeError("installed CLI is missing expected options")
-    actual_version = gate.run(f"{mode}-version", [binary, "--version"], gate.work)
+    actual_version = gate.run(f"{gate.mode}-version", [binary, "--version"], gate.work)
     if actual_version.strip() != f"brainstem-daemon {gate.version}":
         raise RuntimeError("installed version does not match the package")
     for stop_signal in (signal.SIGINT, signal.SIGTERM):
-        config_text = check_graceful_shutdown(gate, binary, mode, stop_signal)
-    check_live_rejection(gate, binary, mode, config_text)
+        config_text = check_graceful_shutdown(gate, binary, stop_signal)
+    check_live_rejection(gate, binary, config_text)
 
 
-def run_consumer(gate, package, mode, features):
+def run_consumer(gate, package, features):
+    mode = gate.mode
     consumer = gate.work / f"consumer-{mode}"
     (consumer / "src").mkdir(parents=True)
     (consumer / "Cargo.toml").write_text(f'''[package]
@@ -221,6 +228,7 @@ brainstem-daemon = {{ path = {json.dumps(str(package))}, features = {json.dumps(
 
 
 def qualify_mode(gate, package, mode, features):
+    gate = replace(gate, mode=mode)
     # Never reuse checkout artifacts, or artifacts from the other backend.
     gate.env["CARGO_TARGET_DIR"] = str(gate.work / f"target-{mode}")
     for command in ("build", "test"):
@@ -229,8 +237,8 @@ def qualify_mode(gate, package, mode, features):
     docs.run(f"{mode}-rustdoc", CARGO + ["doc", "--locked", "--no-deps"] + features, package)
     root = gate.work / f"install-{mode}"
     gate.run(f"{mode}-install", CARGO + ["install", "--locked", "--path", str(package), "--root", str(root)] + features, gate.work)
-    smoke(gate, root / "bin" / "brainstem-daemon", mode)
-    run_consumer(gate, package, mode, features)
+    smoke(gate, root / "bin" / "brainstem-daemon")
+    run_consumer(gate, package, features)
 
 
 def required_files(gate, repo):
@@ -251,14 +259,14 @@ def check_package_list(gate, repo, required):
         raise RuntimeError("package includes repository-only or generated files")
 
 
-def extract_archive(gate, archive, package_name, sha, required):
+def extract_archive(gate, archive, package_name, required):
     extracted = gate.work / "extracted"
     extracted.mkdir()
     with tarfile.open(archive) as tar:
         tar.extractall(extracted, filter="data")
     package = extracted / package_name
     vcs = json.loads((package / ".cargo_vcs_info.json").read_text())
-    if vcs["git"]["sha1"] != sha or vcs["git"].get("dirty", False):
+    if vcs["git"]["sha1"] != gate.sha or vcs["git"].get("dirty", False):
         raise RuntimeError("archive VCS identity does not match the clean candidate SHA")
     if not all((package / path).is_file() for path in required):
         raise RuntimeError("extracted archive is missing required files")
@@ -288,7 +296,7 @@ def candidate_sha(gate, repo):
 def qualify(evidence):
     repo = Path(__file__).resolve().parents[2]
     gate = Gate(evidence, candidate_env())
-    sha = candidate_sha(gate, repo)
+    sha = gate.sha = candidate_sha(gate, repo)
     manifest = tomllib.loads((repo / "Cargo.toml").read_text())
     gate.version = manifest["package"]["version"]
     package_name = f"{manifest['package']['name']}-{gate.version}"
@@ -308,7 +316,7 @@ def qualify(evidence):
         archive = gate.work / "target" / "package" / f"{package_name}.crate"
         shutil.copy2(archive, evidence / archive.name)
         identity["archive_sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
-        package = extract_archive(gate, archive, package_name, sha, required)
+        package = extract_archive(gate, archive, package_name, required)
         write_identity()
 
         for mode, features in MODES:
