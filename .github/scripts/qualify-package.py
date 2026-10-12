@@ -14,7 +14,6 @@ import signal
 import socket
 import subprocess
 import sys
-import tarfile
 import tempfile
 import time
 import tomllib
@@ -25,6 +24,20 @@ MODES = (("stub", []), ("corpus-ipc", ["--features", "corpus-ipc"]))
 # Attempts to start the daemon when a freshly allocated loopback port was
 # claimed by another process between allocation and the daemon's bind.
 PORT_ATTEMPTS = 3
+# Target/Rust flags that could mask a packaged build failure if inherited.
+INHERITED_BUILD_ENV = ("CARGO_TARGET_DIR", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS",
+                       "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", "RUST_LOG")
+REPOSITORY_ONLY = (".github/", ".devin/", "docs/", "target/")
+SIMULATION_HEADER = 'runtime_mode = "simulation"\n'
+
+CONSUMER_MANIFEST = '''[package]
+name = "package-consumer"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+brainstem-daemon = {{ path = {path}, features = {features} }}
+'''
 
 CONSUMER_MAIN = '''use brainstem_daemon::{BrainstemDaemon, DaemonConfig, RuntimeMode};
 
@@ -40,6 +53,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 '''
+
+
+def require(condition, message):
+    """Fail the gate with message unless condition holds."""
+    if not condition:
+        raise RuntimeError(message)
 
 
 @dataclass
@@ -59,23 +78,26 @@ class Gate:
             commands.write(json.dumps(entry) + "\n")
 
     def run(self, label, args, cwd, expected=0):
-        log = self.evidence / f"{label}.log"
         self.record({"label": label, "command": list(map(str, args)), "cwd": str(cwd),
                      "expected_exit": expected, "timeout_seconds": self.timeout,
                      "rustdocflags": self.env.get("RUSTDOCFLAGS", "")})
         print(f"[{label}] cwd={cwd} $ {shlex.join(map(str, args))}", flush=True)
+        returncode, text = self.capture(label, args, cwd)
+        self.record({"label": label, "exit": returncode})
+        print(text[-4000:], flush=True)
+        print(f"[{label}] exit={returncode}", flush=True)
+        require(returncode == expected, f"{label}: expected exit {expected}, got {returncode}")
+        return text
+
+    def capture(self, label, args, cwd):
+        """Run args in cwd with combined output in the label's log."""
+        log = self.evidence / f"{label}.log"
         with log.open("w") as output:
             result = subprocess.run(
                 args, cwd=cwd, env=self.env, stdout=output, stderr=subprocess.STDOUT,
                 timeout=self.timeout, check=False,
             )
-        text = log.read_text()
-        self.record({"label": label, "exit": result.returncode})
-        print(text[-4000:], flush=True)
-        print(f"[{label}] exit={result.returncode}", flush=True)
-        if result.returncode != expected:
-            raise RuntimeError(f"{label}: expected exit {expected}, got {result.returncode}")
-        return text
+        return result.returncode, log.read_text()
 
     def write_config(self, name, text):
         path = self.work / name
@@ -123,16 +145,47 @@ def wait_ready(process, control_port, label):
     while process.poll() is None:
         if is_ready(control_port):
             return True
-        if time.monotonic() >= deadline:
-            raise RuntimeError(f"{label}: never became ready")
+        require(time.monotonic() < deadline, f"{label}: never became ready")
         time.sleep(0.05)
     return False
 
 
+def kill(process):
+    """Kill the daemon and reap it."""
+    process.kill()
+    process.wait()
+
+
+def ready_or_kill(process, control_port, label):
+    """Wait for readiness, killing the daemon if waiting itself fails."""
+    try:
+        return wait_ready(process, control_port, label)
+    except BaseException:
+        kill(process)
+        raise
+
+
 def lost_port_race(log, attempt, start):
-    """True when this attempt's own output shows a failed bind and attempts remain."""
+    """Return whether this attempt's own output shows a failed bind with attempts left."""
     output = Path(log.name).read_bytes()[start:].decode(errors="replace").lower()
     return attempt < PORT_ATTEMPTS and "address already in use" in output
+
+
+def attempt_config(gate, binary, label, attempt):
+    """Write and record a fresh simulation config for one startup attempt."""
+    config_text, control_port = daemon_config()
+    simulation = gate.write_config(f"{label}-attempt{attempt}.toml", SIMULATION_HEADER + config_text)
+    gate.record({"label": label, "attempt": attempt, "command": [str(binary), "--config", str(simulation)],
+                 "cwd": str(gate.work)})
+    return simulation, control_port
+
+
+def spawn_daemon(gate, binary, config, log):
+    """Start the installed daemon on config with combined output in log."""
+    return subprocess.Popen(
+        [binary, "--config", config], cwd=gate.work, env=gate.env,
+        stdout=log, stderr=subprocess.STDOUT,
+    )
 
 
 def start_ready_daemon(gate, binary, label, log):
@@ -143,28 +196,26 @@ def start_ready_daemon(gate, binary, label, log):
     tried. Each attempt has its own config file and log section.
     """
     for attempt in itertools.count(1):
-        config_text, control_port = daemon_config()
-        simulation = gate.write_config(f"{label}-attempt{attempt}.toml", 'runtime_mode = "simulation"\n' + config_text)
-        gate.record({"label": label, "attempt": attempt, "command": [str(binary), "--config", str(simulation)],
-                     "cwd": str(gate.work)})
+        simulation, control_port = attempt_config(gate, binary, label, attempt)
         log.write(f"[attempt {attempt}] config={simulation.name}\n")
         log.flush()
         start = Path(log.name).stat().st_size
-        process = subprocess.Popen(
-            [binary, "--config", simulation], cwd=gate.work, env=gate.env,
-            stdout=log, stderr=subprocess.STDOUT,
-        )
-        try:
-            if wait_ready(process, control_port, label):
-                return process, simulation
-        except BaseException:
-            process.kill()
-            process.wait()
-            raise
+        process = spawn_daemon(gate, binary, simulation, log)
+        if ready_or_kill(process, control_port, label):
+            return process, simulation
         # wait_ready returned only because the daemon already exited.
-        if not lost_port_race(log, attempt, start):
-            raise RuntimeError(f"{label}: exited before readiness ({process.returncode})")
+        require(lost_port_race(log, attempt, start), f"{label}: exited before readiness ({process.returncode})")
         print(f"[{label}] port race on attempt {attempt}; retrying with new ports", flush=True)
+
+
+def stop_gracefully(process, stop_signal, label):
+    """Send stop_signal and require a successful exit within ten seconds."""
+    try:
+        process.send_signal(stop_signal)
+        require(process.wait(timeout=10) == 0, f"{label}: did not shut down successfully")
+    finally:
+        if process.poll() is None:
+            kill(process)
 
 
 def check_graceful_shutdown(gate, binary, stop_signal):
@@ -173,78 +224,89 @@ def check_graceful_shutdown(gate, binary, stop_signal):
     label = f"{gate.mode}-simulation-{stop_signal.name}"
     with (gate.evidence / f"{label}.log").open("w") as log:
         process, simulation = start_ready_daemon(gate, binary, label, log)
-        try:
-            process.send_signal(stop_signal)
-            if process.wait(timeout=10) != 0:
-                raise RuntimeError(f"{label}: did not shut down successfully")
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
+        stop_gracefully(process, stop_signal, label)
         log.write(f"\nQUALIFIED: /readyz=200; {stop_signal.name}; graceful exit=0\n")
     print(f"[{label}] /readyz=200; graceful exit=0", flush=True)
     return simulation
+
+
+def reject_live_checkpoint(gate, binary, config_text, invalid):
+    """Require the live daemon to exit 1 with a checkpoint-specific error."""
+    live = gate.write_config(f"{gate.mode}-live-{invalid}.toml", config_text)
+    text = gate.run(f"{gate.mode}-live-{invalid}", [binary, "--config", live], gate.work, expected=1)
+    require("invalid or missing Spikenaut checkpoint" in text, "live rejection did not report checkpoint failure")
 
 
 def check_live_rejection(gate, binary, config_text):
     # Live is the default. Both missing and corrupt checkpoints must fail before
     # runtime startup; a successful exit or a hang must not pass this check.
     checkpoint = gate.work / "missing-checkpoint.json"
-    for invalid in ("missing", "corrupt"):
-        if invalid == "corrupt":
-            checkpoint.write_text("not a checkpoint")
-        live = gate.write_config(f"{gate.mode}-live-{invalid}.toml", config_text)
-        text = gate.run(f"{gate.mode}-live-{invalid}", [binary, "--config", live], gate.work, expected=1)
-        if "invalid or missing Spikenaut checkpoint" not in text:
-            raise RuntimeError("live rejection did not report checkpoint failure")
+    reject_live_checkpoint(gate, binary, config_text, "missing")
+    checkpoint.write_text("not a checkpoint")
+    reject_live_checkpoint(gate, binary, config_text, "corrupt")
     checkpoint.unlink()
+
+
+def check_cli(gate, binary):
+    """Require the installed CLI's options and the packaged version."""
+    help_text = gate.run(f"{gate.mode}-help", [binary, "--help"], gate.work)
+    require("--config" in help_text and "--version" in help_text, "installed CLI is missing expected options")
+    actual_version = gate.run(f"{gate.mode}-version", [binary, "--version"], gate.work)
+    require(actual_version.strip() == f"brainstem-daemon {gate.version}",
+            "installed version does not match the package")
 
 
 def smoke(gate, binary):
     gate = replace(gate, timeout=10)
-    help_text = gate.run(f"{gate.mode}-help", [binary, "--help"], gate.work)
-    if "--config" not in help_text or "--version" not in help_text:
-        raise RuntimeError("installed CLI is missing expected options")
-    actual_version = gate.run(f"{gate.mode}-version", [binary, "--version"], gate.work)
-    if actual_version.strip() != f"brainstem-daemon {gate.version}":
-        raise RuntimeError("installed version does not match the package")
-    for stop_signal in (signal.SIGINT, signal.SIGTERM):
-        simulation = check_graceful_shutdown(gate, binary, stop_signal)
+    check_cli(gate, binary)
+    check_graceful_shutdown(gate, binary, signal.SIGINT)
+    simulation = check_graceful_shutdown(gate, binary, signal.SIGTERM)
     # Live is the default: the same ports and model_path without runtime_mode.
-    check_live_rejection(gate, binary, simulation.read_text().removeprefix('runtime_mode = "simulation"\n'))
+    check_live_rejection(gate, binary, simulation.read_text().removeprefix(SIMULATION_HEADER))
     return simulation
+
+
+def write_consumer(gate, package, features):
+    """Write a tiny external crate that depends on the extracted package."""
+    consumer = gate.work / f"consumer-{gate.mode}"
+    (consumer / "src").mkdir(parents=True)
+    (consumer / "Cargo.toml").write_text(CONSUMER_MANIFEST.format(
+        path=json.dumps(str(package)), features=json.dumps(features[1:])))
+    (consumer / "src" / "main.rs").write_text(CONSUMER_MAIN)
+    return consumer
 
 
 def run_consumer(gate, package, features, simulation):
     mode = gate.mode
-    consumer = gate.work / f"consumer-{mode}"
-    (consumer / "src").mkdir(parents=True)
-    (consumer / "Cargo.toml").write_text(f'''[package]
-name = "package-consumer"
-version = "0.0.0"
-edition = "2024"
-
-[dependencies]
-brainstem-daemon = {{ path = {json.dumps(str(package))}, features = {json.dumps(features[1:] if features else [])} }}
-''')
-    (consumer / "src" / "main.rs").write_text(CONSUMER_MAIN)
+    consumer = write_consumer(gate, package, features)
     shutil.copytree(consumer, gate.evidence / f"consumer-{mode}")
     gate.run(f"{mode}-consumer-lock", CARGO + ["generate-lockfile"], consumer)
     shutil.copy2(consumer / "Cargo.lock", gate.evidence / f"consumer-{mode}" / "Cargo.lock")
     gate.run(f"{mode}-consumer", CARGO + ["run", "--locked", "--", str(simulation)], consumer)
 
 
+def build_and_document(gate, package, features):
+    """Build and test the extracted package, then deny rustdoc warnings."""
+    gate.run(f"{gate.mode}-build", CARGO + ["build", "--locked"] + features, package)
+    gate.run(f"{gate.mode}-test", CARGO + ["test", "--locked"] + features, package)
+    docs = replace(gate, env=dict(gate.env, RUSTDOCFLAGS="-D warnings"))
+    docs.run(f"{gate.mode}-rustdoc", CARGO + ["doc", "--locked", "--no-deps"] + features, package)
+
+
+def install(gate, package, features):
+    """Install the extracted package into an isolated root; return the binary."""
+    root = gate.work / f"install-{gate.mode}"
+    gate.run(f"{gate.mode}-install",
+             CARGO + ["install", "--locked", "--path", str(package), "--root", str(root)] + features, gate.work)
+    return root / "bin" / "brainstem-daemon"
+
+
 def qualify_mode(gate, package, mode, features):
     gate = replace(gate, mode=mode)
     # Never reuse checkout artifacts, or artifacts from the other backend.
     gate.env["CARGO_TARGET_DIR"] = str(gate.work / f"target-{mode}")
-    for command in ("build", "test"):
-        gate.run(f"{mode}-{command}", CARGO + [command, "--locked"] + features, package)
-    docs = replace(gate, env=dict(gate.env, RUSTDOCFLAGS="-D warnings"))
-    docs.run(f"{mode}-rustdoc", CARGO + ["doc", "--locked", "--no-deps"] + features, package)
-    root = gate.work / f"install-{mode}"
-    gate.run(f"{mode}-install", CARGO + ["install", "--locked", "--path", str(package), "--root", str(root)] + features, gate.work)
-    simulation = smoke(gate, root / "bin" / "brainstem-daemon")
+    build_and_document(gate, package, features)
+    simulation = smoke(gate, install(gate, package, features))
     run_consumer(gate, package, features, simulation)
 
 
@@ -260,31 +322,42 @@ def check_package_list(gate, repo, required):
     contents = gate.run("package-list", CARGO + ["package", "--locked", "--list"], repo)
     listed = set(contents.splitlines())
     missing = required - listed
-    if missing:
-        raise RuntimeError(f"package is missing required files: {sorted(missing)}")
-    if any(path.startswith((".github/", ".devin/", "docs/", "target/")) for path in listed):
-        raise RuntimeError("package includes repository-only or generated files")
+    require(not missing, f"package is missing required files: {sorted(missing)}")
+    require(not any(path.startswith(REPOSITORY_ONLY) for path in listed),
+            "package includes repository-only or generated files")
+
+
+def package_archive(gate, repo, package_name):
+    """Check the package list, then build and retain the .crate."""
+    required = required_files(gate, repo)
+    check_package_list(gate, repo, required)
+    gate.run("package", CARGO + ["package", "--locked"], repo)
+    archive = gate.work / "target" / "package" / f"{package_name}.crate"
+    shutil.copy2(archive, gate.evidence / archive.name)
+    return archive, required
+
+
+def check_vcs_identity(gate, package):
+    """Require the archive's embedded Git identity to be the clean candidate SHA."""
+    git = json.loads((package / ".cargo_vcs_info.json").read_text())["git"]
+    require(git["sha1"] == gate.sha and not git.get("dirty", False),
+            "archive VCS identity does not match the clean candidate SHA")
 
 
 def extract_archive(gate, archive, package_name, required):
     extracted = gate.work / "extracted"
     extracted.mkdir()
-    with tarfile.open(archive) as tar:
-        tar.extractall(extracted, filter="data")
+    # The "data" extraction filter keeps every member and link inside extracted.
+    shutil.unpack_archive(archive, extracted, "gztar", filter="data")
     package = extracted / package_name
-    vcs = json.loads((package / ".cargo_vcs_info.json").read_text())
-    if vcs["git"]["sha1"] != gate.sha or vcs["git"].get("dirty", False):
-        raise RuntimeError("archive VCS identity does not match the clean candidate SHA")
-    if not all((package / path).is_file() for path in required):
-        raise RuntimeError("extracted archive is missing required files")
+    check_vcs_identity(gate, package)
+    require(all((package / path).is_file() for path in required), "extracted archive is missing required files")
     return package
 
 
 def candidate_env():
     env = os.environ.copy()
-    # Do not inherit target/Rust flags that could mask a packaged build failure.
-    for key in ("CARGO_TARGET_DIR", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS",
-                "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", "RUST_LOG"):
+    for key in INHERITED_BUILD_ENV:
         env.pop(key, None)
     env.update(CC="gcc", CXX="g++", CARGO_TERM_COLOR="never")
     return env
@@ -293,48 +366,52 @@ def candidate_env():
 def candidate_sha(gate, repo):
     sha = gate.run("git-sha", ["git", "rev-parse", "HEAD"], repo).strip()
     dirty = gate.run("git-status", ["git", "status", "--porcelain", "--untracked-files=no"], repo)
-    if dirty.strip():
-        raise RuntimeError("qualification requires a clean committed checkout")
+    require(not dirty.strip(), "qualification requires a clean committed checkout")
     gate.run("rustc", ["rustc", "+1.98.1", "--version", "--verbose"], repo)
     gate.run("cargo", CARGO + ["--version"], repo)
     return sha
+
+
+def candidate_package(gate, repo):
+    """Record the manifest version on the gate and return the package's archive name."""
+    manifest = tomllib.loads((repo / "Cargo.toml").read_text())
+    gate.version = manifest["package"]["version"]
+    return f"{manifest['package']['name']}-{gate.version}"
+
+
+def write_identity(evidence, identity):
+    (evidence / "identity.json").write_text(json.dumps(identity, indent=2) + "\n")
+
+
+def publish_dry_run(gate, repo):
+    # Use the clean source checkout for Cargo's publish path, which itself
+    # packages and verifies it. Nothing is uploaded; no bypass flags are used.
+    gate.env["CARGO_TARGET_DIR"] = str(gate.work / "publish-target")
+    gate.run("publish-dry-run", CARGO + ["publish", "--dry-run", "--locked"], repo)
 
 
 def qualify(evidence):
     repo = Path(__file__).resolve().parents[2]
     gate = Gate(evidence, candidate_env())
     sha = gate.sha = candidate_sha(gate, repo)
-    manifest = tomllib.loads((repo / "Cargo.toml").read_text())
-    gate.version = manifest["package"]["version"]
-    package_name = f"{manifest['package']['name']}-{gate.version}"
+    package_name = candidate_package(gate, repo)
     identity = {"sha": sha, "package": package_name, "status": "running"}
-
-    def write_identity():
-        (evidence / "identity.json").write_text(json.dumps(identity, indent=2) + "\n")
-
-    write_identity()
+    write_identity(evidence, identity)
 
     with tempfile.TemporaryDirectory(prefix="brainstem-package-") as temporary:
         gate.work = Path(temporary)
         gate.env["CARGO_TARGET_DIR"] = str(gate.work / "target")
-        required = required_files(gate, repo)
-        check_package_list(gate, repo, required)
-        gate.run("package", CARGO + ["package", "--locked"], repo)
-        archive = gate.work / "target" / "package" / f"{package_name}.crate"
-        shutil.copy2(archive, evidence / archive.name)
+        archive, required = package_archive(gate, repo, package_name)
         identity["archive_sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
         package = extract_archive(gate, archive, package_name, required)
-        write_identity()
+        write_identity(evidence, identity)
 
         for mode, features in MODES:
             qualify_mode(gate, package, mode, features)
 
-        # Use the clean source checkout for Cargo's publish path, which itself
-        # packages and verifies it. Nothing is uploaded; no bypass flags are used.
-        gate.env["CARGO_TARGET_DIR"] = str(gate.work / "publish-target")
-        gate.run("publish-dry-run", CARGO + ["publish", "--dry-run", "--locked"], repo)
+        publish_dry_run(gate, repo)
         identity["status"] = "passed"
-        write_identity()
+        write_identity(evidence, identity)
     print(f"PASS: packaged release qualification for {sha}", flush=True)
 
 
