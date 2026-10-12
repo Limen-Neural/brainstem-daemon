@@ -226,9 +226,17 @@ fn validate_pub_bind_host(host: &str) -> Result<()> {
     );
 }
 
+/// Syntactic hostname check. The final label must not be all digits: such a
+/// name is never a resolvable bind host (`5555`, `999.999.999.999`) and would
+/// otherwise only fail later, once libzmq tries to bind it.
 fn is_dns_hostname(host: &str) -> bool {
     let name = host.strip_suffix('.').unwrap_or(host);
+    let last_label_is_numeric = name
+        .rsplit('.')
+        .next()
+        .is_some_and(|label| !label.is_empty() && label.bytes().all(|b| b.is_ascii_digit()));
     !name.is_empty()
+        && !last_label_is_numeric
         && name.len() <= 253
         && name.split('.').all(|label| {
             !label.is_empty()
@@ -490,6 +498,9 @@ channels = 1
             "bad host",
             "-bad.example",
             "bad..example",
+            "5555",
+            "999.999.999.999",
+            "pub.example.123",
         ] {
             let err = load_base_config("invalid-host", &format!("spine_pub_bind_host = {host:?}"))
                 .expect_err("malformed PUB host must fail before socket startup");
@@ -505,6 +516,7 @@ channels = 1
             "[::1]",
             "localhost",
             "pub.example.",
+            "1.pub.example",
             "*",
         ] {
             load_base_config("valid-host", &format!("spine_pub_bind_host = {host:?}"))
