@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Prepare the pinned Rust toolchain and the optional corpus-ipc test matrix.
 packages=()
-for package in build-essential pkg-config libzmq3-dev; do
+for package in build-essential curl pkg-config libzmq3-dev; do
     if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed'; then
         packages+=("$package")
     fi
