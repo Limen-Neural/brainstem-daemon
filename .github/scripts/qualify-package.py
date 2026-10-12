@@ -129,35 +129,40 @@ def wait_ready(process, control_port, label):
     return False
 
 
-def lost_port_race(log, attempt):
-    """True when the exited daemon could not bind a port and attempts remain."""
-    return attempt < PORT_ATTEMPTS and "address already in use" in Path(log.name).read_text().lower()
+def lost_port_race(log, attempt, start):
+    """True when this attempt's own output shows a failed bind and attempts remain."""
+    output = Path(log.name).read_bytes()[start:].decode(errors="replace").lower()
+    return attempt < PORT_ATTEMPTS and "address already in use" in output
 
 
 def start_ready_daemon(gate, binary, label, log):
-    """Spawn the simulation daemon and return it once ready.
+    """Spawn the simulation daemon and return it and its config once ready.
 
-    A premature exit fails the gate unless the log shows the daemon lost a race
-    for one of its freshly allocated ports; only then are new ports tried.
+    A premature exit fails the gate unless this attempt's log shows the daemon
+    lost a race for one of its freshly allocated ports; only then are new ports
+    tried. Each attempt has its own config file and log section.
     """
     for attempt in itertools.count(1):
         config_text, control_port = daemon_config()
-        simulation = gate.write_config(f"{gate.mode}-simulation.toml", 'runtime_mode = "simulation"\n' + config_text)
+        simulation = gate.write_config(f"{label}-attempt{attempt}.toml", 'runtime_mode = "simulation"\n' + config_text)
         gate.record({"label": label, "attempt": attempt, "command": [str(binary), "--config", str(simulation)],
                      "cwd": str(gate.work)})
+        log.write(f"[attempt {attempt}] config={simulation.name}\n")
+        log.flush()
+        start = Path(log.name).stat().st_size
         process = subprocess.Popen(
             [binary, "--config", simulation], cwd=gate.work, env=gate.env,
             stdout=log, stderr=subprocess.STDOUT,
         )
         try:
             if wait_ready(process, control_port, label):
-                return process, config_text
+                return process, simulation
         except BaseException:
             process.kill()
             process.wait()
             raise
         # wait_ready returned only because the daemon already exited.
-        if not lost_port_race(log, attempt):
+        if not lost_port_race(log, attempt, start):
             raise RuntimeError(f"{label}: exited before readiness ({process.returncode})")
         print(f"[{label}] port race on attempt {attempt}; retrying with new ports", flush=True)
 
@@ -167,7 +172,7 @@ def check_graceful_shutdown(gate, binary, stop_signal):
     # both Unix shutdown signals with bounded startup and teardown.
     label = f"{gate.mode}-simulation-{stop_signal.name}"
     with (gate.evidence / f"{label}.log").open("w") as log:
-        process, config_text = start_ready_daemon(gate, binary, label, log)
+        process, simulation = start_ready_daemon(gate, binary, label, log)
         try:
             process.send_signal(stop_signal)
             if process.wait(timeout=10) != 0:
@@ -178,7 +183,7 @@ def check_graceful_shutdown(gate, binary, stop_signal):
                 process.wait()
         log.write(f"\nQUALIFIED: /readyz=200; {stop_signal.name}; graceful exit=0\n")
     print(f"[{label}] /readyz=200; graceful exit=0", flush=True)
-    return config_text
+    return simulation
 
 
 def check_live_rejection(gate, binary, config_text):
@@ -204,11 +209,13 @@ def smoke(gate, binary):
     if actual_version.strip() != f"brainstem-daemon {gate.version}":
         raise RuntimeError("installed version does not match the package")
     for stop_signal in (signal.SIGINT, signal.SIGTERM):
-        config_text = check_graceful_shutdown(gate, binary, stop_signal)
-    check_live_rejection(gate, binary, config_text)
+        simulation = check_graceful_shutdown(gate, binary, stop_signal)
+    # Live is the default: the same ports and model_path without runtime_mode.
+    check_live_rejection(gate, binary, simulation.read_text().removeprefix('runtime_mode = "simulation"\n'))
+    return simulation
 
 
-def run_consumer(gate, package, features):
+def run_consumer(gate, package, features, simulation):
     mode = gate.mode
     consumer = gate.work / f"consumer-{mode}"
     (consumer / "src").mkdir(parents=True)
@@ -224,7 +231,7 @@ brainstem-daemon = {{ path = {json.dumps(str(package))}, features = {json.dumps(
     shutil.copytree(consumer, gate.evidence / f"consumer-{mode}")
     gate.run(f"{mode}-consumer-lock", CARGO + ["generate-lockfile"], consumer)
     shutil.copy2(consumer / "Cargo.lock", gate.evidence / f"consumer-{mode}" / "Cargo.lock")
-    gate.run(f"{mode}-consumer", CARGO + ["run", "--locked", "--", str(gate.work / f"{mode}-simulation.toml")], consumer)
+    gate.run(f"{mode}-consumer", CARGO + ["run", "--locked", "--", str(simulation)], consumer)
 
 
 def qualify_mode(gate, package, mode, features):
@@ -237,8 +244,8 @@ def qualify_mode(gate, package, mode, features):
     docs.run(f"{mode}-rustdoc", CARGO + ["doc", "--locked", "--no-deps"] + features, package)
     root = gate.work / f"install-{mode}"
     gate.run(f"{mode}-install", CARGO + ["install", "--locked", "--path", str(package), "--root", str(root)] + features, gate.work)
-    smoke(gate, root / "bin" / "brainstem-daemon")
-    run_consumer(gate, package, features)
+    simulation = smoke(gate, root / "bin" / "brainstem-daemon")
+    run_consumer(gate, package, features, simulation)
 
 
 def required_files(gate, repo):
