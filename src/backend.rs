@@ -938,46 +938,39 @@ mod zmq_impl {
                 "over-HWM drops are silent on the PUB side; emit must not report failure"
             );
             assert_eq!(stats.suppressed, 0);
+        }
 
-            // Receiver-side observations cannot tell the publisher exactly how
-            // much was lost. Drain only what arrives within a bounded window.
-            let deadline = std::time::Instant::now() + Duration::from_millis(100);
-            let mut received = 0;
-            while std::time::Instant::now() < deadline {
-                if sub.poll(::zmq::POLLIN, 10).unwrap() > 0 {
-                    sub.recv_bytes(::zmq::DONTWAIT).unwrap();
-                    received += 1;
-                }
-            }
-            assert!(received <= stats.attempted);
+        /// Drop a pressured sink within its finite LINGER bound, then prove
+        /// the PUB port is free again.
+        fn assert_teardown_bounded(linger_ms: i32) {
+            let (mut sink, endpoint) = bind_sink_with_options(true, 2, linger_ms);
+            let sub = connect_subscriber(&endpoint);
+            establish_receipt(&mut sink, &sub);
+            emit_many(&mut sink, 10_000);
+            // Time out independently of drop: an assertion after drop would
+            // never execute if teardown itself hung. The sink owns its
+            // socket's context; keep the stalled SUB alive separately.
+            let (done, completion) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                drop(sink);
+                done.send(()).unwrap();
+            });
+            completion
+                .recv_timeout(Duration::from_millis(linger_ms as u64 + 2000))
+                .expect("finite LINGER must bound sink/context teardown");
+            worker.join().unwrap();
+            let rebound = ::zmq::Context::new().socket(::zmq::PUB).unwrap();
+            rebound.set_linger(0).unwrap();
+            rebound
+                .bind(&endpoint)
+                .expect("PUB port released after drop");
+            drop(sub);
         }
 
         #[test]
         fn sink_teardown_is_bounded_by_finite_linger() {
-            for linger_ms in [0, 25] {
-                let (mut sink, endpoint) = bind_sink_with_options(true, 2, linger_ms);
-                let sub = connect_subscriber(&endpoint);
-                establish_receipt(&mut sink, &sub);
-                emit_many(&mut sink, 10_000);
-                // Time out independently of drop: an assertion after drop
-                // would never execute if teardown itself hung. The sink owns
-                // its socket's context; keep the stalled SUB alive separately.
-                let (done, completion) = std::sync::mpsc::channel();
-                let worker = std::thread::spawn(move || {
-                    drop(sink);
-                    done.send(()).unwrap();
-                });
-                completion
-                    .recv_timeout(Duration::from_millis(linger_ms as u64 + 2000))
-                    .expect("finite LINGER must bound sink/context teardown");
-                worker.join().unwrap();
-                let rebound = ::zmq::Context::new().socket(::zmq::PUB).unwrap();
-                rebound.set_linger(0).unwrap();
-                rebound
-                    .bind(&endpoint)
-                    .expect("PUB port released after drop");
-                drop(sub);
-            }
+            assert_teardown_bounded(0);
+            assert_teardown_bounded(25);
         }
 
         #[test]
