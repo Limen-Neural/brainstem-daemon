@@ -198,7 +198,12 @@ fn validate_dimensions(config: &DaemonConfig) -> Result<()> {
         );
     }
     let inputs = total.checked_mul(config.channels).ok_or_else(|| {
-        anyhow::anyhow!("dimensions (lif_count + izh_count) * channels overflows usize")
+        anyhow::anyhow!(
+            "dimensions (lif_count + izh_count) * channels ({} * {} * {}) overflows usize",
+            config.lif_count,
+            config.izh_count,
+            config.channels
+        )
     })?;
     if inputs > MAX_NETWORK_INPUTS {
         bail!(
@@ -226,16 +231,13 @@ fn validate_pub_bind_host(host: &str) -> Result<()> {
     );
 }
 
-/// Syntactic hostname check. The final label must not be all digits: such a
-/// name is never a resolvable bind host (`5555`, `999.999.999.999`) and would
-/// otherwise only fail later, once libzmq tries to bind it.
+/// Syntactic hostname check. Names made only of digits and dots (`5555`,
+/// `999.999.999.999`) are malformed IPv4 literals, not hostnames, and are
+/// rejected here instead of failing later when libzmq tries to bind them.
 fn is_dns_hostname(host: &str) -> bool {
     let name = host.strip_suffix('.').unwrap_or(host);
-    let last_label = name.rsplit('.').next().unwrap_or_default();
-    !name.is_empty()
-        && name.len() <= 253
-        && !last_label.bytes().all(|b| b.is_ascii_digit())
-        && name.split('.').all(is_dns_label)
+    let numeric_only = name.bytes().all(|b| b.is_ascii_digit() || b == b'.');
+    !name.is_empty() && !numeric_only && name.len() <= 253 && name.split('.').all(is_dns_label)
 }
 
 fn is_dns_label(label: &str) -> bool {
@@ -499,7 +501,6 @@ channels = 1
             "bad..example",
             "5555",
             "999.999.999.999",
-            "pub.example.123",
         ] {
             let err = load_base_config("invalid-host", &format!("spine_pub_bind_host = {host:?}"))
                 .expect_err("malformed PUB host must fail before socket startup");
@@ -516,6 +517,7 @@ channels = 1
             "localhost",
             "pub.example.",
             "1.pub.example",
+            "pub.example.123",
             "*",
         ] {
             load_base_config("valid-host", &format!("spine_pub_bind_host = {host:?}"))
