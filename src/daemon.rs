@@ -902,9 +902,9 @@ fn run_tick(
     if let Some(offender) = backend_packet.as_ref().and_then(backend_non_finite) {
         record_non_finite_rejection(offender, stats, diagnostics);
         // Drop the packet for this tick: skip IngressObserved, do not
-        // admit/enqueue it, do not count it accepted, and do not reach
-        // network.step. decode_inputs then zero-fills (identical to a
-        // skip / backend `None`).
+        // admit/enqueue it, and do not count it accepted. The tick still
+        // drains anything already queued. `decode_inputs` copies that
+        // sensory vector and zero-fills only the channels it does not cover.
         backend_packet = None;
     }
 
@@ -1624,6 +1624,50 @@ mod tests {
         }
     }
 
+    /// Shared tick harness so repeating and sequenced sources do not duplicate
+    /// the `run_tick` setup (CodeScene duplication gate).
+    struct TickFixture {
+        ingress: BoundedIngress,
+        health: HealthHandle,
+        sink: CollectingSpikeSink,
+        network: SpikingNetwork,
+        stimuli: Vec<f32>,
+        spike_buf: Vec<LocalSpikeEvent>,
+        stats: RuntimeStats,
+        diagnostics: TickDiagnostics,
+    }
+
+    impl TickFixture {
+        fn new(channels: usize, interval: u64) -> Self {
+            Self {
+                ingress: BoundedIngress::new(IngressConfig::default()).unwrap(),
+                health: HealthHandle::started(HealthLimits::default()),
+                sink: CollectingSpikeSink::new(),
+                network: SpikingNetwork::with_dimensions(channels, 0, channels),
+                stimuli: vec![0.0; channels],
+                spike_buf: Vec::new(),
+                stats: RuntimeStats::default(),
+                diagnostics: TickDiagnostics::new(interval),
+            }
+        }
+
+        fn tick(&mut self, source: &mut dyn StimulusSource) {
+            run_tick(
+                source,
+                &mut self.network,
+                &mut self.sink,
+                &mut self.stimuli,
+                &mut self.spike_buf,
+                &self.ingress,
+                &mut TickReport {
+                    health: &self.health,
+                    stats: &mut self.stats,
+                    diagnostics: &mut self.diagnostics,
+                },
+            );
+        }
+    }
+
     /// Drive `ticks` ticks with the same packet through a fresh 1-channel
     /// network, returning the collected sink, stats, diagnostics, and health.
     fn drive_repeating(
@@ -1637,31 +1681,18 @@ mod tests {
         HealthHandle,
         SpikingNetwork,
     ) {
-        let ingress = BoundedIngress::new(IngressConfig::default()).unwrap();
-        let health = HealthHandle::started(HealthLimits::default());
+        let mut fixture = TickFixture::new(1, interval);
         let mut source = RepeatingSource { packet };
-        let mut sink = CollectingSpikeSink::new();
-        let mut network = SpikingNetwork::with_dimensions(1, 0, 1);
-        let mut stimuli = [0.0];
-        let mut spike_buf = Vec::new();
-        let mut stats = RuntimeStats::default();
-        let mut diagnostics = TickDiagnostics::new(interval);
         for _ in 0..ticks {
-            run_tick(
-                &mut source,
-                &mut network,
-                &mut sink,
-                &mut stimuli,
-                &mut spike_buf,
-                &ingress,
-                &mut TickReport {
-                    health: &health,
-                    stats: &mut stats,
-                    diagnostics: &mut diagnostics,
-                },
-            );
+            fixture.tick(&mut source);
         }
-        (sink, stats, diagnostics, health, network)
+        (
+            fixture.sink,
+            fixture.stats,
+            fixture.diagnostics,
+            fixture.health,
+            fixture.network,
+        )
     }
 
     fn assert_non_finite_stimulus_rejected(value: f32) {
@@ -1863,6 +1894,142 @@ mod tests {
                 },
             );
         }
+    }
+
+    /// Yields one [`IngressPacket`] per tick in order, then repeats the last
+    /// packet for any further ticks.
+    struct SequenceIngressSource {
+        packets: Vec<IngressPacket>,
+        idx: usize,
+    }
+    impl StimulusSource for SequenceIngressSource {
+        fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
+            let packet = if self.idx < self.packets.len() {
+                let p = self.packets[self.idx].clone();
+                self.idx += 1;
+                p
+            } else {
+                self.packets.last().cloned().unwrap_or_default()
+            };
+            Ok(Some(packet))
+        }
+        fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Backend yields nothing; each packet is injected with `enqueue` then one tick.
+    fn drive_direct_enqueues(packets: Vec<IngressPacket>) -> TickFixture {
+        struct NoneSource;
+        impl StimulusSource for NoneSource {
+            fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
+                Ok(None)
+            }
+            fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+                Ok(())
+            }
+        }
+        let mut fixture = TickFixture::new(1, 1_000);
+        let mut source = NoneSource;
+        for packet in packets {
+            assert!(
+                fixture
+                    .ingress
+                    .enqueue(MessageClass::Sensory, packet)
+                    .accepted()
+            );
+            fixture.tick(&mut source);
+        }
+        fixture
+    }
+
+    #[test]
+    fn finite_packet_after_backend_non_finite_rejection_is_accepted() {
+        let bad = IngressPacket {
+            stimuli: vec![f32::NAN],
+            batch_id: Some(1),
+            ..Default::default()
+        };
+        let good = IngressPacket {
+            stimuli: vec![0.25],
+            batch_id: Some(2),
+            ..Default::default()
+        };
+        let mut fixture = TickFixture::new(1, 1_000);
+        let mut source = SequenceIngressSource {
+            packets: vec![bad, good],
+            idx: 0,
+        };
+        fixture.tick(&mut source);
+        fixture.tick(&mut source);
+
+        assert_eq!(fixture.stats.rejected_batches, 1);
+        assert_eq!(fixture.stats.accepted_batches, 1);
+        assert_eq!(fixture.stats.last_batch_id, Some(2));
+        assert_eq!(fixture.stimuli, vec![0.25]);
+        // Backend-path rejection still steps; the next finite packet is decoded.
+        assert_eq!(fixture.stats.ticks, 2);
+        assert_eq!(fixture.sink.emitted.len(), 2);
+        assert!(
+            fixture.health.snapshot().input_freshness.age_ms.is_some(),
+            "finite packet after rejection must refresh input freshness"
+        );
+    }
+
+    #[test]
+    fn queued_finite_sensory_survives_backend_non_finite_drop() {
+        let mut fixture = TickFixture::new(1, 1_000);
+        assert!(
+            fixture
+                .ingress
+                .enqueue(
+                    MessageClass::Sensory,
+                    IngressPacket {
+                        stimuli: vec![0.75],
+                        batch_id: Some(3),
+                        ..Default::default()
+                    },
+                )
+                .accepted()
+        );
+        let mut source = RepeatingSource {
+            packet: IngressPacket {
+                stimuli: vec![f32::NAN],
+                batch_id: Some(4),
+                ..Default::default()
+            },
+        };
+        fixture.tick(&mut source);
+
+        assert_eq!(fixture.stats.rejected_batches, 1);
+        assert_eq!(fixture.stats.ticks, 1);
+        assert_eq!(fixture.stimuli, vec![0.75]);
+        assert_eq!(fixture.sink.emitted.len(), 1);
+    }
+
+    #[test]
+    fn finite_packet_after_direct_enqueue_non_finite_rejection_is_accepted() {
+        let fixture = drive_direct_enqueues(vec![
+            IngressPacket {
+                stimuli: vec![f32::NAN],
+                batch_id: Some(10),
+                ..Default::default()
+            },
+            IngressPacket {
+                stimuli: vec![0.5],
+                batch_id: Some(11),
+                ..Default::default()
+            },
+        ]);
+
+        assert_eq!(fixture.stats.rejected_batches, 1);
+        // `accepted_batches` / `last_batch_id` update on backend admit only.
+        assert_eq!(fixture.stats.accepted_batches, 0);
+        assert!(fixture.stats.last_batch_id.is_none());
+        assert_eq!(fixture.stats.ticks, 1);
+        assert_eq!(fixture.sink.emitted.len(), 1);
+        assert_eq!(fixture.stimuli, vec![0.5]);
+        assert!(fixture.health.snapshot().live);
     }
 
     #[test]

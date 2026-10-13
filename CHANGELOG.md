@@ -131,6 +131,26 @@ crates.io line; that GitHub milestone was stub-quality work.
 
 ### Fixed / Cleaned
 
+- Fail-closed non-finite ingress (`NaN`, `±Inf`) on every runtime entry path
+  before `SpikingNetwork::step`: typed `corpus-ipc` validation, custom
+  `StimulusSource` packets, direct `BoundedIngress` enqueue, and the drained
+  merge packet via shared `ingress::first_non_finite`. The daemon finite
+  gates increment `rejected_batches` and emit rate-limited diagnostics with a
+  stable limiter key (not per-index). Typed `corpus-ipc` source warnings
+  (`next_ingress` / `hold_or_reject`) are separate and are not passed through
+  that limiter. A non-finite payload does not refresh `input_freshness`; a
+  rejected frame that replays previously held finite modulators still can.
+  Modulators are checked before any held/cached state update. Masked-out
+  stimulus slots and short modulator tails (1..4 elements) are still scanned
+  fail-closed. Already-`rejected` backend frames with non-finite payloads are
+  counted once and not re-admitted (#72, #73, LIM-1322 / #66).
+- **Backend vs direct-enqueue rejection:** a non-finite **backend** packet is
+  dropped before enqueue. The tick still drains anything already queued,
+  copies that sensory vector, and zero-fills only channels the vector does
+  not cover (the whole buffer when the drain has no sensory input). A
+  non-finite packet that surfaces only on the **drained** path (for example
+  public `enqueue` / `try_enqueue`) skips `network.step` and spike emission
+  for that tick while the daemon stays live.
 - Live restore rejects Distill sidecars that carry `output_weights` (including
   explicit `null`) instead of validating then silently dropping the readout
   row. neuromod 0.6.0 has no Distill readout matrix; legacy sidecars that omit
