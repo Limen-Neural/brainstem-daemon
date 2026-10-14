@@ -200,13 +200,10 @@ def spawn_daemon(gate, binary, config, log):
 
 
 def start_ready_daemon(gate, binary, label, log):
-    """
-    Spawn the simulation daemon and return it and its config once ready.
-
-    A premature exit fails the gate unless this attempt's log shows the daemon
-    lost a race for one of its freshly allocated ports; only then are new ports
-    tried. Each attempt has its own config file and log section.
-    """
+    """Spawn the simulation daemon and return it and its config once ready."""
+    # A premature exit fails the gate unless this attempt's own log shows a
+    # lost port race. Only then are new ports tried, and each attempt keeps
+    # its own config file and log section.
     for attempt in itertools.count(1):
         simulation, control_port = attempt_config(gate, binary, label, attempt)
         log.write(f"[attempt {attempt}] config={simulation.name}\n")
