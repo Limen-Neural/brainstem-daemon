@@ -180,16 +180,28 @@ def attempt_config(gate, binary, label, attempt):
     return simulation, control_port
 
 
+def plain_path(value):
+    """Return value when shlex.quote would leave it unchanged."""
+    # argv evidence shares Gate with these temp paths, so taint analysis
+    # treats them as attacker-controlled. quote is the recognized sanitizer.
+    # shell=False must receive the original bytes, so refuse a rewrite.
+    text = os.fsdecode(value)
+    quoted = shlex.quote(text)
+    require(quoted == text, f"daemon path contains shell metacharacters: {text}")
+    return quoted
+
+
 def spawn_daemon(gate, binary, config, log):
     """Start the installed daemon on config with combined output in log."""
     return subprocess.Popen(
-        [binary, "--config", config], cwd=gate.work, env=gate.env,
-        stdout=log, stderr=subprocess.STDOUT,
+        [plain_path(binary), "--config", plain_path(config)],
+        cwd=gate.work, env=gate.env, stdout=log, stderr=subprocess.STDOUT,
     )
 
 
 def start_ready_daemon(gate, binary, label, log):
-    """Spawn the simulation daemon and return it and its config once ready.
+    """
+    Spawn the simulation daemon and return it and its config once ready.
 
     A premature exit fails the gate unless this attempt's log shows the daemon
     lost a race for one of its freshly allocated ports; only then are new ports
