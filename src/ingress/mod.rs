@@ -77,7 +77,7 @@ impl std::fmt::Display for NonFiniteInput {
 /// (`false`) slot. Masking is a downstream decode concern and is not a reason
 /// to admit `NaN`/`Inf` into the network. Empty stimuli with `None` modulators
 /// returns `None` (an empty packet is accepted). A modulator vector shorter than
-/// [`crate::backend::NEUROMODULATOR_COUNT`](crate::backend::NEUROMODULATOR_COUNT)
+/// [`crate::backend::NEUROMODULATOR_COUNT`]
 /// is still fully scanned for the elements that are present.
 ///
 /// This is intentional and stricter than downstream decoding: `decode_inputs`
