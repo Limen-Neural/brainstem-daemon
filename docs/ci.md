@@ -77,9 +77,12 @@ The driver runs these gates without `--allow-dirty`, `--no-verify`, or
 6. Run `cargo +1.98.1 publish --dry-run --locked` from the clean checkout.
    Cargo packages/verifies it again; **nothing is uploaded to crates.io**.
 
-CI always uploads `package-qualification-<candidate-sha>` with 90-day retention,
-including partial logs on failure. `identity.json` records the exact SHA,
-archive checksum, and qualification status; only `passed` means all gates
-finished. Keep the artifact with the release record before it expires, and rerun
-qualification if the candidate SHA changes. Logs and temporary binaries are
-not committed; build/install/consumer directories are cleaned automatically.
+CI uploads `package-qualification-<candidate-sha>` with 90-day retention when
+the driver has written evidence, including partial logs if a later gate fails.
+If checkout or toolchain setup fails first, there is no evidence directory and
+the upload step warns instead of failing the job a second time. `identity.json`
+records the exact SHA, archive checksum, and qualification status; only
+`passed` means all gates finished. Keep the artifact with the release record
+before it expires, and rerun qualification if the candidate SHA changes. Logs
+and temporary binaries are not committed; build/install/consumer directories
+are cleaned automatically.

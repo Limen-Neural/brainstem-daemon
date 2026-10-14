@@ -180,21 +180,13 @@ def attempt_config(gate, binary, label, attempt):
     return simulation, control_port
 
 
-def plain_path(value):
-    """Return value when shlex.quote would leave it unchanged."""
-    # argv evidence shares Gate with these temp paths, so taint analysis
-    # treats them as attacker-controlled. quote is the recognized sanitizer.
-    # shell=False must receive the original bytes, so refuse a rewrite.
-    text = os.fsdecode(value)
-    quoted = shlex.quote(text)
-    require(quoted == text, f"daemon path contains shell metacharacters: {text}")
-    return quoted
-
-
 def spawn_daemon(gate, binary, config, log):
     """Start the installed daemon on config with combined output in log."""
+    # shell=False, so spaces and other characters in a temp path are literal.
+    # The evidence directory from argv shares this Gate, which makes intrafile
+    # taint treat these paths as controlled; they are paths we just created.
     return subprocess.Popen(
-        [plain_path(binary), "--config", plain_path(config)],
+        [os.fsdecode(binary), "--config", os.fsdecode(config)],  # nosemgrep: dangerous-subprocess-use-tainted-env-args
         cwd=gate.work, env=gate.env, stdout=log, stderr=subprocess.STDOUT,
     )
 
