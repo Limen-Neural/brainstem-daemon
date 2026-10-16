@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- CPU-only Linux qualification of the real PUB binary lifecycle under SIGTERM
+  and SIGINT, including absent/stalled subscribers, clean exit and port release
+  (#68). Strengthened socket tests cover finite-linger teardown, failed-send
+  accounting and exact empty/nonempty `corpus-ipc` wire compatibility.
+
+### Changed
+
+- Built-in PUB defaults to loopback (`127.0.0.1`); remote subscribers require
+  explicit `spine_pub_bind_host` configuration. Explicit positive SNDHWM and
+  nonnegative finite LINGER bound buffering/teardown; empty batches remain
+  enabled by default. Application attempted/suppressed/failed counters do not
+  claim subscriber delivery or measure silent PUB loss (#74, qualified by #68).
+
 ## [0.3.0] - 2026-09-18
 
 Pending crates.io publication for GitHub milestone **v0.3.0 — Spikenaut SNN runtime**.

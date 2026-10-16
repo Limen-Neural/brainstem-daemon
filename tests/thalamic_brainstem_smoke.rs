@@ -5,6 +5,8 @@
 //!
 //! Requires `--features corpus-ipc`. CPU-only; no GPU.
 
+#[path = "fixtures/temp_dir.rs"]
+mod temp_dir;
 #[path = "fixtures/thalamic_producer.rs"]
 mod thalamic;
 
@@ -20,37 +22,12 @@ use brainstem_daemon::{
     BackendPair, CollectingSpikeSink, HealthSnapshot, IngressPacket, StimulusSource,
 };
 use corpus_ipc::{IpcMessage, StimulusBatch};
+use temp_dir::TempDir;
 use thalamic::{StimulusTransport, ThalamicProducer};
 
 const CHANNELS: usize = 4;
 const LIF: usize = 4;
 const IZH: usize = 0;
-
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new(prefix: &str) -> Self {
-        // Cargo sets CARGO_TARGET_TMPDIR for tests; fall back to this crate's
-        // target/ so fixtures never use the shared system temp directory.
-        let root = std::env::var_os("CARGO_TARGET_TMPDIR").map_or_else(
-            || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"),
-            PathBuf::from,
-        );
-        let dir = root.join(format!("{prefix}-{}-{}", std::process::id(), now_ns()));
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
 
 struct QueuedStimulusSource {
     packets: VecDeque<Result<IngressPacket, String>>,
