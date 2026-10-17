@@ -233,6 +233,18 @@ No pre-registered check failed. The experiment did surface these weaknesses:
     gives the same pass/fail result on every check, and I1 passes.
   - **Runner.** The clean-tree guard ignores earlier result sets under
     `results/`, and step durations are recorded in milliseconds.
+- **Lint-only change after measurement.** A follow-up commit after the
+  results commit changes only static-analysis findings:
+  - `summarize.py` gets a single-line module docstring and names the
+    `"pass"` result field with a constant, to clear the Bandit B105 false
+    positive.
+  - The transport driver resolves its config path through a helper function.
+
+  Measurement logic and output are unchanged. The edited summarizer
+  reproduces `summary.json` for this run exactly, apart from
+  `measured_commit`, and the edited transport driver was smoke-tested
+  (200/200 probes sent, clean SIGTERM exit). The measured commit remains
+  `3fe3f42`.
 - **Development smoke runs.** Driver development included smoke runs of the
   unfinished drivers, written to scratch directories. They confirmed that the
   drivers ran and that the summarizer detects failures: an injected one-tick

@@ -35,6 +35,10 @@ use serde_json::{Value, json};
 use common::{TransportSpec, Workload};
 
 const CONFIG: &str = "experiments/usefulness/config/transport-live.toml";
+
+fn config_path() -> &'static Path {
+    Path::new(CONFIG)
+}
 const READY_DEADLINE: Duration = Duration::from_secs(10);
 const EXIT_BUDGET: Duration = Duration::from_secs(2);
 const EXIT_DEADLINE: Duration = Duration::from_secs(10);
@@ -383,8 +387,7 @@ fn capture_evidence(control: &str, pid: u32) -> Evidence {
 }
 
 fn start_session(args: &Args, spec: TransportSpec, channels: usize) -> Result<(Session, u64)> {
-    let config_path = Path::new(CONFIG);
-    let cfg = DaemonConfig::load(config_path)?;
+    let cfg = DaemonConfig::load(config_path())?;
     if cfg.tick_rate_hz != spec.tick_rate_hz {
         bail!("config tick_rate_hz != workload transport tick_rate_hz");
     }
