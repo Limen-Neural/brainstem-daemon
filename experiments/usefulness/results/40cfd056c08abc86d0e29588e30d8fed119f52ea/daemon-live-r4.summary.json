@@ -1,0 +1,94 @@
+{
+  "checkpoint": {
+    "content_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+    "model_id": "spikenaut-snn:usefulness-lif8x16-v1",
+    "schema_id": "spikenaut-sidecar-json/v1",
+    "source_path": "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json"
+  },
+  "config": "experiments/usefulness/config/live.toml",
+  "fixture_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+  "health": {
+    "checkpoint": {
+      "digest": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+      "id": "spikenaut-snn:usefulness-lif8x16-v1"
+    },
+    "fatal": null,
+    "input_freshness": {
+      "age_ms": 2,
+      "stale": false
+    },
+    "last_successful_tick_ms": 37,
+    "live": true,
+    "observed_at_ms": 37,
+    "phase": "running",
+    "queue_pressure": {
+      "capacity": 209,
+      "depth": 0,
+      "overloaded": false,
+      "ratio": 0.0
+    },
+    "ready": true,
+    "reasons": [],
+    "tick_age_ms": 0
+  },
+  "ingress": {
+    "control": {
+      "accepted": 0,
+      "coalesced": 0,
+      "dropped": 0,
+      "high_water_mark": 0,
+      "rejected": 0,
+      "shutdown_refused": 0
+    },
+    "reward": {
+      "accepted": 20,
+      "coalesced": 0,
+      "dropped": 0,
+      "high_water_mark": 1,
+      "rejected": 0,
+      "shutdown_refused": 0
+    },
+    "sensory": {
+      "accepted": 150,
+      "coalesced": 0,
+      "dropped": 0,
+      "high_water_mark": 1,
+      "rejected": 0,
+      "shutdown_refused": 0
+    },
+    "telemetry": {
+      "accepted": 0,
+      "coalesced": 0,
+      "dropped": 0,
+      "high_water_mark": 0,
+      "rejected": 0,
+      "shutdown_refused": 0
+    }
+  },
+  "mode": "daemon-live",
+  "modulator_frames_sent": 20,
+  "peak_rss_kb": 5168,
+  "pid": 15009,
+  "rss_kb": 4496,
+  "run_wall_ns": 37186722,
+  "runtime_stats": {
+    "accepted_batches": 150,
+    "diagnostic_emissions": 0,
+    "dropped_spikes": 0,
+    "emit_errors": 0,
+    "last_batch_id": 150,
+    "receive_errors": 0,
+    "rejected_batches": 0,
+    "suppressed_diagnostics": 0,
+    "ticks": 20000
+  },
+  "stimulus_frames_sent": 150,
+  "timing": {
+    "measured_ticks": 19000,
+    "measured_wall_ns": 35565098,
+    "ticks_per_s": 534231.6222494311,
+    "ticks_total": 20000,
+    "warmup_ticks_excluded": 1000
+  },
+  "workload": "experiments/usefulness/fixtures/workload.json"
+}
