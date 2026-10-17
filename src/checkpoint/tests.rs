@@ -111,7 +111,7 @@ fn live_loads_valid_sidecar_and_records_provenance() {
 
 #[test]
 fn live_rejects_sidecar_with_output_weights() {
-    // Fail closed: neuromod 0.6.0 has no Distill readout matrix, so a sidecar
+    // Fail closed: neuromod 0.7.0 has no Distill readout matrix, so a sidecar
     // carrying `output_weights` must be rejected loudly rather than silently
     // dropping trained readout weights on a "successful" load.
     let dir = unique_dir();

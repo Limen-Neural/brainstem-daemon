@@ -915,7 +915,7 @@ fn run_tick(
 
     // Note: decode_inputs already zero-fills any remaining channels when packet.stimuli is shorter.
 
-    // `step` is the thread-local RNG wrapper around 0.6 `step_with_rng`.
+    // `step` is the thread-local RNG wrapper around 0.7 `step_with_rng`.
     // The generator is not stored on the network and is not checkpointed.
     let spike_ids = match network.step(stimuli, &modulators) {
         Ok(spikes) => spikes,
@@ -2281,7 +2281,8 @@ mod tests {
 
     #[test]
     fn spiking_network_serde_matches_neuromod_06_contract() {
-        // #41 checkpoint loading must use this crates.io `neuromod` 0.6.0 shape.
+        // #41 checkpoint loading must use the crates.io `neuromod` self-describing
+        // shape. 0.7.0 keeps the 0.6.0 `stdp_config` / `eligibility` fields.
         // Do not fork `stdp_config` / `eligibility` in-tree.
         let network = SpikingNetwork::with_dimensions(2, 1, 2);
         let json = serde_json::to_value(&network).expect("serialize blank network");
@@ -2293,14 +2294,14 @@ mod tests {
         let eligibility = json["neurons"][0]
             .get("eligibility")
             .and_then(|e| e.as_array())
-            .expect("0.6.0 LIF neurons serialize eligibility traces");
+            .expect("LIF neurons serialize eligibility traces");
         assert_eq!(eligibility.len(), 2);
         let blank_trace = serde_json::to_value(neuromod::EligibilityTrace::default())
             .expect("serialize eligibility trace");
         assert_eq!(eligibility[0], blank_trace);
 
         let restored: SpikingNetwork =
-            serde_json::from_value(json).expect("deserialize neuromod 0.6 network");
+            serde_json::from_value(json).expect("deserialize neuromod network");
         assert_eq!(restored.num_channels, 2);
         assert_eq!(restored.neurons.len(), 2);
         assert_eq!(restored.iz_neurons.len(), 1);
