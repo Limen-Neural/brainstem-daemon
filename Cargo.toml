@@ -23,6 +23,7 @@ exclude = [
     ".codacy.yml",
     ".deepsource.toml",
     "docs/",
+    "experiments/",
 ]
 
 [package.metadata.docs.rs]
@@ -59,6 +60,16 @@ required-features = ["corpus-ipc"]
 
 [[test]]
 name = "pub_lifecycle"
+required-features = ["corpus-ipc"]
+
+# Usefulness experiment drivers (experiments/usefulness/). Not built by the
+# default stub gate.
+[[example]]
+name = "usefulness_inprocess"
+required-features = ["corpus-ipc"]
+
+[[example]]
+name = "usefulness_transport"
 required-features = ["corpus-ipc"]
 
 # Cargo profiles (dev / release / release-with-debug / test / bench).
