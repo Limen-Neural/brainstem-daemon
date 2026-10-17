@@ -24,7 +24,7 @@ STEPS="$OUT/steps.log"
 
 status=failed
 finish() {
-    python3 -I - "$OUT/identity.json" "$status" <<'PY'
+    python3 -I -B - "$OUT/identity.json" "$status" <<'PY'
 import json, sys, datetime
 path, status = sys.argv[1], sys.argv[2]
 identity = json.load(open(path))
@@ -50,7 +50,7 @@ step() {
     fi
 }
 
-python3 -I - "$OUT/identity.json" "$SHA" "$R_INPROCESS" "$R_TRANSPORT" "$TOOLCHAIN" <<'PY'
+python3 -I -B - "$OUT/identity.json" "$SHA" "$R_INPROCESS" "$R_TRANSPORT" "$TOOLCHAIN" <<'PY'
 import hashlib, json, os, platform, subprocess, sys, datetime, glob
 path, sha, r_in, r_tr, toolchain = sys.argv[1:6]
 def run(*cmd):
@@ -94,7 +94,7 @@ identity = {
 json.dump(identity, open(path, "w"), indent=2); open(path, "a").write("\n")
 PY
 
-step regenerate-fixture python3 -I "$EXP/make_fixture.py"
+step regenerate-fixture python3 -I -B "$EXP/make_fixture.py"
 step fixture-unchanged git diff --exit-code -- "$EXP/fixtures"
 step build env CC=gcc CXX=g++ cargo "+$TOOLCHAIN" build --locked --release --features corpus-ipc \
     --bin brainstem-daemon --example usefulness_inprocess --example usefulness_transport
@@ -117,5 +117,5 @@ for rep in $(seq 1 "$R_TRANSPORT"); do
     gzip -9 -n -f "$OUT/transport-live-r$rep.jsonl"
 done
 
-step summarize python3 -I "$EXP/summarize.py" "$OUT"
+step summarize python3 -I -B "$EXP/summarize.py" "$OUT"
 status=passed

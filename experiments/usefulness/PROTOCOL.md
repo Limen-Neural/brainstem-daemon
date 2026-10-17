@@ -180,9 +180,9 @@ sudo apt-get install -y build-essential curl pkg-config libzmq3-dev python3
 rustup toolchain install 1.98.1 --profile minimal
 cargo +1.98.1 fetch --locked
 # Verify the fixture and expectations regenerate byte-for-byte, then run.
-python3 -I experiments/usefulness/make_fixture.py && git diff --exit-code experiments/usefulness/fixtures
+python3 -I -B experiments/usefulness/make_fixture.py && git diff --exit-code experiments/usefulness/fixtures
 experiments/usefulness/run.sh                      # refuses a dirty tree
-python3 -I experiments/usefulness/summarize.py experiments/usefulness/results/<sha>
+python3 -I -B experiments/usefulness/summarize.py experiments/usefulness/results/<sha>
 ```
 
 `run.sh` records the commit SHA, `rustc`/`cargo` versions, kernel, CPU model
