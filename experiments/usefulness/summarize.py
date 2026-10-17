@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""
-Summarize usefulness-experiment raw results against PROTOCOL.md.
+"""Summarize usefulness-experiment raw results against PROTOCOL.md."""
 
-Standard library only. Usage: summarize.py experiments/usefulness/results/<sha>
-
-Writes summary.json and summary.md into that directory. Every number is
-measured from raw files unless its key or label says "derived". Exits 0 when
-the summary was produced, whether checks pass or fail (a negative result is
-valid), and nonzero only when raw inputs are missing or malformed.
-
-A check that no run evaluated fails ("not evaluated"); check I1 fails when the
-pre-registered run inventory (5 reps per in-process family, 3 transport reps)
-is incomplete, so missing evidence can never read as a pass.
-"""
+# Standard library only. Usage: summarize.py experiments/usefulness/results/<sha>
+#
+# Writes summary.json and summary.md into that directory. Every number is
+# measured from raw files unless its key or label says "derived". Exits 0 when
+# the summary was produced, whether checks pass or fail (a negative result is
+# valid), and nonzero only when raw inputs are missing or malformed.
+#
+# A check that no run evaluated fails ("not evaluated"); check I1 fails when the
+# pre-registered run inventory (5 reps per in-process family, 3 transport reps)
+# is incomplete, so missing evidence can never read as a pass.
 
 import bisect
 import json
@@ -24,6 +22,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WORKLOAD = os.path.join(HERE, "fixtures", "workload.json")
 MANIFEST = os.path.join(HERE, "fixtures", "fixture-manifest.json")
 SUMMARY_SUFFIX = ".summary.json"
+USAGE = "usage: summarize.py experiments/usefulness/results/<sha>"
+# Result field holding a check's pass/fail flag in summary.json.
+RESULT_FIELD = "pass"
 
 TICK_BUDGET_NS = 1_000_000  # 1 kHz
 MIN_TICKS_PER_S = 1_000
@@ -103,17 +104,17 @@ class Checks:
 
     def add(self, key, ok, detail):
         """Record one evaluation of `key`; keep the detail only on failure."""
-        item = self.items.setdefault(key, {"pass": True, "details": []})
+        item = self.items.setdefault(key, {RESULT_FIELD: True, "details": []})
         if not ok:
-            item["pass"] = False
+            item[RESULT_FIELD] = False
             item["details"].append(detail)
 
     def result(self, key):
         """Return the final result; an unevaluated check fails."""
         item = self.items.get(key)
         if item is None:
-            return {"pass": False, "details": ["not evaluated: required runs missing"]}
-        return {"pass": item["pass"], "details": item["details"][:10] or [OK_TEXT[key]]}
+            return {RESULT_FIELD: False, "details": ["not evaluated: required runs missing"]}
+        return {RESULT_FIELD: item[RESULT_FIELD], "details": item["details"][:10] or [OK_TEXT[key]]}
 
 
 # ── Workload re-expansion (independent of the Rust drivers) ──────────────────
@@ -522,7 +523,7 @@ def render_checks(summary):
     lines = ["## Pre-registered checks", "", "| Check | Result | Detail |", "|---|---|---|"]
     for key, item in summary["checks"].items():
         detail = "; ".join(item["details"])[:300].replace("|", "\\|")
-        lines.append(f"| {key} | {'PASS' if item['pass'] else 'FAIL'} | {detail} |")
+        lines.append(f"| {key} | {'PASS' if item[RESULT_FIELD] else 'FAIL'} | {detail} |")
     return lines
 
 
@@ -578,7 +579,7 @@ def decide(checks):
     """Return (ordered check results, mechanical decision)."""
     order = ["I1"] + [f"C{i}" for i in range(1, 13)] + ["T1", "T2", "T3", "P1", "P2"]
     ordered = {k: checks.result(k) for k in order}
-    failed = [k for k, v in ordered.items() if not v["pass"]]
+    failed = [k for k, v in ordered.items() if not v[RESULT_FIELD]]
     if not failed:
         return ordered, "supports further development"
     return ordered, "change of direction or blocked (failed: " + ", ".join(failed) + ")"
@@ -587,7 +588,7 @@ def decide(checks):
 def main():
     """Summarize one results directory."""
     if len(sys.argv) != 2:
-        raise SystemExit(__doc__)
+        raise SystemExit(USAGE)
     results = sys.argv[1]
     raw = os.path.join(results, "raw")
     workload, manifest = load_json(WORKLOAD), load_json(MANIFEST)
