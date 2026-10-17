@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Pre-registered, reproducible usefulness experiment under
+  `experiments/usefulness/` comparing the daemon with a direct-engine baseline
+  on a synthetic untrained fixture, with raw results and a report (#70).
 - CPU-only Linux qualification of the real PUB binary lifecycle under SIGTERM
   and SIGINT, including absent/stalled subscribers, clean exit and port release
   (#68). Strengthened socket tests cover finite-linger teardown, failed-send

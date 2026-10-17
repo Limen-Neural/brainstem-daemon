@@ -28,3 +28,7 @@ ship_memory.json
 .cursor/
 .claude/
 .kilo/
+
+# Experiment evidence: step, command and daemon logs under results/ are
+# committed alongside the raw data they explain.
+!experiments/usefulness/results/**/*.log

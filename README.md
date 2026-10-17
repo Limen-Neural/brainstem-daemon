@@ -344,6 +344,14 @@ The allowed software artifact is the Distill sidecar JSON published as Hugging F
 
 Live restore copies LIF weights, membrane, `last_spike`, `decay_rate`, and `threshold` (also seeding `base_threshold`) and sets `RmStdpConfig.reward_lr = 0` so dopamine-gated R-STDP cannot retrain the Distill matrix. `neuromod` 0.7.0 `SpikingNetwork::step` still assigns `decay_rate` from acetylcholine, blends `threshold` toward `0.05..=0.50`, and L1-renormalizes rows whose weights already sum above `1e-6`. Those are engine contracts; this crate does not fork `step`.
 
+### Usefulness experiment
+
+[`experiments/usefulness/`](experiments/usefulness/) holds a pre-registered,
+repository-local experiment that compares the daemon with a direct-engine
+baseline on a synthetic, untrained fixture (`PROTOCOL.md`, `run.sh`,
+`summarize.py`, `REPORT.md`). It measures runtime correctness, latency,
+throughput, and memory; it is not release qualification.
+
 ### Thalamic → corpus-ipc → Brainstem smoke
 
 CPU-only integration coverage (no GPU) lives in `tests/thalamic_brainstem_smoke.rs` and is gated on `--features corpus-ipc` so default stub tests never need `libzmq`.
