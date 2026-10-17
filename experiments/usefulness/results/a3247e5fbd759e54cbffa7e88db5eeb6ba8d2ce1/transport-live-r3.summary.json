@@ -1,0 +1,2264 @@
+{
+  "config": "experiments/usefulness/config/transport-live.toml",
+  "daemon_binary": "/root/workspace/target/release/brainstem-daemon",
+  "daemon_log": "experiments/usefulness/results/a3247e5fbd759e54cbffa7e88db5eeb6ba8d2ce1/transport-live-r3.daemon.log",
+  "daemon_peak_rss_kb": 6988,
+  "daemon_pid": 4918,
+  "daemon_rss_kb": 6988,
+  "exit_code": 0,
+  "extra_nonempty": 0,
+  "fixture_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+  "frames_received_total": 9205,
+  "health_json": {
+    "checkpoint": {
+      "digest": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+      "id": "spikenaut-snn:usefulness-lif8x16-v1"
+    },
+    "fatal": null,
+    "input_freshness": {
+      "age_ms": 269,
+      "stale": false
+    },
+    "last_successful_tick_ms": 9395,
+    "live": true,
+    "observed_at_ms": 9395,
+    "phase": "running",
+    "queue_pressure": {
+      "capacity": 209,
+      "depth": 0,
+      "overloaded": false,
+      "ratio": 0.0
+    },
+    "ready": true,
+    "reasons": [],
+    "tick_age_ms": 0
+  },
+  "health_status": 200,
+  "latency_ns": {
+    "count": 200,
+    "max": 2832991,
+    "min": 313651,
+    "p50": 1107524,
+    "p99": 1856857
+  },
+  "lost": 0,
+  "matched": 200,
+  "measured_frames_empty": 4045,
+  "measured_frames_nonempty": 200,
+  "measured_frames_total": 4245,
+  "metrics_status": 200,
+  "metrics_text": "# HELP brainstem_live 1 if the process health reporter is running.\n# TYPE brainstem_live gauge\nbrainstem_live 1\n# HELP brainstem_ready 1 if initialized, checkpoint-valid, not draining, not fatal.\n# TYPE brainstem_ready gauge\nbrainstem_ready 1\n# HELP brainstem_phase 1 for the current health phase.\n# TYPE brainstem_phase gauge\nbrainstem_phase{phase=\"starting\"} 0\nbrainstem_phase{phase=\"loading_checkpoint\"} 0\nbrainstem_phase{phase=\"running\"} 1\nbrainstem_phase{phase=\"degraded\"} 0\nbrainstem_phase{phase=\"draining\"} 0\nbrainstem_phase{phase=\"fatal\"} 0\n# HELP brainstem_degraded Recoverable degradation by stable reason code.\n# TYPE brainstem_degraded gauge\nbrainstem_degraded{reason=\"stale_input\"} 0\nbrainstem_degraded{reason=\"overload\"} 0\n# HELP brainstem_fatal 1 if this process has entered a sticky fatal state.\n# TYPE brainstem_fatal gauge\nbrainstem_fatal 0\n# HELP brainstem_last_successful_tick_ms Milliseconds from process start until the last successful tick (not tick age); NaN if none yet.\n# TYPE brainstem_last_successful_tick_ms gauge\nbrainstem_last_successful_tick_ms 9395\n# HELP brainstem_tick_age_ms Milliseconds since the last successful tick; NaN if none yet.\n# TYPE brainstem_tick_age_ms gauge\nbrainstem_tick_age_ms 0\n# HELP brainstem_input_age_ms Age of last ingress (or checkpoint, if none) in milliseconds; NaN if none yet.\n# TYPE brainstem_input_age_ms gauge\nbrainstem_input_age_ms 269\n# HELP brainstem_queue_depth Ingress queue depth.\n# TYPE brainstem_queue_depth gauge\nbrainstem_queue_depth 0\n# HELP brainstem_queue_capacity Ingress queue capacity.\n# TYPE brainstem_queue_capacity gauge\nbrainstem_queue_capacity 209\n",
+  "mismatched": 0,
+  "mode": "transport-live",
+  "per_pulse": [
+    {
+      "channel": 0,
+      "latency_ns": 1060594,
+      "matched": true,
+      "pulse": 0,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1095224,
+      "matched": true,
+      "pulse": 1,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1116334,
+      "matched": true,
+      "pulse": 2,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1078004,
+      "matched": true,
+      "pulse": 3,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1080884,
+      "matched": true,
+      "pulse": 4,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1082574,
+      "matched": true,
+      "pulse": 5,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1141204,
+      "matched": true,
+      "pulse": 6,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1043605,
+      "matched": true,
+      "pulse": 7,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1113664,
+      "matched": true,
+      "pulse": 8,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1079214,
+      "matched": true,
+      "pulse": 9,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1088094,
+      "matched": true,
+      "pulse": 10,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1058744,
+      "matched": true,
+      "pulse": 11,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1111624,
+      "matched": true,
+      "pulse": 12,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1118164,
+      "matched": true,
+      "pulse": 13,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1109544,
+      "matched": true,
+      "pulse": 14,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1113704,
+      "matched": true,
+      "pulse": 15,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1136735,
+      "matched": true,
+      "pulse": 16,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1086174,
+      "matched": true,
+      "pulse": 17,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1111735,
+      "matched": true,
+      "pulse": 18,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1104224,
+      "matched": true,
+      "pulse": 19,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1130604,
+      "matched": true,
+      "pulse": 20,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1104145,
+      "matched": true,
+      "pulse": 21,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1144785,
+      "matched": true,
+      "pulse": 22,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1061004,
+      "matched": true,
+      "pulse": 23,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1107855,
+      "matched": true,
+      "pulse": 24,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1119134,
+      "matched": true,
+      "pulse": 25,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1131805,
+      "matched": true,
+      "pulse": 26,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1109744,
+      "matched": true,
+      "pulse": 27,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1109495,
+      "matched": true,
+      "pulse": 28,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1084214,
+      "matched": true,
+      "pulse": 29,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1092775,
+      "matched": true,
+      "pulse": 30,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1104224,
+      "matched": true,
+      "pulse": 31,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1100674,
+      "matched": true,
+      "pulse": 32,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1070824,
+      "matched": true,
+      "pulse": 33,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1102554,
+      "matched": true,
+      "pulse": 34,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1110504,
+      "matched": true,
+      "pulse": 35,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1092804,
+      "matched": true,
+      "pulse": 36,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1122194,
+      "matched": true,
+      "pulse": 37,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1028424,
+      "matched": true,
+      "pulse": 38,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1088065,
+      "matched": true,
+      "pulse": 39,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1063054,
+      "matched": true,
+      "pulse": 40,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1156854,
+      "matched": true,
+      "pulse": 41,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1856857,
+      "matched": true,
+      "pulse": 42,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1153775,
+      "matched": true,
+      "pulse": 43,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1144894,
+      "matched": true,
+      "pulse": 44,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1130304,
+      "matched": true,
+      "pulse": 45,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1102484,
+      "matched": true,
+      "pulse": 46,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1136004,
+      "matched": true,
+      "pulse": 47,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1110214,
+      "matched": true,
+      "pulse": 48,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1073934,
+      "matched": true,
+      "pulse": 49,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1098015,
+      "matched": true,
+      "pulse": 50,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1110394,
+      "matched": true,
+      "pulse": 51,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1095544,
+      "matched": true,
+      "pulse": 52,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1123735,
+      "matched": true,
+      "pulse": 53,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1137104,
+      "matched": true,
+      "pulse": 54,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1140185,
+      "matched": true,
+      "pulse": 55,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1128474,
+      "matched": true,
+      "pulse": 56,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1129375,
+      "matched": true,
+      "pulse": 57,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1096744,
+      "matched": true,
+      "pulse": 58,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1070934,
+      "matched": true,
+      "pulse": 59,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1081754,
+      "matched": true,
+      "pulse": 60,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1137954,
+      "matched": true,
+      "pulse": 61,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1098584,
+      "matched": true,
+      "pulse": 62,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1126424,
+      "matched": true,
+      "pulse": 63,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1039244,
+      "matched": true,
+      "pulse": 64,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1073874,
+      "matched": true,
+      "pulse": 65,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1081475,
+      "matched": true,
+      "pulse": 66,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1088634,
+      "matched": true,
+      "pulse": 67,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1078104,
+      "matched": true,
+      "pulse": 68,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1128275,
+      "matched": true,
+      "pulse": 69,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1087794,
+      "matched": true,
+      "pulse": 70,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1130454,
+      "matched": true,
+      "pulse": 71,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1079855,
+      "matched": true,
+      "pulse": 72,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1106574,
+      "matched": true,
+      "pulse": 73,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1085015,
+      "matched": true,
+      "pulse": 74,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1160324,
+      "matched": true,
+      "pulse": 75,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 722383,
+      "matched": true,
+      "pulse": 76,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 2832991,
+      "matched": true,
+      "pulse": 77,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1533416,
+      "matched": true,
+      "pulse": 78,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1132095,
+      "matched": true,
+      "pulse": 79,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1112035,
+      "matched": true,
+      "pulse": 80,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 825803,
+      "matched": true,
+      "pulse": 81,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1058204,
+      "matched": true,
+      "pulse": 82,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1109614,
+      "matched": true,
+      "pulse": 83,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1107524,
+      "matched": true,
+      "pulse": 84,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1108295,
+      "matched": true,
+      "pulse": 85,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1135654,
+      "matched": true,
+      "pulse": 86,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1108714,
+      "matched": true,
+      "pulse": 87,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1079084,
+      "matched": true,
+      "pulse": 88,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1105565,
+      "matched": true,
+      "pulse": 89,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1100114,
+      "matched": true,
+      "pulse": 90,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1081474,
+      "matched": true,
+      "pulse": 91,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1127854,
+      "matched": true,
+      "pulse": 92,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1090914,
+      "matched": true,
+      "pulse": 93,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1076674,
+      "matched": true,
+      "pulse": 94,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1123315,
+      "matched": true,
+      "pulse": 95,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1150705,
+      "matched": true,
+      "pulse": 96,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1157135,
+      "matched": true,
+      "pulse": 97,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1093165,
+      "matched": true,
+      "pulse": 98,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1090274,
+      "matched": true,
+      "pulse": 99,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1105004,
+      "matched": true,
+      "pulse": 100,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1069054,
+      "matched": true,
+      "pulse": 101,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1061175,
+      "matched": true,
+      "pulse": 102,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1109855,
+      "matched": true,
+      "pulse": 103,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1089084,
+      "matched": true,
+      "pulse": 104,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1079055,
+      "matched": true,
+      "pulse": 105,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1120345,
+      "matched": true,
+      "pulse": 106,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1092144,
+      "matched": true,
+      "pulse": 107,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1090024,
+      "matched": true,
+      "pulse": 108,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1110965,
+      "matched": true,
+      "pulse": 109,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1115814,
+      "matched": true,
+      "pulse": 110,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1126704,
+      "matched": true,
+      "pulse": 111,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1116815,
+      "matched": true,
+      "pulse": 112,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1121484,
+      "matched": true,
+      "pulse": 113,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1092844,
+      "matched": true,
+      "pulse": 114,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1084705,
+      "matched": true,
+      "pulse": 115,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1119494,
+      "matched": true,
+      "pulse": 116,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1120125,
+      "matched": true,
+      "pulse": 117,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1096524,
+      "matched": true,
+      "pulse": 118,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 860623,
+      "matched": true,
+      "pulse": 119,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1095034,
+      "matched": true,
+      "pulse": 120,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1087975,
+      "matched": true,
+      "pulse": 121,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1061674,
+      "matched": true,
+      "pulse": 122,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1083404,
+      "matched": true,
+      "pulse": 123,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1087345,
+      "matched": true,
+      "pulse": 124,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1107715,
+      "matched": true,
+      "pulse": 125,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1133394,
+      "matched": true,
+      "pulse": 126,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1082044,
+      "matched": true,
+      "pulse": 127,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1070854,
+      "matched": true,
+      "pulse": 128,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1078964,
+      "matched": true,
+      "pulse": 129,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1056504,
+      "matched": true,
+      "pulse": 130,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1072554,
+      "matched": true,
+      "pulse": 131,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1513526,
+      "matched": true,
+      "pulse": 132,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 2221508,
+      "matched": true,
+      "pulse": 133,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1094165,
+      "matched": true,
+      "pulse": 134,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1108894,
+      "matched": true,
+      "pulse": 135,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1136054,
+      "matched": true,
+      "pulse": 136,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1114874,
+      "matched": true,
+      "pulse": 137,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1151315,
+      "matched": true,
+      "pulse": 138,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1152134,
+      "matched": true,
+      "pulse": 139,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1111455,
+      "matched": true,
+      "pulse": 140,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1115505,
+      "matched": true,
+      "pulse": 141,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 313651,
+      "matched": true,
+      "pulse": 142,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1095035,
+      "matched": true,
+      "pulse": 143,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1130884,
+      "matched": true,
+      "pulse": 144,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1114225,
+      "matched": true,
+      "pulse": 145,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1133564,
+      "matched": true,
+      "pulse": 146,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1107045,
+      "matched": true,
+      "pulse": 147,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1115404,
+      "matched": true,
+      "pulse": 148,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1117444,
+      "matched": true,
+      "pulse": 149,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1218234,
+      "matched": true,
+      "pulse": 150,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1097894,
+      "matched": true,
+      "pulse": 151,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1095955,
+      "matched": true,
+      "pulse": 152,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1094504,
+      "matched": true,
+      "pulse": 153,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1084665,
+      "matched": true,
+      "pulse": 154,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1129505,
+      "matched": true,
+      "pulse": 155,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1205235,
+      "matched": true,
+      "pulse": 156,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1126654,
+      "matched": true,
+      "pulse": 157,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1086544,
+      "matched": true,
+      "pulse": 158,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1142735,
+      "matched": true,
+      "pulse": 159,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1088434,
+      "matched": true,
+      "pulse": 160,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1137415,
+      "matched": true,
+      "pulse": 161,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1111015,
+      "matched": true,
+      "pulse": 162,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1128004,
+      "matched": true,
+      "pulse": 163,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1118714,
+      "matched": true,
+      "pulse": 164,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1149684,
+      "matched": true,
+      "pulse": 165,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1126945,
+      "matched": true,
+      "pulse": 166,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1084754,
+      "matched": true,
+      "pulse": 167,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1110204,
+      "matched": true,
+      "pulse": 168,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1113985,
+      "matched": true,
+      "pulse": 169,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1088154,
+      "matched": true,
+      "pulse": 170,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1145685,
+      "matched": true,
+      "pulse": 171,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1091494,
+      "matched": true,
+      "pulse": 172,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1059814,
+      "matched": true,
+      "pulse": 173,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1137075,
+      "matched": true,
+      "pulse": 174,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1136224,
+      "matched": true,
+      "pulse": 175,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1088475,
+      "matched": true,
+      "pulse": 176,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1103394,
+      "matched": true,
+      "pulse": 177,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1128375,
+      "matched": true,
+      "pulse": 178,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1148704,
+      "matched": true,
+      "pulse": 179,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1101445,
+      "matched": true,
+      "pulse": 180,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1152084,
+      "matched": true,
+      "pulse": 181,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1143104,
+      "matched": true,
+      "pulse": 182,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1147915,
+      "matched": true,
+      "pulse": 183,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 863293,
+      "matched": true,
+      "pulse": 184,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1092375,
+      "matched": true,
+      "pulse": 185,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1089734,
+      "matched": true,
+      "pulse": 186,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1101664,
+      "matched": true,
+      "pulse": 187,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1112024,
+      "matched": true,
+      "pulse": 188,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1083844,
+      "matched": true,
+      "pulse": 189,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1129924,
+      "matched": true,
+      "pulse": 190,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1108225,
+      "matched": true,
+      "pulse": 191,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    },
+    {
+      "channel": 0,
+      "latency_ns": 1144924,
+      "matched": true,
+      "pulse": 192,
+      "received": [
+        0,
+        8,
+        15
+      ]
+    },
+    {
+      "channel": 1,
+      "latency_ns": 1094224,
+      "matched": true,
+      "pulse": 193,
+      "received": [
+        1,
+        8,
+        9
+      ]
+    },
+    {
+      "channel": 2,
+      "latency_ns": 1089015,
+      "matched": true,
+      "pulse": 194,
+      "received": [
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "channel": 3,
+      "latency_ns": 1090084,
+      "matched": true,
+      "pulse": 195,
+      "received": [
+        3,
+        10,
+        11
+      ]
+    },
+    {
+      "channel": 4,
+      "latency_ns": 1140015,
+      "matched": true,
+      "pulse": 196,
+      "received": [
+        4,
+        11,
+        12
+      ]
+    },
+    {
+      "channel": 5,
+      "latency_ns": 1074155,
+      "matched": true,
+      "pulse": 197,
+      "received": [
+        5,
+        12,
+        13
+      ]
+    },
+    {
+      "channel": 6,
+      "latency_ns": 1089045,
+      "matched": true,
+      "pulse": 198,
+      "received": [
+        6,
+        13,
+        14
+      ]
+    },
+    {
+      "channel": 7,
+      "latency_ns": 1105895,
+      "matched": true,
+      "pulse": 199,
+      "received": [
+        7,
+        14,
+        15
+      ]
+    }
+  ],
+  "prime_attempts": 1,
+  "prime_frames": 141,
+  "pulse_spacing_ns": 20000000,
+  "pulses_sent": 200,
+  "ready_after_ns": 10217740,
+  "sigterm_exit_ns": 5904534,
+  "subscribe_frames": 4819,
+  "termination_logged": true,
+  "workload": "experiments/usefulness/fixtures/workload.json"
+}
