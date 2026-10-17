@@ -1,7 +1,8 @@
-"""Hand-written reference of the `neuromod` 0.6.0 LIF bank, used only to
-derive expected spike sets for the synthetic fixture.
+"""
+Hand-written reference of the `neuromod` LIF bank used to derive expected spike sets.
 
-It follows the documented order of work in `SpikingNetwork::step` for an
+It follows the documented order of work in `SpikingNetwork::step` (crates.io
+`neuromod` 0.7.0; this normal-mode pipeline is unchanged from 0.6.0) for an
 LIF-only network with `reward_lr = 0.0` (the loader's inference setting):
 
 1. stress = max(1 - NE, 0.1); lr = 0.5 * DA
@@ -110,6 +111,6 @@ class ReferenceNetwork:
         if not spikes:
             return
         fired = set(spikes)
-        for i in range(len(self.v)):
+        for i, potential in enumerate(self.v):
             if i not in fired:
-                self.v[i] = max(self.v[i] - INHIBITION, 0.0)
+                self.v[i] = max(potential - INHIBITION, 0.0)

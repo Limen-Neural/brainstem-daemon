@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Turn raw usefulness-experiment results into the pre-registered checks and
-metrics (PROTOCOL.md §4–§6). Standard library only.
+"""
+Turn raw usefulness-experiment results into the pre-registered checks and metrics.
+
+See PROTOCOL.md §4–§6. Standard library only.
 
 Usage: summarize.py <results-dir>
 Writes <results-dir>/summary.json and <results-dir>/summary.md.
@@ -343,13 +345,15 @@ def decision_value(flags, have_live, have_transport):
 def decide(runs, transport):
     """Decision block: the four gate flags and the rule's outcome."""
     live = [r for r in runs.values() if r["mode"] == "daemon-live"]
+    # Every in-process mode must be present; a missing group cannot pass vacuously.
+    groups_present = all(count_mode(runs, mode) > 0 for mode in MODES)
     flags = {
-        "correctness_all_pass": all([bool(live), all(r["all_checks_pass"] for r in runs.values())]),
+        "correctness_all_pass": all([groups_present, all(r["all_checks_pass"] for r in runs.values())]),
         "transport_all_pass": all([bool(transport), all(t["all_checks_pass"] for t in transport.values())]),
         "tick_budget_all_pass": all([bool(live), all(r["metrics"]["budget_p99_within_1ms"]["value"] for r in live)]),
         "transport_budget_all_pass": all([bool(transport), all(transport_budget_ok(t) for t in transport.values())]),
     }
-    value = decision_value(flags, bool(live), bool(transport))
+    value = decision_value(flags, groups_present, bool(transport))
     return {"value": value, **flags, "label": "derived"}
 
 

@@ -3,95 +3,36 @@
 
 //! Transport driver for the usefulness experiment (`experiments/usefulness`).
 //!
-//! Launches the `corpus-ipc` `brainstem-daemon` binary built next to this
-//! example (`target/<profile>/brainstem-daemon`) with the `transport-live`
-//! configuration, binds an external ZeroMQ producer on the daemon's SUB
-//! endpoint, subscribes to the daemon PUB, waits for `/readyz`, primes the
-//! PUB/SUB handshake, sends the measured pulses with fresh timestamps,
-//! collects every output frame, reads `/metrics`, `/health` and the daemon
-//! RSS, then stops the daemon with SIGTERM.
-//!
-//! Usage: `usefulness_transport <config.toml> <workload.json> <out.jsonl> <summary.json>`
+//! Launches the `corpus-ipc` `brainstem-daemon` binary (`--daemon`) with the
+//! `transport-live` configuration, binds an external ZeroMQ producer on the
+//! daemon's SUB endpoint, subscribes to the daemon PUB, waits for `/readyz`,
+//! primes the PUB/SUB handshake, sends the measured pulses with fresh
+//! timestamps, collects every output frame, reads `/metrics`, `/health` and
+//! the daemon RSS, then stops the daemon with SIGTERM.
 //!
 //! Requires `--features corpus-ipc`. Linux only (`/proc/<pid>/status`, `sh`).
 
-use std::collections::HashMap;
+mod usefulness_common;
+
 use std::fs;
-use std::io::{BufWriter, Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::io::{BufWriter, Write};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use brainstem_daemon::daemon::DaemonConfig;
-use brainstem_daemon::ingress::STIMULUS_SCHEMA;
-use corpus_ipc::{BatchMetadata, IpcMessage, StimulusBatch};
-use serde::Deserialize;
+use clap::Parser;
 use serde_json::{Value, json};
+use usefulness_common::frames::{Frame, Phase, collect_frames};
+use usefulness_common::process::{DaemonProcess, http_get};
+use usefulness_common::{Workload, percentile, stimulus_frame, vm_status_kb, write_json};
 
-const READY_DEADLINE: Duration = Duration::from_secs(10);
-const EXIT_DEADLINE: Duration = Duration::from_secs(10);
 const SUBSCRIBE_DEADLINE: Duration = Duration::from_secs(5);
 const PRIME_ATTEMPTS: usize = 200;
 const PRIME_WAIT: Duration = Duration::from_millis(100);
 const TAIL_WAIT: Duration = Duration::from_millis(250);
-const HTTP_TIMEOUT: Duration = Duration::from_millis(200);
 const SESSION_ID: &str = "usefulness-transport";
-
-#[derive(Debug, Deserialize)]
-struct Transport {
-    pulse_spacing_ticks: u64,
-    pulses: u64,
-    amplitude: f32,
-    expected_by_channel: HashMap<String, Vec<u16>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Workload {
-    fixture_sha256: String,
-    channels: usize,
-    transport: Transport,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Phase {
-    Subscribe,
-    Prime,
-    Measure,
-    Tail,
-}
-
-impl Phase {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Subscribe => "subscribe",
-            Self::Prime => "prime",
-            Self::Measure => "measure",
-            Self::Tail => "tail",
-        }
-    }
-
-    /// Frames that count toward the measurement (measured pulses and their tail).
-    fn measured(self) -> bool {
-        matches!(self, Self::Measure | Self::Tail)
-    }
-}
-
-#[derive(Debug)]
-struct Frame {
-    phase: Phase,
-    recv: Instant,
-    channels: Vec<u16>,
-    batch_id: u64,
-    timestamp: u64,
-}
-
-impl Frame {
-    fn measured_nonempty(&self) -> bool {
-        self.phase.measured() && !self.channels.is_empty()
-    }
-}
 
 struct Pulse {
     index: usize,
@@ -99,261 +40,21 @@ struct Pulse {
     sent_at: Instant,
 }
 
+/// Transport usefulness experiment driver (real binary over ZeroMQ).
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
 struct Args {
+    /// The `corpus-ipc` `brainstem-daemon` binary to launch.
+    #[arg(long)]
+    daemon: PathBuf,
+    /// Daemon TOML configuration (`transport-live.toml`).
     config: PathBuf,
+    /// Workload JSON from `experiments/usefulness/fixtures`.
     workload: PathBuf,
+    /// Per-frame JSONL output; the daemon log goes next to it.
     records: PathBuf,
+    /// Run summary JSON output.
     summary: PathBuf,
-}
-
-fn parse_args() -> Result<Args> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 5 {
-        bail!(
-            "usage: {} <config.toml> <workload.json> <out.jsonl> <summary.json>",
-            args[0]
-        );
-    }
-    Ok(Args {
-        config: PathBuf::from(&args[1]),
-        workload: PathBuf::from(&args[2]),
-        records: PathBuf::from(&args[3]),
-        summary: PathBuf::from(&args[4]),
-    })
-}
-
-/// The daemon binary built alongside this example:
-/// `target/<profile>/examples/usefulness_transport` → `target/<profile>/brainstem-daemon`.
-fn daemon_binary() -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("current_exe")?;
-    let profile_dir = exe
-        .parent()
-        .and_then(Path::parent)
-        .context("example path has no target directory")?;
-    let binary = profile_dir.join("brainstem-daemon");
-    if !binary.is_file() {
-        bail!(
-            "daemon binary not found at {} (build with --features corpus-ipc --bin brainstem-daemon)",
-            binary.display()
-        );
-    }
-    Ok(binary)
-}
-
-struct Daemon {
-    child: Option<Child>,
-    spawned_at: Instant,
-}
-
-impl Daemon {
-    fn spawn(binary: &Path, config: &Path, log_path: &Path) -> Result<Self> {
-        // tracing-subscriber writes to stdout; capture both streams in one file.
-        let log = fs::File::create(log_path)
-            .with_context(|| format!("create daemon log {}", log_path.display()))?;
-        let log_err = log.try_clone()?;
-        let child = Command::new(binary)
-            .arg("--config")
-            .arg(config)
-            .env("RUST_LOG", "info")
-            .stdout(Stdio::from(log))
-            .stderr(Stdio::from(log_err))
-            .spawn()
-            .with_context(|| format!("spawn {}", binary.display()))?;
-        Ok(Self {
-            child: Some(child),
-            spawned_at: Instant::now(),
-        })
-    }
-
-    fn pid(&self) -> u32 {
-        self.child.as_ref().map_or(0, Child::id)
-    }
-
-    fn exited(&mut self) -> Result<bool> {
-        Ok(self
-            .child
-            .as_mut()
-            .context("daemon already reaped")?
-            .try_wait()?
-            .is_some())
-    }
-
-    fn ready(&mut self, control: SocketAddr) -> Result<bool> {
-        if self.exited()? {
-            bail!("daemon exited before becoming ready");
-        }
-        Ok(http_get(control, "/readyz")?.is_some_and(|(status, _)| status == 200))
-    }
-
-    fn wait_ready(&mut self, control: SocketAddr) -> Result<Duration> {
-        let deadline = Instant::now() + READY_DEADLINE;
-        while !self.ready(control)? {
-            if Instant::now() > deadline {
-                bail!("daemon never reported ready on {control}");
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        Ok(self.spawned_at.elapsed())
-    }
-
-    /// SIGTERM through the shell builtin (minimal images have no `kill`
-    /// binary). The pid is a positional parameter, never part of the script.
-    fn send_sigterm(&self) -> Result<()> {
-        let pid = self.pid().to_string();
-        let status = Command::new("sh")
-            .args(["-c", r#"kill -TERM "$1""#, "sigterm", &pid])
-            .status()
-            .context("run sh kill")?;
-        if !status.success() {
-            bail!("kill -TERM {pid} failed: {status}");
-        }
-        Ok(())
-    }
-
-    fn terminate(&mut self) -> Result<(Duration, Option<i32>)> {
-        let sent = Instant::now();
-        self.send_sigterm()?;
-        let deadline = sent + EXIT_DEADLINE;
-        while !self.exited()? {
-            if Instant::now() > deadline {
-                bail!("daemon did not exit within {EXIT_DEADLINE:?} after SIGTERM");
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let exit = sent.elapsed();
-        let status = self.child.take().context("daemon already reaped")?.wait()?;
-        Ok((exit, status.code()))
-    }
-}
-
-impl Drop for Daemon {
-    fn drop(&mut self) {
-        if let Some(child) = &mut self.child {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
-fn parse_http(response: &str) -> (u16, String) {
-    let status = response
-        .split_whitespace()
-        .nth(1)
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(0);
-    let body = response
-        .split_once("\r\n\r\n")
-        .map_or_else(String::default, |(_, body)| body.to_string());
-    (status, body)
-}
-
-fn http_get(address: SocketAddr, path: &str) -> Result<Option<(u16, String)>> {
-    let Ok(mut stream) = TcpStream::connect_timeout(&address, HTTP_TIMEOUT) else {
-        return Ok(None);
-    };
-    stream.set_read_timeout(Some(HTTP_TIMEOUT))?;
-    stream.set_write_timeout(Some(HTTP_TIMEOUT))?;
-    let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-    let mut raw = Vec::with_capacity(4096);
-    let exchanged = stream
-        .write_all(request.as_bytes())
-        .and_then(|()| stream.read_to_end(&mut raw));
-    if exchanged.is_err() {
-        return Ok(None);
-    }
-    Ok(Some(parse_http(&String::from_utf8_lossy(&raw))))
-}
-
-fn now_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
-}
-
-fn pulse_frame(channels: usize, channel: usize, amplitude: f32, batch_id: u64) -> Result<Vec<u8>> {
-    let mut values = vec![0.0f32; channels];
-    values[channel] = amplitude;
-    let mut custom = HashMap::new();
-    custom.insert("schema".to_string(), STIMULUS_SCHEMA.to_string());
-    let batch = StimulusBatch {
-        session_id: Some(SESSION_ID.to_string()),
-        batch_id,
-        timestamp: now_ns(),
-        values,
-        valid_mask: Some(vec![true; channels]),
-        metadata: Some(BatchMetadata {
-            processing_latency_ns: None,
-            source: Some("usefulness-transport-driver".to_string()),
-            custom,
-        }),
-    };
-    Ok(serde_json::to_vec(&IpcMessage::Stimuli(batch))?)
-}
-
-fn parse_spikes(bytes: &[u8]) -> Result<(Vec<u16>, u64, u64)> {
-    match serde_json::from_slice::<IpcMessage>(bytes).context("decode PUB frame")? {
-        IpcMessage::Spikes(batch) => {
-            let mut channels: Vec<u16> = batch.spikes.iter().map(|s| s.channel).collect();
-            channels.sort_unstable();
-            Ok((channels, batch.batch_id, batch.timestamp))
-        }
-        other => bail!("unexpected PUB frame variant: {other:?}"),
-    }
-}
-
-/// One frame if any arrives before `deadline`, else `None`.
-fn recv_until(sub: &zmq::Socket, deadline: Instant) -> Result<Option<Vec<u8>>> {
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if remaining.is_zero() {
-        return Ok(None);
-    }
-    let timeout = i64::try_from(remaining.as_millis().max(1))?;
-    if sub.poll(zmq::POLLIN, timeout)? == 0 {
-        return Ok(None);
-    }
-    Ok(Some(sub.recv_bytes(zmq::DONTWAIT)?))
-}
-
-/// Drain every frame available within `wait`, appending to `frames`.
-fn collect_frames(
-    sub: &zmq::Socket,
-    wait: Duration,
-    phase: Phase,
-    frames: &mut Vec<Frame>,
-) -> Result<()> {
-    let deadline = Instant::now() + wait;
-    while let Some(bytes) = recv_until(sub, deadline)? {
-        let recv = Instant::now();
-        let (channels, batch_id, timestamp) = parse_spikes(&bytes)?;
-        frames.push(Frame {
-            phase,
-            recv,
-            channels,
-            batch_id,
-            timestamp,
-        });
-    }
-    Ok(())
-}
-
-fn vm_status_kb(pid: u32, key: &str) -> Option<u64> {
-    let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-    status
-        .lines()
-        .find(|line| line.starts_with(key))?
-        .split_whitespace()
-        .nth(1)?
-        .parse()
-        .ok()
-}
-
-fn percentile(sorted: &[u64], p: f64) -> Option<u64> {
-    if sorted.is_empty() {
-        return None;
-    }
-    let rank = ((sorted.len() as f64 - 1.0) * p).round() as usize;
-    sorted.get(rank).copied()
 }
 
 /// Everything the run needs that is derived from the config and workload.
@@ -367,15 +68,13 @@ struct Session {
 
 impl Session {
     fn new(cfg: &DaemonConfig, workload: &Workload) -> Result<Self> {
-        if cfg.channels != workload.channels {
-            bail!(
-                "config channels {} != workload channels {}",
-                cfg.channels,
-                workload.channels
-            );
-        }
+        workload.check_channels(cfg.channels)?;
         let transport = &workload.transport;
-        let spacing_ms = 1_000 * transport.pulse_spacing_ticks / u64::from(cfg.tick_rate_hz);
+        let spacing_ns =
+            1_000_000_000 * transport.pulse_spacing_ticks / u64::from(cfg.tick_rate_hz);
+        if spacing_ns == 0 {
+            bail!("pulse spacing rounds to zero at {} Hz", cfg.tick_rate_hz);
+        }
         let expected = (0..cfg.channels)
             .map(|c| {
                 transport
@@ -389,13 +88,20 @@ impl Session {
             channels: cfg.channels,
             amplitude: transport.amplitude,
             pulses: usize::try_from(transport.pulses)?,
-            spacing: Duration::from_millis(spacing_ms),
+            spacing: Duration::from_nanos(spacing_ns),
             expected,
         })
     }
 
     fn frame(&self, channel: usize, batch_id: u64) -> Result<Vec<u8>> {
-        pulse_frame(self.channels, channel, self.amplitude, batch_id)
+        let mut values = vec![0.0f32; self.channels];
+        values[channel] = self.amplitude;
+        stimulus_frame(
+            SESSION_ID,
+            batch_id,
+            values,
+            Some(vec![true; self.channels]),
+        )
     }
 }
 
@@ -580,151 +286,158 @@ fn probe_daemon(control: SocketAddr, pid: u32) -> Result<Probes> {
     Ok(Probes {
         metrics: http_get(control, "/metrics")?,
         health: http_get(control, "/health")?,
-        rss_kb: vm_status_kb(pid, "VmRSS:"),
-        peak_rss_kb: vm_status_kb(pid, "VmHWM:"),
+        rss_kb: vm_status_kb(Some(pid), "VmRSS:"),
+        peak_rss_kb: vm_status_kb(Some(pid), "VmHWM:"),
     })
 }
 
-/// Everything the summary reports on.
-struct Report<'a> {
-    args: &'a Args,
-    workload: &'a Workload,
-    session: &'a Session,
-    daemon_binary: &'a Path,
-    log_path: &'a Path,
-    pid: u32,
+/// Loaded inputs plus the running, ready daemon and the sockets around it.
+struct Setup {
+    args: Args,
+    workload: Workload,
+    session: Session,
+    control: SocketAddr,
+    log_path: PathBuf,
+    sockets: Sockets,
+    daemon: DaemonProcess,
     ready_after: Duration,
+}
+
+impl Setup {
+    fn new(args: Args) -> Result<Self> {
+        let cfg = DaemonConfig::load(&args.config).context("load config")?;
+        let workload = Workload::load(&args.workload)?;
+        let session = Session::new(&cfg, &workload)?;
+        let control: SocketAddr = cfg
+            .control_bind
+            .as_deref()
+            .context("transport config needs control_bind")?
+            .parse()?;
+        let log_path = args.records.with_extension("daemon.log");
+        let sockets = open_sockets(&cfg)?;
+        let mut daemon = DaemonProcess::spawn(&args.daemon, &args.config, &log_path)?;
+        let ready_after = daemon.wait_ready(control)?;
+        Ok(Self {
+            args,
+            workload,
+            session,
+            control,
+            log_path,
+            sockets,
+            daemon,
+            ready_after,
+        })
+    }
+}
+
+/// What one run produced, from subscription through SIGTERM.
+struct Capture {
+    pid: u32,
+    frames: Vec<Frame>,
+    pulses: Vec<Pulse>,
     prime_attempts: usize,
-    frames: &'a [Frame],
-    pulses: &'a [Pulse],
-    outcome: &'a Outcome,
-    nonempty: usize,
-    probes: &'a Probes,
+    probes: Probes,
     exit: (Duration, Option<i32>),
     termination_logged: bool,
+}
+
+fn capture(setup: &mut Setup) -> Result<Capture> {
+    let pid = setup.daemon.pid();
+    let mut frames: Vec<Frame> = Vec::with_capacity(16_384);
+    confirm_subscription(&setup.sockets.sub, &mut frames)?;
+    let mut batch_id = 1u64;
+    let prime_attempts = prime(&setup.session, &setup.sockets, &mut frames, &mut batch_id)?;
+    let pulses = measure(&setup.session, &setup.sockets, &mut frames, &mut batch_id)?;
+    let probes = probe_daemon(setup.control, pid)?;
+    let exit = setup.daemon.terminate()?;
+    let daemon_log = fs::read_to_string(&setup.log_path).unwrap_or_default();
+    Ok(Capture {
+        pid,
+        frames,
+        pulses,
+        prime_attempts,
+        probes,
+        exit,
+        termination_logged: daemon_log.contains("Termination signal received"),
+    })
 }
 
 fn count_frames(frames: &[Frame], pred: impl Fn(&Frame) -> bool) -> usize {
     frames.iter().filter(|f| pred(f)).count()
 }
 
-fn summary_json(r: &Report<'_>) -> Result<Value> {
-    let mut sorted = r.outcome.latencies_ns.clone();
+fn latency_json(latencies_ns: &[u64]) -> Value {
+    let mut sorted = latencies_ns.to_vec();
     sorted.sort_unstable();
-    let sent = r.pulses.len() as u64;
-    let lost = sent - r.outcome.matched - r.outcome.mismatched;
-    let extra_nonempty = r.nonempty.saturating_sub(r.pulses.len()) as u64;
-    let health_json = r
-        .probes
-        .health
-        .as_ref()
-        .and_then(|(_, body)| serde_json::from_str::<Value>(body).ok());
-    Ok(json!({
+    json!({
+        "count": sorted.len(),
+        "p50": percentile(&sorted, 0.50),
+        "p99": percentile(&sorted, 0.99),
+        "max": sorted.last().copied(),
+        "min": sorted.first().copied(),
+    })
+}
+
+fn summary_json(setup: &Setup, capture: &Capture, outcome: &Outcome, nonempty: usize) -> Value {
+    let frames = &capture.frames;
+    let sent = capture.pulses.len() as u64;
+    let probes = &capture.probes;
+    json!({
         "mode": "transport-live",
-        "config": r.args.config.display().to_string(),
-        "workload": r.args.workload.display().to_string(),
-        "fixture_sha256": r.workload.fixture_sha256,
-        "daemon_binary": r.daemon_binary.display().to_string(),
-        "daemon_pid": r.pid,
-        "ready_after_ns": r.ready_after.as_nanos() as u64,
-        "subscribe_frames": count_frames(r.frames, |f| f.phase == Phase::Subscribe),
-        "prime_attempts": r.prime_attempts,
-        "prime_frames": count_frames(r.frames, |f| f.phase == Phase::Prime),
-        "pulse_spacing_ns": r.session.spacing.as_nanos() as u64,
+        "config": setup.args.config.display().to_string(),
+        "workload": setup.args.workload.display().to_string(),
+        "fixture_sha256": setup.workload.fixture_sha256,
+        "daemon_binary": setup.args.daemon.display().to_string(),
+        "daemon_pid": capture.pid,
+        "ready_after_ns": setup.ready_after.as_nanos() as u64,
+        "subscribe_frames": count_frames(frames, |f| f.phase == Phase::Subscribe),
+        "prime_attempts": capture.prime_attempts,
+        "prime_frames": count_frames(frames, |f| f.phase == Phase::Prime),
+        "pulse_spacing_ns": setup.session.spacing.as_nanos() as u64,
         "pulses_sent": sent,
-        "frames_received_total": r.frames.len(),
-        "measured_frames_total": count_frames(r.frames, |f| f.phase.measured()),
-        "measured_frames_empty": count_frames(r.frames, |f| f.phase.measured() && f.channels.is_empty()),
-        "measured_frames_nonempty": r.nonempty,
-        "matched": r.outcome.matched,
-        "mismatched": r.outcome.mismatched,
-        "lost": lost,
-        "extra_nonempty": extra_nonempty,
-        "latency_ns": {
-            "count": sorted.len(),
-            "p50": percentile(&sorted, 0.50),
-            "p99": percentile(&sorted, 0.99),
-            "max": sorted.last().copied(),
-            "min": sorted.first().copied(),
-        },
-        "per_pulse": r.outcome.per_pulse,
-        "daemon_rss_kb": r.probes.rss_kb,
-        "daemon_peak_rss_kb": r.probes.peak_rss_kb,
-        "metrics_status": r.probes.metrics.as_ref().map(|(s, _)| *s),
-        "metrics_text": r.probes.metrics.as_ref().map(|(_, b)| b.clone()),
-        "health_status": r.probes.health.as_ref().map(|(s, _)| *s),
-        "health_json": health_json,
-        "sigterm_exit_ns": r.exit.0.as_nanos() as u64,
-        "exit_code": r.exit.1,
-        "termination_logged": r.termination_logged,
-        "daemon_log": r.log_path.display().to_string(),
-    }))
+        "frames_received_total": frames.len(),
+        "measured_frames_total": count_frames(frames, |f| f.phase.measured()),
+        "measured_frames_empty": count_frames(frames, |f| f.phase.measured() && f.channels.is_empty()),
+        "measured_frames_nonempty": nonempty,
+        "matched": outcome.matched,
+        "mismatched": outcome.mismatched,
+        "lost": sent - outcome.matched - outcome.mismatched,
+        "extra_nonempty": nonempty.saturating_sub(capture.pulses.len()) as u64,
+        "latency_ns": latency_json(&outcome.latencies_ns),
+        "per_pulse": outcome.per_pulse,
+        "daemon_rss_kb": probes.rss_kb,
+        "daemon_peak_rss_kb": probes.peak_rss_kb,
+        "metrics_status": probes.metrics.as_ref().map(|(s, _)| *s),
+        "metrics_text": probes.metrics.as_ref().map(|(_, b)| b.clone()),
+        "health_status": probes.health.as_ref().map(|(s, _)| *s),
+        "health_json": probes.health.as_ref().and_then(|(_, b)| serde_json::from_str::<Value>(b).ok()),
+        "sigterm_exit_ns": capture.exit.0.as_nanos() as u64,
+        "exit_code": capture.exit.1,
+        "termination_logged": capture.termination_logged,
+        "daemon_log": setup.log_path.display().to_string(),
+    })
 }
 
 fn main() -> Result<()> {
-    let args = parse_args()?;
-    let cfg = DaemonConfig::load(&args.config).context("load config")?;
-    let workload: Workload =
-        serde_json::from_str(&fs::read_to_string(&args.workload).context("read workload")?)
-            .context("parse workload")?;
-    let session = Session::new(&cfg, &workload)?;
-    let control: SocketAddr = cfg
-        .control_bind
-        .as_deref()
-        .context("transport config needs control_bind")?
-        .parse()?;
-    let binary = daemon_binary()?;
-    let log_path = args.records.with_extension("daemon.log");
-
-    let sockets = open_sockets(&cfg)?;
-    let mut daemon = Daemon::spawn(&binary, &args.config, &log_path)?;
-    let pid = daemon.pid();
-    let ready_after = daemon.wait_ready(control)?;
-    let started = daemon.spawned_at;
-
-    let mut frames: Vec<Frame> = Vec::with_capacity(16_384);
-    confirm_subscription(&sockets.sub, &mut frames)?;
-    let mut batch_id = 1u64;
-    let prime_attempts = prime(&session, &sockets, &mut frames, &mut batch_id)?;
-    let pulses = measure(&session, &sockets, &mut frames, &mut batch_id)?;
-
-    let probes = probe_daemon(control, pid)?;
-    let exit = daemon.terminate()?;
-    let daemon_log = fs::read_to_string(&log_path).unwrap_or_default();
-    let (outcome, nonempty) = correlate(&pulses, &frames, &session.expected);
-    write_frames(&args.records, &frames, &pulses, started)?;
-
-    let report = Report {
-        args: &args,
-        workload: &workload,
-        session: &session,
-        daemon_binary: &binary,
-        log_path: &log_path,
-        pid,
-        ready_after,
-        prime_attempts,
-        frames: &frames,
-        pulses: &pulses,
-        outcome: &outcome,
-        nonempty,
-        probes: &probes,
-        exit,
-        termination_logged: daemon_log.contains("Termination signal received"),
-    };
-    let summary = summary_json(&report)?;
-    fs::write(
-        &args.summary,
-        serde_json::to_string_pretty(&summary)? + "\n",
-    )
-    .with_context(|| format!("write {}", args.summary.display()))?;
+    let mut setup = Setup::new(Args::parse())?;
+    let capture = capture(&mut setup)?;
+    let (outcome, nonempty) = correlate(&capture.pulses, &capture.frames, &setup.session.expected);
+    write_frames(
+        &setup.args.records,
+        &capture.frames,
+        &capture.pulses,
+        setup.daemon.spawned_at,
+    )?;
+    let summary = summary_json(&setup, &capture, &outcome, nonempty);
+    write_json(&setup.args.summary, &summary)?;
     println!(
         "transport-live: sent {} matched {} mismatched {} lost {}; exit {:?} after {:?}",
-        pulses.len(),
+        capture.pulses.len(),
         outcome.matched,
         outcome.mismatched,
         summary["lost"],
-        exit.1,
-        exit.0
+        capture.exit.1,
+        capture.exit.0
     );
     Ok(())
 }

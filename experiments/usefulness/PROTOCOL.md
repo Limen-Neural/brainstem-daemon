@@ -8,7 +8,7 @@ in `REPORT.md`.
 
 Scope: only `Limen-Neural/brainstem-daemon`, its public interfaces, the
 repository-local fixture under `fixtures/`, and published dependencies
-(`neuromod` 0.6.0, `corpus-ipc` 0.1, `zmq` 0.10). Nothing is fetched from
+(`neuromod` 0.7.0, `corpus-ipc` 0.1, `zmq` 0.10). Nothing is fetched from
 other repositories or model hubs.
 
 ## 1. Workload and the behavior under test
@@ -52,7 +52,8 @@ are warm-up for latency statistics only; correctness is checked on all ticks.
 
 **Expected outputs** (`fixtures/expected_spikes.json`) are produced by
 `make_fixture.py` from `reference_model.py`, a standard-library
-re-implementation of the documented `neuromod` 0.6.0 LIF step. With the
+re-implementation of the documented `neuromod` 0.7.0 LIF step (its
+normal-mode pipeline is unchanged from 0.6.0). With the
 loader's `reward_lr = 0.0` no weight ever changes, so the engine's
 thread-local RNG (which only feeds STDP traces) cannot affect spikes. The
 generator asserts a minimum distance of 5·10⁻³ between every membrane
@@ -192,8 +193,8 @@ log, and keeps partial results if a step fails. Raw per-tick records are
 gzipped JSONL; step, command and daemon logs are committed next to them.
 `summarize.py` embeds `identity.json` without the `status` and
 `finished_utc` fields that `run.sh` finalizes after summarizing, so
-re-running it on committed results is byte-identical. The transport driver
-launches the `brainstem-daemon` binary built beside it in `target/release/`.
+re-running it on committed results is byte-identical. `run.sh` passes the
+release `brainstem-daemon` binary to the transport driver with `--daemon`.
 Results are committed in a follow-up commit; the measured SHA is that
 commit's parent.
 
