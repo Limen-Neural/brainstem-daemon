@@ -12,95 +12,33 @@
 //! - `baseline`: the same restored network stepped directly with the daemon's
 //!   documented decoding applied by this driver.
 //!
-//! Usage: `usefulness_inprocess <mode> <config.toml> <workload.json> <out.jsonl> <summary.json>`
-//!
 //! Requires `--features corpus-ipc`. Linux only (`/proc/self/status`).
+
+mod usefulness_common;
 
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use brainstem_daemon::daemon::{BrainstemDaemon, DaemonConfig, RuntimeMode, RuntimeStats};
-use brainstem_daemon::ingress::{IngressPolicy, MessageClass, STIMULUS_SCHEMA, accept_ipc_json};
+use brainstem_daemon::ingress::{IngressPolicy, MessageClass, accept_ipc_json};
 use brainstem_daemon::{
     BackendPair, ClassMetrics, IngressMetrics, IngressPacket, ModelProvenance, SpikeEvent,
     SpikeSink, StimulusSource,
 };
-use corpus_ipc::{BatchMetadata, IpcMessage, NeuromodulatorSnapshot, StimulusBatch};
+use clap::{Parser, ValueEnum};
+use corpus_ipc::{IpcMessage, NeuromodulatorSnapshot};
 use neuromod::NeuroModulators;
-use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use usefulness_common::{
+    Event, Modulators, Workload, now_ns, sha256_file, stimulus_frame, vm_status_kb, write_json,
+};
 
 const SESSION_ID: &str = "usefulness";
-
-#[derive(Debug, Clone, Deserialize)]
-struct Modulators {
-    dopamine: f32,
-    cortisol: f32,
-    acetylcholine: f32,
-    tempo: f32,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct Event {
-    offset: u64,
-    values: Vec<f32>,
-    valid_mask: Option<Vec<bool>>,
-    modulators: Option<Modulators>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Workload {
-    fixture_sha256: String,
-    channels: usize,
-    ticks_per_cycle: u64,
-    cycles: u64,
-    ticks: u64,
-    warmup_ticks: u64,
-    cycle_events: Vec<Event>,
-}
-
-impl Workload {
-    fn load(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("read workload {}", path.display()))?;
-        let workload: Self = serde_json::from_str(&text).context("parse workload")?;
-        if workload.ticks != workload.ticks_per_cycle * workload.cycles {
-            bail!("workload ticks do not match cycles × ticks_per_cycle");
-        }
-        Ok(workload)
-    }
-
-    fn expand(&self) -> HashMap<u64, Event> {
-        let mut events = HashMap::new();
-        for cycle in 0..self.cycles {
-            for event in &self.cycle_events {
-                events.insert(cycle * self.ticks_per_cycle + event.offset, event.clone());
-            }
-        }
-        events
-    }
-
-    /// Stimulus and modulator frames one full run sends.
-    fn frame_counts(&self) -> (u64, u64) {
-        let stimuli = self
-            .cycle_events
-            .iter()
-            .filter(|e| !e.values.is_empty())
-            .count() as u64;
-        let modulators = self
-            .cycle_events
-            .iter()
-            .filter(|e| e.modulators.is_some())
-            .count() as u64;
-        (stimuli * self.cycles, modulators * self.cycles)
-    }
-}
 
 /// One tick as observed by the driver.
 #[derive(Debug, Clone)]
@@ -118,31 +56,6 @@ struct Shared {
     /// Observed producer-side counts, copied in by the source at shutdown.
     stimulus_frames: u64,
     modulator_frames: u64,
-}
-
-fn now_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
-}
-
-fn encode_stimulus(event: &Event, batch_id: u64) -> Result<Vec<u8>> {
-    let mut custom = HashMap::new();
-    custom.insert("schema".to_string(), STIMULUS_SCHEMA.to_string());
-    let batch = StimulusBatch {
-        session_id: Some(SESSION_ID.to_string()),
-        batch_id,
-        timestamp: now_ns(),
-        values: event.values.clone(),
-        valid_mask: event.valid_mask.clone(),
-        metadata: Some(BatchMetadata {
-            processing_latency_ns: None,
-            source: Some("usefulness-driver".to_string()),
-            custom,
-        }),
-    };
-    Ok(serde_json::to_vec(&IpcMessage::Stimuli(batch))?)
 }
 
 fn encode_modulators(mods: &Modulators, tick: u64) -> Result<Vec<u8>> {
@@ -198,7 +111,13 @@ impl WorkloadSource {
         let batch_id = self.next_batch_id;
         self.next_batch_id += 1;
         self.stimulus_frames += 1;
-        encode_stimulus(event, batch_id).map(Some)
+        let frame = stimulus_frame(
+            SESSION_ID,
+            batch_id,
+            event.values.clone(),
+            event.valid_mask.clone(),
+        )?;
+        Ok(Some(frame))
     }
 
     fn modulator_frame(&mut self, event: &Event, tick: u64) -> Result<Option<Vec<u8>>> {
@@ -252,25 +171,6 @@ impl SpikeSink for RecordingSink {
         self.shared.lock().unwrap().emits.push((at, channels));
         Ok(())
     }
-}
-
-fn vm_status_kb(key: &str) -> Option<u64> {
-    let status = fs::read_to_string("/proc/self/status").ok()?;
-    status
-        .lines()
-        .find(|line| line.starts_with(key))?
-        .split_whitespace()
-        .nth(1)?
-        .parse()
-        .ok()
-}
-
-fn sha256_file(path: &Path) -> Result<String> {
-    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    Ok(Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
 }
 
 fn write_records(path: &Path, records: &[TickRecord]) -> Result<()> {
@@ -528,43 +428,46 @@ fn run_baseline(cfg: DaemonConfig, workload: &Workload) -> Result<Run> {
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Mode {
+    DaemonLive,
+    DaemonSimulation,
+    Baseline,
+}
+
+impl Mode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::DaemonLive => "daemon-live",
+            Self::DaemonSimulation => "daemon-simulation",
+            Self::Baseline => "baseline",
+        }
+    }
+
+    /// Live modes need a live config; simulation needs a simulation config.
+    fn runtime_mode(self) -> RuntimeMode {
+        match self {
+            Self::DaemonLive | Self::Baseline => RuntimeMode::Live,
+            Self::DaemonSimulation => RuntimeMode::Simulation,
+        }
+    }
+}
+
+/// In-process usefulness experiment driver (daemon vs direct engine).
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
 struct Args {
-    mode: String,
+    /// Path to exercise.
+    #[arg(value_enum)]
+    mode: Mode,
+    /// Daemon TOML configuration, loaded through `DaemonConfig::load`.
     config: PathBuf,
+    /// Workload JSON from `experiments/usefulness/fixtures`.
     workload: PathBuf,
+    /// Per-tick JSONL output.
     records: PathBuf,
+    /// Run summary JSON output.
     summary: PathBuf,
-}
-
-fn parse_args() -> Result<Args> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 6 {
-        bail!(
-            "usage: {} <daemon-live|daemon-simulation|baseline> <config.toml> <workload.json> <out.jsonl> <summary.json>",
-            args[0]
-        );
-    }
-    Ok(Args {
-        mode: args[1].clone(),
-        config: PathBuf::from(&args[2]),
-        workload: PathBuf::from(&args[3]),
-        records: PathBuf::from(&args[4]),
-        summary: PathBuf::from(&args[5]),
-    })
-}
-
-/// Live modes need a live config; simulation needs a simulation config.
-fn check_mode(mode: &str, runtime_mode: RuntimeMode) -> Result<()> {
-    let compatible = matches!(
-        (mode, runtime_mode),
-        ("daemon-live", RuntimeMode::Live)
-            | ("daemon-simulation", RuntimeMode::Simulation)
-            | ("baseline", RuntimeMode::Live)
-    );
-    if !compatible {
-        bail!("mode {mode} does not match runtime_mode {runtime_mode:?}");
-    }
-    Ok(())
 }
 
 /// Live runs pin the fixture digest to the workload; simulation has no fixture.
@@ -589,38 +492,34 @@ fn write_summary(
     warmup: usize,
 ) -> Result<()> {
     let mut summary = run.summary;
-    summary["mode"] = Value::String(args.mode.clone());
+    summary["mode"] = Value::String(args.mode.as_str().to_string());
     summary["config"] = Value::String(args.config.display().to_string());
     summary["workload"] = Value::String(args.workload.display().to_string());
     summary["fixture_sha256"] = serde_json::to_value(fixture_sha256)?;
     summary["timing"] =
         timing_summary(&run.records, warmup, run.first_measured_start, run.last_end);
-    summary["peak_rss_kb"] = serde_json::to_value(vm_status_kb("VmHWM:"))?;
-    summary["rss_kb"] = serde_json::to_value(vm_status_kb("VmRSS:"))?;
+    summary["peak_rss_kb"] = serde_json::to_value(vm_status_kb(None, "VmHWM:"))?;
+    summary["rss_kb"] = serde_json::to_value(vm_status_kb(None, "VmRSS:"))?;
     summary["pid"] = serde_json::to_value(std::process::id())?;
-    fs::write(
-        &args.summary,
-        serde_json::to_string_pretty(&summary)? + "\n",
-    )
-    .with_context(|| format!("write {}", args.summary.display()))
+    write_json(&args.summary, &summary)
 }
 
 fn main() -> Result<()> {
-    let args = parse_args()?;
+    let args = Args::parse();
     let cfg = DaemonConfig::load(&args.config).context("load config")?;
     let workload = Workload::load(&args.workload)?;
-    if cfg.channels != workload.channels {
+    workload.check_channels(cfg.channels)?;
+    if cfg.runtime_mode != args.mode.runtime_mode() {
         bail!(
-            "config channels {} != workload channels {}",
-            cfg.channels,
-            workload.channels
+            "mode {} does not match runtime_mode {:?}",
+            args.mode.as_str(),
+            cfg.runtime_mode
         );
     }
-    check_mode(&args.mode, cfg.runtime_mode)?;
     let fixture_sha256 = fixture_digest(&cfg, &workload)?;
-    let run = match args.mode.as_str() {
-        "baseline" => run_baseline(cfg, &workload)?,
-        _ => run_daemon(cfg, &workload)?,
+    let run = match args.mode {
+        Mode::Baseline => run_baseline(cfg, &workload)?,
+        Mode::DaemonLive | Mode::DaemonSimulation => run_daemon(cfg, &workload)?,
     };
     write_records(&args.records, &run.records)?;
     let ticks = run.records.len();
@@ -632,7 +531,7 @@ fn main() -> Result<()> {
     write_summary(&args, run, fixture_sha256, workload.warmup_ticks as usize)?;
     println!(
         "{}: {ticks} ticks, {nonempty} nonempty; summary {}",
-        args.mode,
+        args.mode.as_str(),
         args.summary.display()
     );
     Ok(())

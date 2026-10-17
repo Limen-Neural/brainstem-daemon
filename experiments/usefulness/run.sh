@@ -20,6 +20,10 @@ fi
 SHA=$(git rev-parse HEAD)
 OUT=$EXP/results/$SHA
 mkdir -p "$OUT/logs"
+# A rerun at the same SHA starts clean so a partial earlier run cannot leak
+# repetitions into the summary.
+rm -f "$OUT"/*-r[0-9]*.summary.json "$OUT"/*-r[0-9]*.jsonl "$OUT"/*-r[0-9]*.jsonl.gz \
+    "$OUT"/*-r[0-9]*.daemon.log "$OUT"/summary.json "$OUT"/summary.md "$OUT"/logs/*.log
 STEPS="$OUT/steps.log"
 : >"$STEPS"
 
@@ -113,7 +117,7 @@ for rep in $(seq 1 "$R_INPROCESS"); do
     done
 done
 for rep in $(seq 1 "$R_TRANSPORT"); do
-    step "transport-live-r$rep" target/release/examples/usefulness_transport \
+    step "transport-live-r$rep" target/release/examples/usefulness_transport --daemon target/release/brainstem-daemon \
         "$EXP/config/transport-live.toml" "$WORKLOAD" "$OUT/transport-live-r$rep.jsonl" "$OUT/transport-live-r$rep.summary.json"
     gzip -9 -n -f "$OUT/transport-live-r$rep.jsonl"
 done
