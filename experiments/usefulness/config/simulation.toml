@@ -1,0 +1,12 @@
+# In-process simulation mode (negative control): same dimensions, blank
+# `with_dimensions()` network, no checkpoint restore. No stimulus-driven spikes
+# are expected.
+runtime_mode   = "simulation"
+tick_rate_hz   = 1000
+log_level      = "warn"
+lif_count      = 16
+izh_count      = 0
+channels       = 8
+model_path     = "unused-in-simulation.json"
+spine_sub_port = 5755
+spine_pub_port = 5756
