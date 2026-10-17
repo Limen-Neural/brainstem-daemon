@@ -19,5 +19,8 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # Dockerfile rust tag must match the MSRV pin (REVIEW.md); bump manually.
+      - dependency-name: "rust"
     labels:
       - "dependencies"
