@@ -193,7 +193,7 @@ struct SidecarNeuron {
     threshold: f64,
     last_spike: bool,
     weights: Vec<f64>,
-    /// Sidecar readout row. neuromod 0.6.0 has no Distill readout matrix, so a
+    /// Sidecar readout row. neuromod 0.7.0 has no Distill readout matrix, so a
     /// sidecar carrying `output_weights` (including explicit `null`) is
     /// rejected at load time (fail closed) rather than silently dropping
     /// trained readout weights. Legacy sidecars that omit the key still load.
@@ -286,7 +286,7 @@ fn validate_schema(document: &SidecarDocument) -> Result<()> {
 
 /// Fail closed on sidecars that carry `output_weights`.
 ///
-/// neuromod 0.6.0 has no Distill readout matrix, so these values could never
+/// neuromod 0.7.0 has no Distill readout matrix, so these values could never
 /// be restored; accepting them would silently drop trained readout weights
 /// while live mode reports a successful load. Reject loudly instead,
 /// including `"output_weights": null` (the key is present even if empty).
@@ -295,7 +295,7 @@ fn reject_output_weights(document: &SidecarDocument) -> Result<()> {
         if matches!(neuron.output_weights, OutputWeightsField::Present) {
             bail!(
                 "invalid Spikenaut sidecar: neuron {index} carries `output_weights`, which this \
-                 daemon cannot restore (neuromod 0.6.0 has no readout matrix); refusing to load \
+                 daemon cannot restore (neuromod 0.7.0 has no readout matrix); refusing to load \
                  rather than silently dropping trained readout weights"
             );
         }
@@ -421,7 +421,7 @@ fn require_finite(value: f64, context: &str) -> Result<()> {
     if !value.is_finite() {
         bail!("invalid Spikenaut sidecar: {context} is {value}, expected a finite number");
     }
-    // Distill stores f64; neuromod 0.6 restores f32. Reject values that
+    // Distill stores f64; neuromod 0.7 restores f32. Reject values that
     // overflow so restore cannot inject infinities.
     if !(value as f32).is_finite() {
         bail!("invalid Spikenaut sidecar: {context} is {value}, which overflows f32");
@@ -481,7 +481,7 @@ fn apply_sidecar(network: &mut SpikingNetwork, document: &SidecarDocument) -> Re
         dst.last_spike = src.last_spike;
     }
     // Inference-only: dopamine-gated R-STDP must not retrain Distill weights.
-    // neuromod 0.6.0 `step` still assigns `decay_rate` from acetylcholine,
+    // neuromod 0.7.0 `step` still assigns `decay_rate` from acetylcholine,
     // blends `threshold` toward 0.05..=0.50, and L1-renormalizes rows whose
     // weights already sum above 1e-6 — those are engine contracts, not
     // sidecar fields this loader can freeze without forking neuromod.

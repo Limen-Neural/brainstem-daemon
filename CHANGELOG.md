@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Bump `neuromod` from crates.io **0.6.0** to **0.7.0** (pre-1.0 range
+  `>=0.7.0, <0.8.0`). `SpikingNetwork::step` keeps the same
+  `(stimuli, modulators)` signature; 0.7 adds `StepError` variants the daemon
+  does not match exhaustively. Modulator decay (`0.15 - 0.05 * ACh`) and the
+  0.6 self-describing checkpoint shape still hold (LIM-1509).
 - Built-in PUB defaults to loopback (`127.0.0.1`); remote subscribers require
   explicit `spine_pub_bind_host` configuration. Explicit positive SNDHWM and
   nonnegative finite LINGER bound buffering/teardown; empty batches remain

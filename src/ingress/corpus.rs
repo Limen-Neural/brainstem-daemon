@@ -107,7 +107,7 @@ pub fn accept_ipc_message(
         IpcMessage::Neuromodulators(snapshot) => Ok(IngressPacket {
             stimuli: Vec::new(),
             // Positional map from corpus-ipc's DA/cortisol/ACh/tempo snapshot
-            // onto neuromod 0.6's DA/5-HT/ACh/NE slots.
+            // onto neuromod 0.7's DA/5-HT/ACh/NE slots.
             modulators: Some(vec![
                 snapshot.dopamine,
                 snapshot.cortisol,

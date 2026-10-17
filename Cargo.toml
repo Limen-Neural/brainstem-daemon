@@ -33,8 +33,9 @@ all-features = false
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 corpus-ipc = { version = "0.1.0", features = ["zmq"], optional = true }
-# Pre-1.0: Cargo treats 0.6.z as compatible (`>=0.6.0, <0.7.0`).
-neuromod = "0.6.0"
+# Pre-1.0: Cargo treats 0.7.z as compatible (`>=0.7.0, <0.8.0`).
+# Starting pin for the 0.7 bump was crates.io 0.6.0 (LIM-1509).
+neuromod = "0.7.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
