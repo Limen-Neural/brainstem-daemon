@@ -1,0 +1,23 @@
+{
+  "batches_received_total": 10212,
+  "binary": "target/release/brainstem-daemon",
+  "config": "experiments/usefulness/config/transport-live.toml",
+  "daemon_vm_hwm_kb": 6556,
+  "daemon_vm_rss_kb": 6556,
+  "exit_ms": 3.823047,
+  "exit_status_code": 0,
+  "exit_success": true,
+  "exit_within_budget": true,
+  "fixture_sha256": "2254bfc83416b7ebb3bef054b3163a20ea68694011b827530601bb662f070b1f",
+  "logged_termination": true,
+  "measure_end_ns": 10221980241,
+  "measure_start_ns": 216979576,
+  "mode": "transport-live",
+  "priming_frames": 1,
+  "probes_sent": 200,
+  "ready_ms": 10,
+  "rep": 1,
+  "sigterm_sent": true,
+  "undecodable_frames": 0,
+  "workload_version": "usefulness-workload-v1"
+}

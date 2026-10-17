@@ -1,0 +1,11 @@
+# In-process simulation mode: blank with_dimensions() network (negative control).
+# model_path is required by the schema but unused in simulation mode.
+runtime_mode   = "simulation"
+lif_count      = 16
+izh_count      = 0
+channels       = 8
+tick_rate_hz   = 1000
+log_level      = "warn"
+spine_sub_port = 15555
+spine_pub_port = 15556
+model_path     = "experiments/usefulness/fixtures/snn_model.json"
