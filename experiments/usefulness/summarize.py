@@ -211,7 +211,6 @@ def main():
     expected = load_json(HERE / "fixtures" / "expected_spikes.json")
     identity = load_json(os.path.join(out, "identity.json")) if os.path.exists(os.path.join(out, "identity.json")) else {}
 
-    baseline_runs = run_files(out, "baseline")
     baseline_sets = None
     runs = {}
     for prefix in ("baseline", "daemon-live", "daemon-simulation"):
@@ -285,7 +284,9 @@ def main():
     lines = [f"# Usefulness experiment summary — `{identity.get('sha', '?')}`", ""]
     lines.append(f"Decision (derived): **{decision}**")
     lines.append("")
-    lines.append("## In-process runs (latency after 1,000 warm-up ticks; measured)")
+    lines.append(
+        f"## In-process runs (latency after {workload['warmup_ticks']:,} warm-up ticks; measured)"
+    )
     lines.append("")
     lines.append("| run | checks | p50 | p99 | max | decode p50 | ticks/s | peak RSS | nonempty ticks |")
     lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|")
