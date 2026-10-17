@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 396
+Connection: close
+
+{"live":true,"ready":true,"phase":"running","reasons":[],"last_successful_tick_ms":10216,"tick_age_ms":0,"checkpoint":{"id":"spikenaut-snn:usefulness-fixture-v1","digest":"2254bfc83416b7ebb3bef054b3163a20ea68694011b827530601bb662f070b1f"},"input_freshness":{"age_ms":46,"stale":false},"queue_pressure":{"depth":0,"capacity":209,"ratio":0.0,"overloaded":false},"fatal":null,"observed_at_ms":10217}

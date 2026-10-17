@@ -1,0 +1,5 @@
+2026-10-17T04:11:20.436395Z  INFO brainstem_daemon: Loaded config from experiments/usefulness/config/transport-live.toml
+2026-10-17T04:11:20.436750Z  INFO brainstem_daemon: 📡 Using ZMQ corpus-ipc backend (spine ports active, PUB bound on tcp://127.0.0.1:15566)
+2026-10-17T04:11:20.436969Z  INFO brainstem_daemon::daemon: Loaded Spikenaut checkpoint; entering tick loop schema_id=spikenaut-sidecar-json/v1 model_id=spikenaut-snn:usefulness-fixture-v1 path=experiments/usefulness/fixtures/snn_model.json sha256=2254bfc83416b7ebb3bef054b3163a20ea68694011b827530601bb662f070b1f encoder="usefulness-synthetic-v1" source="spikenaut_julia" lineage="usefulness-fixture-v1" lif_count=16 izh_count=0 channels=8
+2026-10-17T04:11:20.437020Z  INFO brainstem_daemon::control: control surface listening (/livez /readyz /health /metrics) bound=127.0.0.1:15567
+2026-10-17T04:11:30.655725Z  INFO brainstem_daemon::daemon: Termination signal received, shutting down

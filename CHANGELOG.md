@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and SIGINT, including absent/stalled subscribers, clean exit and port release
   (#68). Strengthened socket tests cover finite-linger teardown, failed-send
   accounting and exact empty/nonempty `corpus-ipc` wire compatibility.
+- Reproducible usefulness experiment (`experiments/usefulness/`, #70). It has
+  a pre-registered protocol, a versioned synthetic LIF fixture, a typed
+  `corpus-ipc` workload, and `corpus-ipc`-gated example drivers that compare
+  the daemon with a direct-engine baseline in-process and over ZeroMQ. It also
+  adds a locked runner with provenance capture, a stdlib summarizer, and a
+  report with raw results tied to the measured commit. `experiments/` is
+  excluded from the published package.
 
 ### Changed
 

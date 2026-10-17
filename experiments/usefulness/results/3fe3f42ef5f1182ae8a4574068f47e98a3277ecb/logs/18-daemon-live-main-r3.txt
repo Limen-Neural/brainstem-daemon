@@ -1,0 +1,1 @@
+$ target/release/examples/usefulness_inprocess --mode daemon-live --variant main --rep 3 --out experiments/usefulness/results/3fe3f42ef5f1182ae8a4574068f47e98a3277ecb/raw
