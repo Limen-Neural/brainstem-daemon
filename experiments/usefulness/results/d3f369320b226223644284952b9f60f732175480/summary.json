@@ -1,0 +1,940 @@
+{
+  "sha": "d3f369320b226223644284952b9f60f732175480",
+  "identity": {
+    "sha": "d3f369320b226223644284952b9f60f732175480",
+    "started_utc": "2026-10-17T04:14:20.864197+00:00",
+    "toolchain": "1.98.1",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "features": [
+      "corpus-ipc"
+    ],
+    "profile": "release",
+    "kernel": "6.8.0-137-generic",
+    "os": "Debian GNU/Linux 12 (bookworm)",
+    "cpu_model": "AMD EPYC 9354P 32-Core Processor",
+    "cpu_count": 64,
+    "mem_total_kb": 791774148,
+    "repetitions": {
+      "inprocess": 5,
+      "transport": 3
+    },
+    "file_sha256": {
+      "Cargo.lock": "ce9c6b5c26e801fd930629423825daf35215bdde72dea6c7aa63d5903089f287",
+      "examples/usefulness_inprocess.rs": "fb8f46cefdc0bcc7f32ee0166ad862352300e98839137e04f6a0dada85b952c2",
+      "examples/usefulness_transport.rs": "06036de9e1c5f4c95d3085697046c0f205f3552ca42c5dca339e4c33fb0fdce8",
+      "experiments/usefulness/config/live.toml": "50b2526233d48e34b3360e7ff9ef27eb3614cc4611d32c12c372dcd7cb42614d",
+      "experiments/usefulness/config/simulation.toml": "6e104380864e3ce3973dd0ca8951c3d4108b7cb83cce95772dc90f06bfaa924b",
+      "experiments/usefulness/config/transport-live.toml": "9ca1d075659e14f4aa5ed6b0d876db10547d39e5bbd70d1a9ad89db7373fe03b",
+      "experiments/usefulness/fixtures/expected_spikes.json": "556ea8a9ce0da442e756e25b74b8009360cc0e46942cc8e2cd46c1227559d1b8",
+      "experiments/usefulness/fixtures/lif8x16-v1/MANIFEST.json": "22811f126089f132a758f39cd3d978ee9eab362bb170dd7d4220c99993590f9f",
+      "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+      "experiments/usefulness/fixtures/workload.json": "6b5e7ec0b1f59406725d0335e80dc3caf39e0197e24e4046dda5311b5f0f026e"
+    }
+  },
+  "repetitions": {
+    "daemon-live": 5,
+    "baseline": 5,
+    "daemon-simulation": 5,
+    "transport-live": 3
+  },
+  "percentile_method": "nearest-rank: sorted[round((n-1)*p)]",
+  "budgets": {
+    "tick_p99_ns": 1000000,
+    "transport_p99_ns": 5000000,
+    "label": "pre-registered"
+  },
+  "runs": {
+    "baseline-r1": {
+      "mode": "baseline",
+      "checkpoint": {
+        "content_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+        "model_id": "spikenaut-snn:usefulness-lif8x16-v1",
+        "schema_id": "spikenaut-sidecar-json/v1",
+        "source_path": "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "B5_baseline_matches_reference": true,
+        "B7_idle_ticks": true,
+        "B6_mask_equivalence": true,
+        "B4_baseline_runs_identical": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 931,
+          "p99_ns": 1212,
+          "max_ns": 11267,
+          "min_ns": 901,
+          "mean_ns": 947.6971052631579,
+          "label": "measured"
+        },
+        "decode_latency": null,
+        "ticks_per_s": {
+          "value": 987730.4641600181,
+          "label": "measured"
+        },
+        "measured_wall_ns": 19236017,
+        "run_wall_ns": 20297411,
+        "peak_rss_kb": {
+          "value": 4804,
+          "label": "measured"
+        },
+        "nonempty_ticks": 150,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "baseline-r2": {
+      "mode": "baseline",
+      "checkpoint": {
+        "content_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+        "model_id": "spikenaut-snn:usefulness-lif8x16-v1",
+        "schema_id": "spikenaut-sidecar-json/v1",
+        "source_path": "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "B5_baseline_matches_reference": true,
+        "B7_idle_ticks": true,
+        "B6_mask_equivalence": true,
+        "B4_baseline_runs_identical": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 982,
+          "p99_ns": 1452,
+          "max_ns": 30626,
+          "min_ns": 901,
+          "mean_ns": 1049.1046842105263,
+          "label": "measured"
+        },
+        "decode_latency": null,
+        "ticks_per_s": {
+          "value": 897581.4667378749,
+          "label": "measured"
+        },
+        "measured_wall_ns": 21167995,
+        "run_wall_ns": 22176228,
+        "peak_rss_kb": {
+          "value": 4924,
+          "label": "measured"
+        },
+        "nonempty_ticks": 150,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "baseline-r3": {
+      "mode": "baseline",
+      "checkpoint": {
+        "content_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+        "model_id": "spikenaut-snn:usefulness-lif8x16-v1",
+        "schema_id": "spikenaut-sidecar-json/v1",
+        "source_path": "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "B5_baseline_matches_reference": true,
+        "B7_idle_ticks": true,
+        "B6_mask_equivalence": true,
+        "B4_baseline_runs_identical": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 942,
+          "p99_ns": 1302,
+          "max_ns": 30817,
+          "min_ns": 911,
+          "mean_ns": 963.4833157894736,
+          "label": "measured"
+        },
+        "decode_latency": null,
+        "ticks_per_s": {
+          "value": 969112.3986251049,
+          "label": "measured"
+        },
+        "measured_wall_ns": 19605569,
+        "run_wall_ns": 20614063,
+        "peak_rss_kb": {
+          "value": 4788,
+          "label": "measured"
+        },
+        "nonempty_ticks": 150,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "baseline-r4": {
+      "mode": "baseline",
+      "checkpoint": {
+        "content_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+        "model_id": "spikenaut-snn:usefulness-lif8x16-v1",
+        "schema_id": "spikenaut-sidecar-json/v1",
+        "source_path": "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "B5_baseline_matches_reference": true,
+        "B7_idle_ticks": true,
+        "B6_mask_equivalence": true,
+        "B4_baseline_runs_identical": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 932,
+          "p99_ns": 1222,
+          "max_ns": 8513,
+          "min_ns": 901,
+          "mean_ns": 946.8370526315789,
+          "label": "measured"
+        },
+        "decode_latency": null,
+        "ticks_per_s": {
+          "value": 987472.8672340132,
+          "label": "measured"
+        },
+        "measured_wall_ns": 19241035,
+        "run_wall_ns": 20244631,
+        "peak_rss_kb": {
+          "value": 4844,
+          "label": "measured"
+        },
+        "nonempty_ticks": 150,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "baseline-r5": {
+      "mode": "baseline",
+      "checkpoint": {
+        "content_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+        "model_id": "spikenaut-snn:usefulness-lif8x16-v1",
+        "schema_id": "spikenaut-sidecar-json/v1",
+        "source_path": "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "B5_baseline_matches_reference": true,
+        "B7_idle_ticks": true,
+        "B6_mask_equivalence": true,
+        "B4_baseline_runs_identical": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 932,
+          "p99_ns": 1402,
+          "max_ns": 14322,
+          "min_ns": 901,
+          "mean_ns": 949.5164736842105,
+          "label": "measured"
+        },
+        "decode_latency": null,
+        "ticks_per_s": {
+          "value": 985737.6217554575,
+          "label": "measured"
+        },
+        "measured_wall_ns": 19274906,
+        "run_wall_ns": 20261236,
+        "peak_rss_kb": {
+          "value": 4764,
+          "label": "measured"
+        },
+        "nonempty_ticks": 150,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "daemon-live-r1": {
+      "mode": "daemon-live",
+      "checkpoint": {
+        "content_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+        "model_id": "spikenaut-snn:usefulness-lif8x16-v1",
+        "schema_id": "spikenaut-sidecar-json/v1",
+        "source_path": "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "C2_accounting": true,
+        "C3_health": true,
+        "C9_ingress": true,
+        "C5_matches_reference": true,
+        "C7_idle_ticks": true,
+        "C6_mask_equivalence": true,
+        "C4_equals_baseline": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 1222,
+          "p99_ns": 2985,
+          "max_ns": 54613,
+          "min_ns": 1011,
+          "mean_ns": 1232.1671578947369,
+          "label": "measured"
+        },
+        "decode_latency": {
+          "count": 160,
+          "p50_ns": 1101,
+          "p99_ns": 2273,
+          "max_ns": 16425,
+          "min_ns": 651,
+          "mean_ns": 1249.53125,
+          "label": "measured"
+        },
+        "ticks_per_s": {
+          "value": 743468.8511398884,
+          "label": "measured"
+        },
+        "measured_wall_ns": 25555879,
+        "run_wall_ns": 26862496,
+        "peak_rss_kb": {
+          "value": 6192,
+          "label": "measured"
+        },
+        "nonempty_ticks": 150,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "daemon-live-r2": {
+      "mode": "daemon-live",
+      "checkpoint": {
+        "content_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+        "model_id": "spikenaut-snn:usefulness-lif8x16-v1",
+        "schema_id": "spikenaut-sidecar-json/v1",
+        "source_path": "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "C2_accounting": true,
+        "C3_health": true,
+        "C9_ingress": true,
+        "C5_matches_reference": true,
+        "C7_idle_ticks": true,
+        "C6_mask_equivalence": true,
+        "C4_equals_baseline": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 1172,
+          "p99_ns": 2984,
+          "max_ns": 19560,
+          "min_ns": 1031,
+          "mean_ns": 1230.635052631579,
+          "label": "measured"
+        },
+        "decode_latency": {
+          "count": 160,
+          "p50_ns": 1131,
+          "p99_ns": 2594,
+          "max_ns": 7051,
+          "min_ns": 520,
+          "mean_ns": 1232.64375,
+          "label": "measured"
+        },
+        "ticks_per_s": {
+          "value": 744030.7198536374,
+          "label": "measured"
+        },
+        "measured_wall_ns": 25536580,
+        "run_wall_ns": 26859201,
+        "peak_rss_kb": {
+          "value": 6184,
+          "label": "measured"
+        },
+        "nonempty_ticks": 150,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "daemon-live-r3": {
+      "mode": "daemon-live",
+      "checkpoint": {
+        "content_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+        "model_id": "spikenaut-snn:usefulness-lif8x16-v1",
+        "schema_id": "spikenaut-sidecar-json/v1",
+        "source_path": "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "C2_accounting": true,
+        "C3_health": true,
+        "C9_ingress": true,
+        "C5_matches_reference": true,
+        "C7_idle_ticks": true,
+        "C6_mask_equivalence": true,
+        "C4_equals_baseline": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 1132,
+          "p99_ns": 2944,
+          "max_ns": 85841,
+          "min_ns": 1011,
+          "mean_ns": 1236.334,
+          "label": "measured"
+        },
+        "decode_latency": {
+          "count": 160,
+          "p50_ns": 1112,
+          "p99_ns": 2364,
+          "max_ns": 16475,
+          "min_ns": 411,
+          "mean_ns": 1269.29375,
+          "label": "measured"
+        },
+        "ticks_per_s": {
+          "value": 740705.3947990942,
+          "label": "measured"
+        },
+        "measured_wall_ns": 25651224,
+        "run_wall_ns": 26971442,
+        "peak_rss_kb": {
+          "value": 6192,
+          "label": "measured"
+        },
+        "nonempty_ticks": 150,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "daemon-live-r4": {
+      "mode": "daemon-live",
+      "checkpoint": {
+        "content_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+        "model_id": "spikenaut-snn:usefulness-lif8x16-v1",
+        "schema_id": "spikenaut-sidecar-json/v1",
+        "source_path": "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "C2_accounting": true,
+        "C3_health": true,
+        "C9_ingress": true,
+        "C5_matches_reference": true,
+        "C7_idle_ticks": true,
+        "C6_mask_equivalence": true,
+        "C4_equals_baseline": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 1062,
+          "p99_ns": 2915,
+          "max_ns": 1702399,
+          "min_ns": 1011,
+          "mean_ns": 1199.191052631579,
+          "label": "measured"
+        },
+        "decode_latency": {
+          "count": 160,
+          "p50_ns": 1142,
+          "p99_ns": 2203,
+          "max_ns": 6940,
+          "min_ns": 561,
+          "mean_ns": 1214.59375,
+          "label": "measured"
+        },
+        "ticks_per_s": {
+          "value": 761975.8032578476,
+          "label": "measured"
+        },
+        "measured_wall_ns": 24935175,
+        "run_wall_ns": 26207961,
+        "peak_rss_kb": {
+          "value": 6160,
+          "label": "measured"
+        },
+        "nonempty_ticks": 150,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "daemon-live-r5": {
+      "mode": "daemon-live",
+      "checkpoint": {
+        "content_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+        "model_id": "spikenaut-snn:usefulness-lif8x16-v1",
+        "schema_id": "spikenaut-sidecar-json/v1",
+        "source_path": "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "C2_accounting": true,
+        "C3_health": true,
+        "C9_ingress": true,
+        "C5_matches_reference": true,
+        "C7_idle_ticks": true,
+        "C6_mask_equivalence": true,
+        "C4_equals_baseline": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 1231,
+          "p99_ns": 2984,
+          "max_ns": 1723020,
+          "min_ns": 1011,
+          "mean_ns": 1314.7196315789474,
+          "label": "measured"
+        },
+        "decode_latency": {
+          "count": 160,
+          "p50_ns": 1162,
+          "p99_ns": 2684,
+          "max_ns": 12740,
+          "min_ns": 591,
+          "mean_ns": 1268.4,
+          "label": "measured"
+        },
+        "ticks_per_s": {
+          "value": 700254.8706596084,
+          "label": "measured"
+        },
+        "measured_wall_ns": 27132978,
+        "run_wall_ns": 28437742,
+        "peak_rss_kb": {
+          "value": 6160,
+          "label": "measured"
+        },
+        "nonempty_ticks": 150,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "daemon-simulation-r1": {
+      "mode": "daemon-simulation",
+      "checkpoint": {
+        "content_sha256": "none",
+        "model_id": "simulation/blank",
+        "schema_id": "simulation/blank",
+        "source_path": "<simulation>"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "C2_accounting": true,
+        "C3_health": true,
+        "C9_ingress": true,
+        "C8_simulation_no_spikes": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 581,
+          "p99_ns": 1642,
+          "max_ns": 7271,
+          "min_ns": 550,
+          "mean_ns": 610.4917894736842,
+          "label": "measured"
+        },
+        "decode_latency": {
+          "count": 160,
+          "p50_ns": 1021,
+          "p99_ns": 1893,
+          "max_ns": 12819,
+          "min_ns": 430,
+          "mean_ns": 1157.05625,
+          "label": "measured"
+        },
+        "ticks_per_s": {
+          "value": 1389007.1778773558,
+          "label": "measured"
+        },
+        "measured_wall_ns": 13678835,
+        "run_wall_ns": 14466402,
+        "peak_rss_kb": {
+          "value": 5660,
+          "label": "measured"
+        },
+        "nonempty_ticks": 0,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "daemon-simulation-r2": {
+      "mode": "daemon-simulation",
+      "checkpoint": {
+        "content_sha256": "none",
+        "model_id": "simulation/blank",
+        "schema_id": "simulation/blank",
+        "source_path": "<simulation>"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "C2_accounting": true,
+        "C3_health": true,
+        "C9_ingress": true,
+        "C8_simulation_no_spikes": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 621,
+          "p99_ns": 1772,
+          "max_ns": 20211,
+          "min_ns": 550,
+          "mean_ns": 721.0015263157894,
+          "label": "measured"
+        },
+        "decode_latency": {
+          "count": 160,
+          "p50_ns": 1052,
+          "p99_ns": 1783,
+          "max_ns": 12739,
+          "min_ns": 420,
+          "mean_ns": 1171.05,
+          "label": "measured"
+        },
+        "ticks_per_s": {
+          "value": 1202717.5339378403,
+          "label": "measured"
+        },
+        "measured_wall_ns": 15797558,
+        "run_wall_ns": 16609032,
+        "peak_rss_kb": {
+          "value": 5676,
+          "label": "measured"
+        },
+        "nonempty_ticks": 0,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "daemon-simulation-r3": {
+      "mode": "daemon-simulation",
+      "checkpoint": {
+        "content_sha256": "none",
+        "model_id": "simulation/blank",
+        "schema_id": "simulation/blank",
+        "source_path": "<simulation>"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "C2_accounting": true,
+        "C3_health": true,
+        "C9_ingress": true,
+        "C8_simulation_no_spikes": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 631,
+          "p99_ns": 1793,
+          "max_ns": 42835,
+          "min_ns": 550,
+          "mean_ns": 737.6633684210526,
+          "label": "measured"
+        },
+        "decode_latency": {
+          "count": 160,
+          "p50_ns": 1012,
+          "p99_ns": 1903,
+          "max_ns": 13140,
+          "min_ns": 521,
+          "mean_ns": 1149.88125,
+          "label": "measured"
+        },
+        "ticks_per_s": {
+          "value": 1181639.3641635897,
+          "label": "measured"
+        },
+        "measured_wall_ns": 16079356,
+        "run_wall_ns": 16887325,
+        "peak_rss_kb": {
+          "value": 5632,
+          "label": "measured"
+        },
+        "nonempty_ticks": 0,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "daemon-simulation-r4": {
+      "mode": "daemon-simulation",
+      "checkpoint": {
+        "content_sha256": "none",
+        "model_id": "simulation/blank",
+        "schema_id": "simulation/blank",
+        "source_path": "<simulation>"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "C2_accounting": true,
+        "C3_health": true,
+        "C9_ingress": true,
+        "C8_simulation_no_spikes": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 581,
+          "p99_ns": 1713,
+          "max_ns": 17156,
+          "min_ns": 551,
+          "mean_ns": 619.7835263157895,
+          "label": "measured"
+        },
+        "decode_latency": {
+          "count": 160,
+          "p50_ns": 992,
+          "p99_ns": 1732,
+          "max_ns": 13070,
+          "min_ns": 491,
+          "mean_ns": 1131.30625,
+          "label": "measured"
+        },
+        "ticks_per_s": {
+          "value": 1372952.6024966927,
+          "label": "measured"
+        },
+        "measured_wall_ns": 13838788,
+        "run_wall_ns": 14637573,
+        "peak_rss_kb": {
+          "value": 5652,
+          "label": "measured"
+        },
+        "nonempty_ticks": 0,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "daemon-simulation-r5": {
+      "mode": "daemon-simulation",
+      "checkpoint": {
+        "content_sha256": "none",
+        "model_id": "simulation/blank",
+        "schema_id": "simulation/blank",
+        "source_path": "<simulation>"
+      },
+      "checks": {
+        "C1_ticks": true,
+        "C2_accounting": true,
+        "C3_health": true,
+        "C9_ingress": true,
+        "C8_simulation_no_spikes": true
+      },
+      "metrics": {
+        "tick_latency": {
+          "count": 19000,
+          "p50_ns": 581,
+          "p99_ns": 1623,
+          "max_ns": 7892,
+          "min_ns": 550,
+          "mean_ns": 610.658,
+          "label": "measured"
+        },
+        "decode_latency": {
+          "count": 160,
+          "p50_ns": 1021,
+          "p99_ns": 1812,
+          "max_ns": 10255,
+          "min_ns": 411,
+          "mean_ns": 1136.08125,
+          "label": "measured"
+        },
+        "ticks_per_s": {
+          "value": 1388298.7604318778,
+          "label": "measured"
+        },
+        "measured_wall_ns": 13685815,
+        "run_wall_ns": 14465872,
+        "peak_rss_kb": {
+          "value": 5640,
+          "label": "measured"
+        },
+        "nonempty_ticks": 0,
+        "budget_p99_within_1ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    }
+  },
+  "transport": {
+    "transport-live-r1": {
+      "checks": {
+        "T1_ready_and_rss": true,
+        "T2_subscribed_and_primed": true,
+        "T3_all_pulses_matched": true,
+        "T4_metrics_ready_not_fatal": true,
+        "T5_sigterm_clean_exit": true
+      },
+      "metrics": {
+        "end_to_end_latency": {
+          "count": 200,
+          "max": 2158813,
+          "min": 206604,
+          "p50": 1124841,
+          "p99": 1324895,
+          "label": "measured"
+        },
+        "pulses_sent": 200,
+        "matched": 200,
+        "mismatched": 0,
+        "lost": 0,
+        "extra_nonempty": 0,
+        "measured_frames_total": 4250,
+        "measured_frames_empty": 4050,
+        "ready_after_ns": 10218682,
+        "prime_attempts": 1,
+        "sigterm_exit_ns": 6715253,
+        "daemon_peak_rss_kb": {
+          "value": 6996,
+          "label": "measured"
+        },
+        "daemon_rss_kb": {
+          "value": 6996,
+          "label": "measured"
+        },
+        "budget_p99_within_5ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "transport-live-r2": {
+      "checks": {
+        "T1_ready_and_rss": true,
+        "T2_subscribed_and_primed": true,
+        "T3_all_pulses_matched": true,
+        "T4_metrics_ready_not_fatal": true,
+        "T5_sigterm_clean_exit": true
+      },
+      "metrics": {
+        "end_to_end_latency": {
+          "count": 200,
+          "max": 4056039,
+          "min": 274127,
+          "p50": 1112593,
+          "p99": 2021926,
+          "label": "measured"
+        },
+        "pulses_sent": 200,
+        "matched": 200,
+        "mismatched": 0,
+        "lost": 0,
+        "extra_nonempty": 0,
+        "measured_frames_total": 4250,
+        "measured_frames_empty": 4050,
+        "ready_after_ns": 10229819,
+        "prime_attempts": 1,
+        "sigterm_exit_ns": 6054279,
+        "daemon_peak_rss_kb": {
+          "value": 6920,
+          "label": "measured"
+        },
+        "daemon_rss_kb": {
+          "value": 6920,
+          "label": "measured"
+        },
+        "budget_p99_within_5ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    },
+    "transport-live-r3": {
+      "checks": {
+        "T1_ready_and_rss": true,
+        "T2_subscribed_and_primed": true,
+        "T3_all_pulses_matched": true,
+        "T4_metrics_ready_not_fatal": true,
+        "T5_sigterm_clean_exit": true
+      },
+      "metrics": {
+        "end_to_end_latency": {
+          "count": 200,
+          "max": 2467703,
+          "min": 456555,
+          "p50": 1113284,
+          "p99": 1231994,
+          "label": "measured"
+        },
+        "pulses_sent": 200,
+        "matched": 200,
+        "mismatched": 0,
+        "lost": 0,
+        "extra_nonempty": 0,
+        "measured_frames_total": 4251,
+        "measured_frames_empty": 4051,
+        "ready_after_ns": 10247746,
+        "prime_attempts": 1,
+        "sigterm_exit_ns": 6330539,
+        "daemon_peak_rss_kb": {
+          "value": 6976,
+          "label": "measured"
+        },
+        "daemon_rss_kb": {
+          "value": 6976,
+          "label": "measured"
+        },
+        "budget_p99_within_5ms": {
+          "value": true,
+          "label": "derived"
+        }
+      },
+      "all_checks_pass": true
+    }
+  },
+  "decision": {
+    "value": "supports_further_development",
+    "correctness_all_pass": true,
+    "transport_all_pass": true,
+    "tick_budget_all_pass": true,
+    "transport_budget_all_pass": true,
+    "label": "derived"
+  }
+}
