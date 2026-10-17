@@ -78,6 +78,7 @@ try:
 except OSError:
     pass
 files = sorted(glob.glob("experiments/usefulness/config/*.toml") + glob.glob("experiments/usefulness/fixtures/**/*.json", recursive=True)
+               + glob.glob("examples/usefulness_common/*.rs")
                + ["examples/usefulness_inprocess.rs", "examples/usefulness_transport.rs", "Cargo.lock"])
 identity = {
     "sha": sha,
