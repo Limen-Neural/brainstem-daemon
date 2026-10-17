@@ -1,0 +1,264 @@
+{
+  "source": "spikenaut_julia",
+  "encoder": "usefulness-synthetic-v1",
+  "q88": "signed",
+  "frozen_lineage": "usefulness-fixture-v1",
+  "neurons": [
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        2.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        2.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        2.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        2.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        0.0,
+        2.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        0.0,
+        2.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        0.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        2.0
+      ]
+    },
+    {
+      "decay_rate": 0.15,
+      "membrane_potential": 0.0,
+      "threshold": 0.3,
+      "last_spike": false,
+      "weights": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        2.0
+      ]
+    }
+  ]
+}
