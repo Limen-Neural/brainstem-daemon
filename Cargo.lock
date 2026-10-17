@@ -523,9 +523,9 @@ dependencies = [
 
 [[package]]
 name = "neuromod"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e0a02908726636a6c0ce971df297923914a67766d497c5436facf743c68c329"
+checksum = "24e8c6418345bd055f33bfb45d90cdb98f3caad2fd16c62b43fca6d91c1182d0"
 dependencies = [
  "rand",
  "serde",
