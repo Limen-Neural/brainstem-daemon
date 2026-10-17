@@ -68,14 +68,16 @@ struct Daemon {
 
 impl Daemon {
     fn spawn(binary: &Path, config: &Path, log_path: &Path) -> Result<Self> {
+        // tracing-subscriber writes to stdout; capture both streams in one file.
         let log = fs::File::create(log_path)
             .with_context(|| format!("create daemon log {}", log_path.display()))?;
+        let log_err = log.try_clone()?;
         let child = Command::new(binary)
             .arg("--config")
             .arg(config)
             .env("RUST_LOG", "info")
-            .stdout(Stdio::null())
-            .stderr(Stdio::from(log))
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(log_err))
             .spawn()
             .with_context(|| format!("spawn {}", binary.display()))?;
         Ok(Self {
@@ -116,7 +118,12 @@ impl Daemon {
     fn terminate(&mut self) -> Result<(Duration, Option<i32>)> {
         let pid = self.pid().to_string();
         let sent = Instant::now();
-        let status = Command::new("kill").arg("-TERM").arg(&pid).status()?;
+        // The shell builtin works on minimal images without procps.
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg(format!("kill -TERM {pid}"))
+            .status()
+            .context("run sh -c kill")?;
         if !status.success() {
             bail!("kill -TERM {pid} failed: {status}");
         }

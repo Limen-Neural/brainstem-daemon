@@ -215,5 +215,5 @@ Fixture ports: 5755 (producer PUB / daemon SUB), 5756 (daemon PUB), 9755
 - Transport correlates input and output by order and time only; the daemon
   does not propagate input batch/session ids. PUB sends are not delivery
   acknowledgments; loss is measured at the subscriber.
-- `VmHWM` is Linux-specific; the transport driver uses `kill -TERM`.
+- `VmHWM` is Linux-specific; the transport driver sends SIGTERM through `sh -c kill`.
 - Release qualification and publication stay in LIM-1447.
