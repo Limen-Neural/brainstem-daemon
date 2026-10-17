@@ -23,13 +23,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, bail};
-use brainstem_daemon::daemon::{BrainstemDaemon, DaemonConfig, RuntimeMode};
+use anyhow::{Context, Result, anyhow, bail};
+use brainstem_daemon::daemon::{BrainstemDaemon, DaemonConfig, RuntimeMode, RuntimeStats};
 use brainstem_daemon::ingress::{IngressPolicy, MessageClass, STIMULUS_SCHEMA, accept_ipc_json};
-use brainstem_daemon::{BackendPair, IngressPacket, SpikeEvent, SpikeSink, StimulusSource};
+use brainstem_daemon::{
+    BackendPair, ClassMetrics, IngressMetrics, IngressPacket, ModelProvenance, SpikeEvent,
+    SpikeSink, StimulusSource,
+};
 use corpus_ipc::{BatchMetadata, IpcMessage, NeuromodulatorSnapshot, StimulusBatch};
 use neuromod::NeuroModulators;
 use serde::Deserialize;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 const SESSION_ID: &str = "usefulness";
@@ -81,6 +85,21 @@ impl Workload {
         }
         events
     }
+
+    /// Stimulus and modulator frames one full run sends.
+    fn frame_counts(&self) -> (u64, u64) {
+        let stimuli = self
+            .cycle_events
+            .iter()
+            .filter(|e| !e.values.is_empty())
+            .count() as u64;
+        let modulators = self
+            .cycle_events
+            .iter()
+            .filter(|e| e.modulators.is_some())
+            .count() as u64;
+        (stimuli * self.cycles, modulators * self.cycles)
+    }
 }
 
 /// One tick as observed by the driver.
@@ -91,10 +110,14 @@ struct TickRecord {
     decode_ns: Option<u64>,
 }
 
+/// Recorder shared by the source and the sink (neither is returned after the run).
 #[derive(Default)]
 struct Shared {
     polls: Vec<(Instant, Option<u64>)>,
     emits: Vec<(Instant, Vec<u16>)>,
+    /// Observed producer-side counts, copied in by the source at shutdown.
+    stimulus_frames: u64,
+    modulator_frames: u64,
 }
 
 fn now_ns() -> u64 {
@@ -133,6 +156,24 @@ fn encode_modulators(mods: &Modulators, tick: u64) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&IpcMessage::Neuromodulators(snapshot))?)
 }
 
+/// Decode through the public ingress path, merging a modulator frame into the
+/// stimulus packet the way the ZMQ source attaches held modulators.
+fn decode_frames(
+    policy: &IngressPolicy,
+    stimuli: Option<&[u8]>,
+    modulators: Option<&[u8]>,
+) -> Result<IngressPacket> {
+    let now = now_ns();
+    let mut packet = match stimuli {
+        Some(bytes) => accept_ipc_json(bytes, policy, now)?,
+        None => IngressPacket::default(),
+    };
+    if let Some(bytes) = modulators {
+        packet.modulators = accept_ipc_json(bytes, policy, now)?.modulators;
+    }
+    Ok(packet)
+}
+
 /// Producer-side encoding happens before the poll instant; decoding through
 /// the public ingress path is timed separately as `decode_ns`.
 struct WorkloadSource {
@@ -145,55 +186,56 @@ struct WorkloadSource {
     modulator_frames: u64,
 }
 
+impl WorkloadSource {
+    fn record_poll(&self, at: Instant, decode_ns: Option<u64>) {
+        self.shared.lock().unwrap().polls.push((at, decode_ns));
+    }
+
+    fn stimulus_frame(&mut self, event: &Event) -> Result<Option<Vec<u8>>> {
+        if event.values.is_empty() {
+            return Ok(None);
+        }
+        let batch_id = self.next_batch_id;
+        self.next_batch_id += 1;
+        self.stimulus_frames += 1;
+        encode_stimulus(event, batch_id).map(Some)
+    }
+
+    fn modulator_frame(&mut self, event: &Event, tick: u64) -> Result<Option<Vec<u8>>> {
+        let Some(mods) = event.modulators.as_ref() else {
+            return Ok(None);
+        };
+        self.modulator_frames += 1;
+        encode_modulators(mods, tick).map(Some)
+    }
+}
+
 impl StimulusSource for WorkloadSource {
     fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
         let tick = self.tick;
         self.tick += 1;
-        let Some(event) = self.events.get(&tick) else {
-            self.shared
-                .lock()
-                .unwrap()
-                .polls
-                .push((Instant::now(), None));
+        let Some(event) = self.events.get(&tick).cloned() else {
+            self.record_poll(Instant::now(), None);
             return Ok(None);
         };
-        let stimulus_bytes = if event.values.is_empty() {
-            None
-        } else {
-            let id = self.next_batch_id;
-            self.next_batch_id += 1;
-            self.stimulus_frames += 1;
-            Some(encode_stimulus(event, id)?)
-        };
-        let modulator_bytes = match event.modulators.as_ref() {
-            Some(mods) => {
-                self.modulator_frames += 1;
-                Some(encode_modulators(mods, tick)?)
-            }
-            None => None,
-        };
-
+        let stimuli = self.stimulus_frame(&event)?;
+        let modulators = self.modulator_frame(&event, tick)?;
         let decode_start = Instant::now();
-        let now = now_ns();
-        let mut packet = match stimulus_bytes.as_deref() {
-            Some(bytes) => accept_ipc_json(bytes, &self.policy, now)?,
-            None => IngressPacket::default(),
-        };
-        if let Some(bytes) = modulator_bytes.as_deref() {
-            let mods = accept_ipc_json(bytes, &self.policy, now)?;
-            packet.modulators = mods.modulators;
-        }
+        let packet = decode_frames(&self.policy, stimuli.as_deref(), modulators.as_deref())?;
         let poll = Instant::now();
         let decode_ns = poll.duration_since(decode_start).as_nanos() as u64;
-        self.shared
-            .lock()
-            .unwrap()
-            .polls
-            .push((poll, Some(decode_ns)));
+        self.record_poll(poll, Some(decode_ns));
         Ok(Some(packet))
     }
 
     fn initialize(&mut self, _model_path: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+
+    fn shutdown(&mut self) -> Result<()> {
+        let mut shared = self.shared.lock().unwrap();
+        shared.stimulus_frames = self.stimulus_frames;
+        shared.modulator_frames = self.modulator_frames;
         Ok(())
     }
 }
@@ -256,7 +298,7 @@ fn timing_summary(
     warmup: usize,
     first_measured_start: Instant,
     last_end: Instant,
-) -> serde_json::Value {
+) -> Value {
     let measured = records.len().saturating_sub(warmup);
     let wall = last_end.duration_since(first_measured_start);
     let ticks_per_s = if wall.is_zero() {
@@ -264,7 +306,7 @@ fn timing_summary(
     } else {
         measured as f64 / wall.as_secs_f64()
     };
-    serde_json::json!({
+    json!({
         "ticks_total": records.len(),
         "warmup_ticks_excluded": warmup,
         "measured_ticks": measured,
@@ -273,8 +315,8 @@ fn timing_summary(
     })
 }
 
-fn class_metrics(metrics: &brainstem_daemon::ClassMetrics) -> serde_json::Value {
-    serde_json::json!({
+fn class_json(metrics: ClassMetrics) -> Value {
+    json!({
         "accepted": metrics.accepted,
         "rejected": metrics.rejected,
         "dropped": metrics.dropped,
@@ -284,14 +326,46 @@ fn class_metrics(metrics: &brainstem_daemon::ClassMetrics) -> serde_json::Value 
     })
 }
 
+fn ingress_json(metrics: &IngressMetrics) -> Value {
+    json!({
+        "sensory": class_json(metrics.class(MessageClass::Sensory)),
+        "reward": class_json(metrics.class(MessageClass::Reward)),
+        "control": class_json(metrics.class(MessageClass::Control)),
+        "telemetry": class_json(metrics.class(MessageClass::Telemetry)),
+    })
+}
+
+fn runtime_stats_json(stats: &RuntimeStats) -> Value {
+    json!({
+        "ticks": stats.ticks,
+        "accepted_batches": stats.accepted_batches,
+        "rejected_batches": stats.rejected_batches,
+        "receive_errors": stats.receive_errors,
+        "emit_errors": stats.emit_errors,
+        "dropped_spikes": stats.dropped_spikes,
+        "diagnostic_emissions": stats.diagnostic_emissions,
+        "suppressed_diagnostics": stats.suppressed_diagnostics,
+        "last_batch_id": stats.last_batch_id,
+    })
+}
+
+fn checkpoint_json(provenance: &ModelProvenance) -> Value {
+    json!({
+        "schema_id": provenance.schema_id,
+        "model_id": provenance.model_id,
+        "content_sha256": provenance.content_sha256,
+        "source_path": provenance.source_path.display().to_string(),
+    })
+}
+
 struct Run {
     records: Vec<TickRecord>,
     first_measured_start: Instant,
     last_end: Instant,
-    summary: serde_json::Value,
+    summary: Value,
 }
 
-fn run_daemon(cfg: DaemonConfig, workload: &Workload) -> Result<Run> {
+fn build_backend(cfg: &DaemonConfig, workload: &Workload) -> (BackendPair, Arc<Mutex<Shared>>) {
     let shared = Arc::new(Mutex::new(Shared::default()));
     {
         let mut guard = shared.lock().unwrap();
@@ -307,18 +381,6 @@ fn run_daemon(cfg: DaemonConfig, workload: &Workload) -> Result<Run> {
         stimulus_frames: 0,
         modulator_frames: 0,
     };
-    let stimulus_frames_expected = workload.cycles
-        * workload
-            .cycle_events
-            .iter()
-            .filter(|e| !e.values.is_empty())
-            .count() as u64;
-    let modulator_frames_expected = workload.cycles
-        * workload
-            .cycle_events
-            .iter()
-            .filter(|e| e.modulators.is_some())
-            .count() as u64;
     let sink = RecordingSink {
         shared: Arc::clone(&shared),
     };
@@ -326,6 +388,33 @@ fn run_daemon(cfg: DaemonConfig, workload: &Workload) -> Result<Run> {
         source: Box::new(source),
         sink: Box::new(sink),
     };
+    (pair, shared)
+}
+
+/// Pair each poll with its emit; a count mismatch means a tick was skipped or failed.
+fn tick_records(shared: &Shared) -> Result<Vec<TickRecord>> {
+    if shared.polls.len() != shared.emits.len() {
+        bail!(
+            "poll/emit count mismatch: {} polls, {} emits (a tick was skipped or failed)",
+            shared.polls.len(),
+            shared.emits.len()
+        );
+    }
+    let records = shared
+        .polls
+        .iter()
+        .zip(shared.emits.iter())
+        .map(|((poll, decode_ns), (emit, channels))| TickRecord {
+            channels: channels.clone(),
+            latency_ns: emit.duration_since(*poll).as_nanos() as u64,
+            decode_ns: *decode_ns,
+        })
+        .collect();
+    Ok(records)
+}
+
+fn run_daemon(cfg: DaemonConfig, workload: &Workload) -> Result<Run> {
+    let (pair, shared) = build_backend(&cfg, workload);
     let daemon = BrainstemDaemon::try_with_backend(cfg, pair).context("construct daemon")?;
     let health = daemon.health();
     let ingress = daemon.ingress();
@@ -339,63 +428,25 @@ fn run_daemon(cfg: DaemonConfig, workload: &Workload) -> Result<Run> {
     let snapshot = health.snapshot();
     let metrics = ingress.metrics();
     let shared = Arc::try_unwrap(shared)
-        .map_err(|_| anyhow::anyhow!("backend still holds the shared recorder"))?
+        .map_err(|_| anyhow!("backend still holds the shared recorder"))?
         .into_inner()
         .unwrap();
-    if shared.polls.len() != shared.emits.len() {
-        bail!(
-            "poll/emit count mismatch: {} polls, {} emits (a tick was skipped or failed)",
-            shared.polls.len(),
-            shared.emits.len()
-        );
-    }
-    let records: Vec<TickRecord> = shared
-        .polls
-        .iter()
-        .zip(shared.emits.iter())
-        .map(|((poll, decode_ns), (emit, channels))| TickRecord {
-            channels: channels.clone(),
-            latency_ns: emit.duration_since(*poll).as_nanos() as u64,
-            decode_ns: *decode_ns,
-        })
-        .collect();
+    let records = tick_records(&shared)?;
     let warmup = workload.warmup_ticks as usize;
-    let first_measured_start = shared
-        .polls
-        .get(warmup)
-        .map(|(at, _)| *at)
-        .unwrap_or(finished);
-    let last_end = shared.emits.last().map(|(at, _)| *at).unwrap_or(finished);
-    let provenance = stats.loaded_checkpoint.as_ref();
-
-    let summary = serde_json::json!({
+    let first_measured_start = shared.polls.get(warmup).map_or(finished, |(at, _)| *at);
+    let last_end = shared.emits.last().map_or(finished, |(at, _)| *at);
+    let checkpoint = stats
+        .loaded_checkpoint
+        .as_ref()
+        .map_or(Value::Null, checkpoint_json);
+    let summary = json!({
         "run_wall_ns": finished.duration_since(started).as_nanos() as u64,
-        "runtime_stats": {
-            "ticks": stats.ticks,
-            "accepted_batches": stats.accepted_batches,
-            "rejected_batches": stats.rejected_batches,
-            "receive_errors": stats.receive_errors,
-            "emit_errors": stats.emit_errors,
-            "dropped_spikes": stats.dropped_spikes,
-            "diagnostic_emissions": stats.diagnostic_emissions,
-            "suppressed_diagnostics": stats.suppressed_diagnostics,
-            "last_batch_id": stats.last_batch_id,
-        },
-        "checkpoint": provenance.map(|p| serde_json::json!({
-            "schema_id": p.schema_id,
-            "model_id": p.model_id,
-            "content_sha256": p.content_sha256,
-            "source_path": p.source_path.display().to_string(),
-        })),
-        "stimulus_frames_sent": stimulus_frames_expected,
-        "modulator_frames_sent": modulator_frames_expected,
+        "runtime_stats": runtime_stats_json(&stats),
+        "checkpoint": checkpoint,
+        "stimulus_frames_sent": shared.stimulus_frames,
+        "modulator_frames_sent": shared.modulator_frames,
         "health": serde_json::to_value(&snapshot)?,
-        "ingress": {
-            "sensory": class_metrics(&metrics.class(MessageClass::Sensory)),
-            "reward": class_metrics(&metrics.class(MessageClass::Reward)),
-            "control": class_metrics(&metrics.class(MessageClass::Control)),
-            "telemetry": class_metrics(&metrics.class(MessageClass::Telemetry)),
-        },
+        "ingress": ingress_json(&metrics),
     });
     Ok(Run {
         records,
@@ -421,15 +472,15 @@ fn decode_event(event: Option<&Event>, stimuli: &mut [f32]) -> NeuroModulators {
             }
         }
     }
-    match event.modulators.as_ref() {
-        Some(m) => NeuroModulators {
+    event
+        .modulators
+        .as_ref()
+        .map_or_else(NeuroModulators::default, |m| NeuroModulators {
             dopamine: m.dopamine,
             serotonin: m.cortisol,
             acetylcholine: m.acetylcholine,
             norepinephrine: m.tempo,
-        },
-        None => NeuroModulators::default(),
-    }
+        })
 }
 
 fn run_baseline(cfg: DaemonConfig, workload: &Workload) -> Result<Run> {
@@ -447,7 +498,7 @@ fn run_baseline(cfg: DaemonConfig, workload: &Workload) -> Result<Run> {
         let start = Instant::now();
         let ids = network
             .step(&stimuli, &modulators)
-            .map_err(|e| anyhow::anyhow!("baseline step failed at tick {tick}: {e}"))?;
+            .map_err(|e| anyhow!("baseline step failed at tick {tick}: {e}"))?;
         let mut channels: Vec<u16> = ids.iter().filter_map(|&i| u16::try_from(i).ok()).collect();
         channels.sort_unstable();
         let end = Instant::now();
@@ -462,18 +513,12 @@ fn run_baseline(cfg: DaemonConfig, workload: &Workload) -> Result<Run> {
         });
     }
     let finished = Instant::now();
-    let summary = serde_json::json!({
+    let (stimulus_frames, modulator_frames) = workload.frame_counts();
+    let summary = json!({
         "run_wall_ns": finished.duration_since(started).as_nanos() as u64,
-        "checkpoint": {
-            "schema_id": provenance.schema_id,
-            "model_id": provenance.model_id,
-            "content_sha256": provenance.content_sha256,
-            "source_path": provenance.source_path.display().to_string(),
-        },
-        "stimulus_frames_sent": workload.cycles
-            * workload.cycle_events.iter().filter(|e| !e.values.is_empty()).count() as u64,
-        "modulator_frames_sent": workload.cycles
-            * workload.cycle_events.iter().filter(|e| e.modulators.is_some()).count() as u64,
+        "checkpoint": checkpoint_json(&provenance),
+        "stimulus_frames_sent": stimulus_frames,
+        "modulator_frames_sent": modulator_frames,
     });
     Ok(Run {
         records,
@@ -483,7 +528,15 @@ fn run_baseline(cfg: DaemonConfig, workload: &Workload) -> Result<Run> {
     })
 }
 
-fn main() -> Result<()> {
+struct Args {
+    mode: String,
+    config: PathBuf,
+    workload: PathBuf,
+    records: PathBuf,
+    summary: PathBuf,
+}
+
+fn parse_args() -> Result<Args> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 6 {
         bail!(
@@ -491,14 +544,71 @@ fn main() -> Result<()> {
             args[0]
         );
     }
-    let mode = args[1].as_str();
-    let config_path = PathBuf::from(&args[2]);
-    let workload_path = PathBuf::from(&args[3]);
-    let records_path = PathBuf::from(&args[4]);
-    let summary_path = PathBuf::from(&args[5]);
+    Ok(Args {
+        mode: args[1].clone(),
+        config: PathBuf::from(&args[2]),
+        workload: PathBuf::from(&args[3]),
+        records: PathBuf::from(&args[4]),
+        summary: PathBuf::from(&args[5]),
+    })
+}
 
-    let cfg = DaemonConfig::load(&config_path).context("load config")?;
-    let workload = Workload::load(&workload_path)?;
+/// Live modes need a live config; simulation needs a simulation config.
+fn check_mode(mode: &str, runtime_mode: RuntimeMode) -> Result<()> {
+    let compatible = matches!(
+        (mode, runtime_mode),
+        ("daemon-live", RuntimeMode::Live)
+            | ("daemon-simulation", RuntimeMode::Simulation)
+            | ("baseline", RuntimeMode::Live)
+    );
+    if !compatible {
+        bail!("mode {mode} does not match runtime_mode {runtime_mode:?}");
+    }
+    Ok(())
+}
+
+/// Live runs pin the fixture digest to the workload; simulation has no fixture.
+fn fixture_digest(cfg: &DaemonConfig, workload: &Workload) -> Result<Option<String>> {
+    if cfg.runtime_mode == RuntimeMode::Simulation {
+        return Ok(None);
+    }
+    let digest = sha256_file(&cfg.model_path)?;
+    if digest != workload.fixture_sha256 {
+        bail!(
+            "fixture sha256 {digest} does not match workload fixture_sha256 {}",
+            workload.fixture_sha256
+        );
+    }
+    Ok(Some(digest))
+}
+
+fn write_summary(
+    args: &Args,
+    run: Run,
+    fixture_sha256: Option<String>,
+    warmup: usize,
+) -> Result<()> {
+    let mut summary = run.summary;
+    summary["mode"] = Value::String(args.mode.clone());
+    summary["config"] = Value::String(args.config.display().to_string());
+    summary["workload"] = Value::String(args.workload.display().to_string());
+    summary["fixture_sha256"] = serde_json::to_value(fixture_sha256)?;
+    summary["timing"] =
+        timing_summary(&run.records, warmup, run.first_measured_start, run.last_end);
+    summary["peak_rss_kb"] = serde_json::to_value(vm_status_kb("VmHWM:"))?;
+    summary["rss_kb"] = serde_json::to_value(vm_status_kb("VmRSS:"))?;
+    summary["pid"] = serde_json::to_value(std::process::id())?;
+    fs::write(
+        &args.summary,
+        serde_json::to_string_pretty(&summary)? + "\n",
+    )
+    .with_context(|| format!("write {}", args.summary.display()))
+}
+
+fn main() -> Result<()> {
+    let args = parse_args()?;
+    let cfg = DaemonConfig::load(&args.config).context("load config")?;
+    let workload = Workload::load(&args.workload)?;
     if cfg.channels != workload.channels {
         bail!(
             "config channels {} != workload channels {}",
@@ -506,62 +616,24 @@ fn main() -> Result<()> {
             workload.channels
         );
     }
-    let fixture_sha256 = match cfg.runtime_mode {
-        RuntimeMode::Live => {
-            let digest = sha256_file(&cfg.model_path)?;
-            if digest != workload.fixture_sha256 {
-                bail!(
-                    "fixture sha256 {digest} does not match workload fixture_sha256 {}",
-                    workload.fixture_sha256
-                );
-            }
-            Some(digest)
-        }
-        RuntimeMode::Simulation => None,
-    };
-    let expected_mode = match (mode, cfg.runtime_mode) {
-        ("daemon-live", RuntimeMode::Live)
-        | ("daemon-simulation", RuntimeMode::Simulation)
-        | ("baseline", RuntimeMode::Live) => mode,
-        _ => bail!(
-            "mode {mode} does not match runtime_mode {:?}",
-            cfg.runtime_mode
-        ),
-    };
-
-    let run = match expected_mode {
+    check_mode(&args.mode, cfg.runtime_mode)?;
+    let fixture_sha256 = fixture_digest(&cfg, &workload)?;
+    let run = match args.mode.as_str() {
         "baseline" => run_baseline(cfg, &workload)?,
         _ => run_daemon(cfg, &workload)?,
     };
-
-    write_records(&records_path, &run.records)?;
-    let mut summary = run.summary;
-    summary["mode"] = serde_json::Value::String(mode.to_string());
-    summary["config"] = serde_json::Value::String(config_path.display().to_string());
-    summary["workload"] = serde_json::Value::String(workload_path.display().to_string());
-    summary["fixture_sha256"] = serde_json::to_value(fixture_sha256)?;
-    summary["timing"] = timing_summary(
-        &run.records,
-        workload.warmup_ticks as usize,
-        run.first_measured_start,
-        run.last_end,
-    );
-    summary["peak_rss_kb"] = serde_json::to_value(vm_status_kb("VmHWM:"))?;
-    summary["rss_kb"] = serde_json::to_value(vm_status_kb("VmRSS:"))?;
-    summary["pid"] = serde_json::to_value(std::process::id())?;
-    fs::write(
-        &summary_path,
-        serde_json::to_string_pretty(&summary)? + "\n",
-    )
-    .with_context(|| format!("write {}", summary_path.display()))?;
+    write_records(&args.records, &run.records)?;
+    let ticks = run.records.len();
+    let nonempty = run
+        .records
+        .iter()
+        .filter(|r| !r.channels.is_empty())
+        .count();
+    write_summary(&args, run, fixture_sha256, workload.warmup_ticks as usize)?;
     println!(
-        "{mode}: {} ticks, {} nonempty, p?? see summary {}",
-        run.records.len(),
-        run.records
-            .iter()
-            .filter(|r| !r.channels.is_empty())
-            .count(),
-        summary_path.display()
+        "{}: {ticks} ticks, {nonempty} nonempty; summary {}",
+        args.mode,
+        args.summary.display()
     );
     Ok(())
 }

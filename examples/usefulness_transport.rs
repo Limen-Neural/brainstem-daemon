@@ -3,16 +3,17 @@
 
 //! Transport driver for the usefulness experiment (`experiments/usefulness`).
 //!
-//! Launches the `corpus-ipc` `brainstem-daemon` binary with the
-//! `transport-live` configuration, binds an external ZeroMQ producer on the
-//! daemon's SUB endpoint, subscribes to the daemon PUB, waits for `/readyz`,
-//! primes the PUB/SUB handshake, sends the measured pulses with fresh
-//! timestamps, collects every output frame, reads `/metrics`, `/health` and
-//! the daemon RSS, then stops the daemon with SIGTERM.
+//! Launches the `corpus-ipc` `brainstem-daemon` binary built next to this
+//! example (`target/<profile>/brainstem-daemon`) with the `transport-live`
+//! configuration, binds an external ZeroMQ producer on the daemon's SUB
+//! endpoint, subscribes to the daemon PUB, waits for `/readyz`, primes the
+//! PUB/SUB handshake, sends the measured pulses with fresh timestamps,
+//! collects every output frame, reads `/metrics`, `/health` and the daemon
+//! RSS, then stops the daemon with SIGTERM.
 //!
-//! Usage: `usefulness_transport <daemon-binary> <config.toml> <workload.json> <out.jsonl> <summary.json>`
+//! Usage: `usefulness_transport <config.toml> <workload.json> <out.jsonl> <summary.json>`
 //!
-//! Requires `--features corpus-ipc`. Linux only (`/proc/<pid>/status`, `kill`).
+//! Requires `--features corpus-ipc`. Linux only (`/proc/<pid>/status`, `sh`).
 
 use std::collections::HashMap;
 use std::fs;
@@ -27,6 +28,7 @@ use brainstem_daemon::daemon::DaemonConfig;
 use brainstem_daemon::ingress::STIMULUS_SCHEMA;
 use corpus_ipc::{BatchMetadata, IpcMessage, StimulusBatch};
 use serde::Deserialize;
+use serde_json::{Value, json};
 
 const READY_DEADLINE: Duration = Duration::from_secs(10);
 const EXIT_DEADLINE: Duration = Duration::from_secs(10);
@@ -52,13 +54,90 @@ struct Workload {
     transport: Transport,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Subscribe,
+    Prime,
+    Measure,
+    Tail,
+}
+
+impl Phase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Subscribe => "subscribe",
+            Self::Prime => "prime",
+            Self::Measure => "measure",
+            Self::Tail => "tail",
+        }
+    }
+
+    /// Frames that count toward the measurement (measured pulses and their tail).
+    fn measured(self) -> bool {
+        matches!(self, Self::Measure | Self::Tail)
+    }
+}
+
 #[derive(Debug)]
 struct Frame {
-    phase: &'static str,
+    phase: Phase,
     recv: Instant,
     channels: Vec<u16>,
     batch_id: u64,
     timestamp: u64,
+}
+
+impl Frame {
+    fn measured_nonempty(&self) -> bool {
+        self.phase.measured() && !self.channels.is_empty()
+    }
+}
+
+struct Pulse {
+    index: usize,
+    channel: usize,
+    sent_at: Instant,
+}
+
+struct Args {
+    config: PathBuf,
+    workload: PathBuf,
+    records: PathBuf,
+    summary: PathBuf,
+}
+
+fn parse_args() -> Result<Args> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() != 5 {
+        bail!(
+            "usage: {} <config.toml> <workload.json> <out.jsonl> <summary.json>",
+            args[0]
+        );
+    }
+    Ok(Args {
+        config: PathBuf::from(&args[1]),
+        workload: PathBuf::from(&args[2]),
+        records: PathBuf::from(&args[3]),
+        summary: PathBuf::from(&args[4]),
+    })
+}
+
+/// The daemon binary built alongside this example:
+/// `target/<profile>/examples/usefulness_transport` → `target/<profile>/brainstem-daemon`.
+fn daemon_binary() -> Result<PathBuf> {
+    let exe = std::env::current_exe().context("current_exe")?;
+    let profile_dir = exe
+        .parent()
+        .and_then(Path::parent)
+        .context("example path has no target directory")?;
+    let binary = profile_dir.join("brainstem-daemon");
+    if !binary.is_file() {
+        bail!(
+            "daemon binary not found at {} (build with --features corpus-ipc --bin brainstem-daemon)",
+            binary.display()
+        );
+    }
+    Ok(binary)
 }
 
 struct Daemon {
@@ -87,7 +166,7 @@ impl Daemon {
     }
 
     fn pid(&self) -> u32 {
-        self.child.as_ref().map(Child::id).unwrap_or(0)
+        self.child.as_ref().map_or(0, Child::id)
     }
 
     fn exited(&mut self) -> Result<bool> {
@@ -99,47 +178,51 @@ impl Daemon {
             .is_some())
     }
 
+    fn ready(&mut self, control: SocketAddr) -> Result<bool> {
+        if self.exited()? {
+            bail!("daemon exited before becoming ready");
+        }
+        Ok(http_get(control, "/readyz")?.is_some_and(|(status, _)| status == 200))
+    }
+
     fn wait_ready(&mut self, control: SocketAddr) -> Result<Duration> {
         let deadline = Instant::now() + READY_DEADLINE;
-        loop {
-            if self.exited()? {
-                bail!("daemon exited before becoming ready");
-            }
-            if http_get(control, "/readyz")?.is_some_and(|(status, _)| status == 200) {
-                return Ok(self.spawned_at.elapsed());
-            }
+        while !self.ready(control)? {
             if Instant::now() > deadline {
                 bail!("daemon never reported ready on {control}");
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+        Ok(self.spawned_at.elapsed())
     }
 
-    fn terminate(&mut self) -> Result<(Duration, Option<i32>)> {
+    /// SIGTERM through the shell builtin (minimal images have no `kill`
+    /// binary). The pid is a positional parameter, never part of the script.
+    fn send_sigterm(&self) -> Result<()> {
         let pid = self.pid().to_string();
-        let sent = Instant::now();
-        // The shell builtin works on minimal images without procps.
         let status = Command::new("sh")
-            .arg("-c")
-            .arg(format!("kill -TERM {pid}"))
+            .args(["-c", r#"kill -TERM "$1""#, "sigterm", &pid])
             .status()
-            .context("run sh -c kill")?;
+            .context("run sh kill")?;
         if !status.success() {
             bail!("kill -TERM {pid} failed: {status}");
         }
+        Ok(())
+    }
+
+    fn terminate(&mut self) -> Result<(Duration, Option<i32>)> {
+        let sent = Instant::now();
+        self.send_sigterm()?;
         let deadline = sent + EXIT_DEADLINE;
-        loop {
-            if self.exited()? {
-                break;
-            }
+        while !self.exited()? {
             if Instant::now() > deadline {
                 bail!("daemon did not exit within {EXIT_DEADLINE:?} after SIGTERM");
             }
             std::thread::sleep(Duration::from_millis(5));
         }
         let exit = sent.elapsed();
-        let output = self.child.take().context("daemon already reaped")?.wait()?;
-        Ok((exit, output.code()))
+        let status = self.child.take().context("daemon already reaped")?.wait()?;
+        Ok((exit, status.code()))
     }
 }
 
@@ -152,20 +235,7 @@ impl Drop for Daemon {
     }
 }
 
-fn http_get(address: SocketAddr, path: &str) -> Result<Option<(u16, String)>> {
-    let Ok(mut stream) = TcpStream::connect_timeout(&address, HTTP_TIMEOUT) else {
-        return Ok(None);
-    };
-    stream.set_read_timeout(Some(HTTP_TIMEOUT))?;
-    stream.set_write_timeout(Some(HTTP_TIMEOUT))?;
-    let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-    if stream.write_all(request.as_bytes()).is_err() {
-        return Ok(None);
-    }
-    let mut response = String::new();
-    if stream.read_to_string(&mut response).is_err() {
-        return Ok(None);
-    }
+fn parse_http(response: &str) -> (u16, String) {
     let status = response
         .split_whitespace()
         .nth(1)
@@ -173,9 +243,25 @@ fn http_get(address: SocketAddr, path: &str) -> Result<Option<(u16, String)>> {
         .unwrap_or(0);
     let body = response
         .split_once("\r\n\r\n")
-        .map(|(_, body)| body.to_string())
-        .unwrap_or_default();
-    Ok(Some((status, body)))
+        .map_or_else(String::default, |(_, body)| body.to_string());
+    (status, body)
+}
+
+fn http_get(address: SocketAddr, path: &str) -> Result<Option<(u16, String)>> {
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, HTTP_TIMEOUT) else {
+        return Ok(None);
+    };
+    stream.set_read_timeout(Some(HTTP_TIMEOUT))?;
+    stream.set_write_timeout(Some(HTTP_TIMEOUT))?;
+    let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    let mut raw = Vec::with_capacity(4096);
+    let exchanged = stream
+        .write_all(request.as_bytes())
+        .and_then(|()| stream.read_to_end(&mut raw));
+    if exchanged.is_err() {
+        return Ok(None);
+    }
+    Ok(Some(parse_http(&String::from_utf8_lossy(&raw))))
 }
 
 fn now_ns() -> u64 {
@@ -216,24 +302,28 @@ fn parse_spikes(bytes: &[u8]) -> Result<(Vec<u16>, u64, u64)> {
     }
 }
 
+/// One frame if any arrives before `deadline`, else `None`.
+fn recv_until(sub: &zmq::Socket, deadline: Instant) -> Result<Option<Vec<u8>>> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Ok(None);
+    }
+    let timeout = i64::try_from(remaining.as_millis().max(1))?;
+    if sub.poll(zmq::POLLIN, timeout)? == 0 {
+        return Ok(None);
+    }
+    Ok(Some(sub.recv_bytes(zmq::DONTWAIT)?))
+}
+
 /// Drain every frame available within `wait`, appending to `frames`.
 fn collect_frames(
     sub: &zmq::Socket,
     wait: Duration,
-    phase: &'static str,
+    phase: Phase,
     frames: &mut Vec<Frame>,
 ) -> Result<()> {
     let deadline = Instant::now() + wait;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Ok(());
-        }
-        let timeout = i64::try_from(remaining.as_millis().max(1))?;
-        if sub.poll(zmq::POLLIN, timeout)? == 0 {
-            return Ok(());
-        }
-        let bytes = sub.recv_bytes(zmq::DONTWAIT)?;
+    while let Some(bytes) = recv_until(sub, deadline)? {
         let recv = Instant::now();
         let (channels, batch_id, timestamp) = parse_spikes(&bytes)?;
         frames.push(Frame {
@@ -244,6 +334,7 @@ fn collect_frames(
             timestamp,
         });
     }
+    Ok(())
 }
 
 fn vm_status_kb(pid: u32, key: &str) -> Option<u64> {
@@ -265,51 +356,56 @@ fn percentile(sorted: &[u64], p: f64) -> Option<u64> {
     sorted.get(rank).copied()
 }
 
-fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 6 {
-        bail!(
-            "usage: {} <daemon-binary> <config.toml> <workload.json> <out.jsonl> <summary.json>",
-            args[0]
-        );
-    }
-    let binary = PathBuf::from(&args[1]);
-    let config_path = PathBuf::from(&args[2]);
-    let workload_path = PathBuf::from(&args[3]);
-    let records_path = PathBuf::from(&args[4]);
-    let summary_path = PathBuf::from(&args[5]);
-    let log_path = records_path.with_extension("daemon.log");
+/// Everything the run needs that is derived from the config and workload.
+struct Session {
+    channels: usize,
+    amplitude: f32,
+    pulses: usize,
+    spacing: Duration,
+    expected: Vec<Vec<u16>>,
+}
 
-    let cfg = DaemonConfig::load(&config_path).context("load config")?;
-    let workload: Workload =
-        serde_json::from_str(&fs::read_to_string(&workload_path).context("read workload")?)
-            .context("parse workload")?;
-    if cfg.channels != workload.channels {
-        bail!(
-            "config channels {} != workload channels {}",
-            cfg.channels,
-            workload.channels
-        );
-    }
-    let control: SocketAddr = cfg
-        .control_bind
-        .as_deref()
-        .context("transport config needs control_bind")?
-        .parse()?;
-    let spacing = Duration::from_millis(
-        1_000 * workload.transport.pulse_spacing_ticks / u64::from(cfg.tick_rate_hz),
-    );
-    let expected: Vec<Vec<u16>> = (0..cfg.channels)
-        .map(|c| {
-            workload
-                .transport
-                .expected_by_channel
-                .get(&c.to_string())
-                .cloned()
-                .with_context(|| format!("expected_by_channel missing channel {c}"))
+impl Session {
+    fn new(cfg: &DaemonConfig, workload: &Workload) -> Result<Self> {
+        if cfg.channels != workload.channels {
+            bail!(
+                "config channels {} != workload channels {}",
+                cfg.channels,
+                workload.channels
+            );
+        }
+        let transport = &workload.transport;
+        let spacing_ms = 1_000 * transport.pulse_spacing_ticks / u64::from(cfg.tick_rate_hz);
+        let expected = (0..cfg.channels)
+            .map(|c| {
+                transport
+                    .expected_by_channel
+                    .get(&c.to_string())
+                    .cloned()
+                    .with_context(|| format!("expected_by_channel missing channel {c}"))
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            channels: cfg.channels,
+            amplitude: transport.amplitude,
+            pulses: usize::try_from(transport.pulses)?,
+            spacing: Duration::from_millis(spacing_ms),
+            expected,
         })
-        .collect::<Result<_>>()?;
+    }
 
+    fn frame(&self, channel: usize, batch_id: u64) -> Result<Vec<u8>> {
+        pulse_frame(self.channels, channel, self.amplitude, batch_id)
+    }
+}
+
+struct Sockets {
+    producer: zmq::Socket,
+    sub: zmq::Socket,
+}
+
+/// Producer PUB bound where the daemon SUB connects; consumer SUB on the daemon PUB.
+fn open_sockets(cfg: &DaemonConfig) -> Result<Sockets> {
     let context = zmq::Context::new();
     let producer = context.socket(zmq::PUB)?;
     producer.set_linger(0)?;
@@ -320,127 +416,145 @@ fn main() -> Result<()> {
     sub.set_rcvhwm(65_536)?;
     sub.set_subscribe(b"")?;
     sub.connect(&format!("tcp://127.0.0.1:{}", cfg.spine_pub_port))?;
+    Ok(Sockets { producer, sub })
+}
 
-    let mut daemon = Daemon::spawn(&binary, &config_path, &log_path)?;
-    let pid = daemon.pid();
-    let ready_after = daemon.wait_ready(control)?;
-    let started = daemon.spawned_at;
-
-    let mut frames: Vec<Frame> = Vec::with_capacity(16_384);
-    // Subscription is confirmed by a received frame (empty allowed), never by
-    // readiness or a local send count.
-    collect_frames(&sub, SUBSCRIBE_DEADLINE, "subscribe", &mut frames)?;
+/// A received `Spikes` frame (empty allowed) proves the subscription;
+/// readiness and local send counts do not.
+fn confirm_subscription(sub: &zmq::Socket, frames: &mut Vec<Frame>) -> Result<()> {
+    collect_frames(sub, SUBSCRIBE_DEADLINE, Phase::Subscribe, frames)?;
     if frames.is_empty() {
         bail!("no PUB frame received within {SUBSCRIBE_DEADLINE:?}; subscription not confirmed");
     }
+    Ok(())
+}
 
-    // Prime until the expected nonempty output for channel 0 arrives.
-    let mut batch_id = 1u64;
-    let mut prime_attempts = 0usize;
-    let mut primed = false;
-    while prime_attempts < PRIME_ATTEMPTS {
-        prime_attempts += 1;
-        producer.send(
-            pulse_frame(cfg.channels, 0, workload.transport.amplitude, batch_id)?,
-            0,
-        )?;
-        batch_id += 1;
+/// Send channel-0 pulses until the expected nonempty output arrives.
+/// Returns the attempts used; priming frames are excluded from measurement.
+fn prime(
+    session: &Session,
+    sockets: &Sockets,
+    frames: &mut Vec<Frame>,
+    batch_id: &mut u64,
+) -> Result<usize> {
+    for attempt in 1..=PRIME_ATTEMPTS {
+        sockets.producer.send(session.frame(0, *batch_id)?, 0)?;
+        *batch_id += 1;
         let before = frames.len();
-        collect_frames(&sub, PRIME_WAIT, "prime", &mut frames)?;
-        if frames[before..].iter().any(|f| f.channels == expected[0]) {
-            primed = true;
-            break;
+        collect_frames(&sockets.sub, PRIME_WAIT, Phase::Prime, frames)?;
+        if frames[before..]
+            .iter()
+            .any(|f| f.channels == session.expected[0])
+        {
+            // Let the response settle, then drain so measurement starts clean.
+            collect_frames(&sockets.sub, session.spacing * 2, Phase::Prime, frames)?;
+            return Ok(attempt);
         }
     }
-    if !primed {
-        bail!("priming failed: no expected nonempty output after {prime_attempts} attempts");
-    }
-    // Let the priming response settle, then drain so measurement starts clean.
-    collect_frames(&sub, spacing * 2, "prime", &mut frames)?;
+    bail!("priming failed: no expected nonempty output after {PRIME_ATTEMPTS} attempts")
+}
 
-    let mut sends: Vec<(Instant, usize)> = Vec::with_capacity(workload.transport.pulses as usize);
-    let measure_start = Instant::now();
-    for k in 0..workload.transport.pulses as usize {
-        let channel = k % cfg.channels;
-        let payload = pulse_frame(
-            cfg.channels,
+/// Send the measured pulses on a fixed cadence, collecting output between sends.
+fn measure(
+    session: &Session,
+    sockets: &Sockets,
+    frames: &mut Vec<Frame>,
+    batch_id: &mut u64,
+) -> Result<Vec<Pulse>> {
+    let mut pulses = Vec::with_capacity(session.pulses);
+    let start = Instant::now();
+    for index in 0..session.pulses {
+        let channel = index % session.channels;
+        let payload = session.frame(channel, *batch_id)?;
+        *batch_id += 1;
+        let sent_at = Instant::now();
+        sockets.producer.send(payload, 0)?;
+        pulses.push(Pulse {
+            index,
             channel,
-            workload.transport.amplitude,
-            batch_id,
-        )?;
-        batch_id += 1;
-        let at = Instant::now();
-        producer.send(payload, 0)?;
-        sends.push((at, channel));
-        let next = measure_start + spacing * (k as u32 + 1);
-        collect_frames(
-            &sub,
-            next.saturating_duration_since(Instant::now()),
-            "measure",
-            &mut frames,
-        )?;
+            sent_at,
+        });
+        let next = start + session.spacing * u32::try_from(index + 1)?;
+        let wait = next.saturating_duration_since(Instant::now());
+        collect_frames(&sockets.sub, wait, Phase::Measure, frames)?;
     }
-    collect_frames(&sub, TAIL_WAIT, "tail", &mut frames)?;
+    collect_frames(&sockets.sub, TAIL_WAIT, Phase::Tail, frames)?;
+    Ok(pulses)
+}
 
-    let metrics = http_get(control, "/metrics")?;
-    let health = http_get(control, "/health")?;
-    let rss_kb = vm_status_kb(pid, "VmRSS:");
-    let peak_rss_kb = vm_status_kb(pid, "VmHWM:");
-    let (exit_after, exit_code) = daemon.terminate()?;
-    let daemon_log = fs::read_to_string(&log_path).unwrap_or_default();
+#[derive(Default)]
+struct Outcome {
+    latencies_ns: Vec<u64>,
+    matched: u64,
+    mismatched: u64,
+    per_pulse: Vec<Value>,
+}
 
-    // Correlate by order only: the i-th nonempty measured frame answers the i-th pulse.
-    let measured_nonempty: Vec<&Frame> = frames
+impl Outcome {
+    fn answered(&mut self, pulse: &Pulse, frame: &Frame, want: &[u16]) {
+        let matched = frame.channels == want;
+        if matched {
+            self.matched += 1;
+        } else {
+            self.mismatched += 1;
+        }
+        let latency = frame
+            .recv
+            .saturating_duration_since(pulse.sent_at)
+            .as_nanos() as u64;
+        self.latencies_ns.push(latency);
+        self.per_pulse.push(json!({
+            "pulse": pulse.index, "channel": pulse.channel, "matched": matched,
+            "latency_ns": latency, "received": frame.channels,
+        }));
+    }
+
+    fn unanswered(&mut self, pulse: &Pulse) {
+        self.per_pulse.push(json!({
+            "pulse": pulse.index, "channel": pulse.channel, "matched": false, "latency_ns": null,
+        }));
+    }
+}
+
+/// Correlate by order only: the i-th nonempty measured frame answers the i-th
+/// pulse (input batch ids are not propagated by the daemon).
+fn correlate(pulses: &[Pulse], frames: &[Frame], expected: &[Vec<u16>]) -> (Outcome, usize) {
+    let nonempty: Vec<&Frame> = frames.iter().filter(|f| f.measured_nonempty()).collect();
+    let mut outcome = Outcome::default();
+    for pulse in pulses {
+        match nonempty.get(pulse.index) {
+            Some(frame) => outcome.answered(pulse, frame, &expected[pulse.channel]),
+            None => outcome.unanswered(pulse),
+        }
+    }
+    (outcome, nonempty.len())
+}
+
+/// Which pulse each measured nonempty frame answers, by order.
+fn pulse_assignment(frames: &[Frame], pulses: usize) -> Vec<Option<usize>> {
+    let mut seen = 0usize;
+    frames
         .iter()
-        .filter(|f| matches!(f.phase, "measure" | "tail") && !f.channels.is_empty())
-        .collect();
-    let mut latencies_ns = Vec::new();
-    let mut matched = 0u64;
-    let mut mismatched = 0u64;
-    let mut per_pulse = Vec::new();
-    for (i, (sent_at, channel)) in sends.iter().enumerate() {
-        match measured_nonempty.get(i) {
-            Some(frame) => {
-                let ok = frame.channels == expected[*channel];
-                if ok {
-                    matched += 1;
-                } else {
-                    mismatched += 1;
-                }
-                let latency = frame.recv.saturating_duration_since(*sent_at).as_nanos() as u64;
-                latencies_ns.push(latency);
-                per_pulse.push(serde_json::json!({
-                    "pulse": i, "channel": channel, "matched": ok,
-                    "latency_ns": latency, "received": frame.channels,
-                }));
+        .map(|frame| {
+            if !frame.measured_nonempty() {
+                return None;
             }
-            None => per_pulse.push(serde_json::json!({
-                "pulse": i, "channel": channel, "matched": false, "latency_ns": null,
-            })),
-        }
-    }
-    let extra_nonempty = measured_nonempty.len().saturating_sub(sends.len()) as u64;
-    let lost = sends.len() as u64 - matched - mismatched;
-    let mut sorted = latencies_ns.clone();
-    sorted.sort_unstable();
+            let index = seen;
+            seen += 1;
+            (index < pulses).then_some(index)
+        })
+        .collect()
+}
 
-    let file = fs::File::create(&records_path)?;
+fn write_frames(path: &Path, frames: &[Frame], pulses: &[Pulse], started: Instant) -> Result<()> {
+    let assignment = pulse_assignment(frames, pulses.len());
+    let file = fs::File::create(path).with_context(|| format!("create {}", path.display()))?;
     let mut out = BufWriter::new(file);
-    let send_index: HashMap<usize, (Instant, usize)> = sends.iter().copied().enumerate().collect();
-    let mut nonempty_seen = 0usize;
-    for (seq, frame) in frames.iter().enumerate() {
-        let mut pulse = serde_json::Value::Null;
-        let mut send_ns = serde_json::Value::Null;
-        if matches!(frame.phase, "measure" | "tail") && !frame.channels.is_empty() {
-            if let Some((sent_at, _)) = send_index.get(&nonempty_seen) {
-                pulse = serde_json::json!(nonempty_seen);
-                send_ns = serde_json::json!(sent_at.duration_since(started).as_nanos() as u64);
-            }
-            nonempty_seen += 1;
-        }
-        let record = serde_json::json!({
+    for (seq, (frame, pulse)) in frames.iter().zip(assignment).enumerate() {
+        let send_ns = pulse.map(|i| pulses[i].sent_at.duration_since(started).as_nanos() as u64);
+        let record = json!({
             "seq": seq,
-            "phase": frame.phase,
+            "phase": frame.phase.as_str(),
             "recv_ns": frame.recv.duration_since(started).as_nanos() as u64,
             "channels": frame.channels,
             "batch_id": frame.batch_id,
@@ -451,26 +565,79 @@ fn main() -> Result<()> {
         writeln!(out, "{record}")?;
     }
     out.flush()?;
+    Ok(())
+}
 
-    let summary = serde_json::json!({
+/// Control-surface and `/proc` observations taken before shutdown.
+struct Probes {
+    metrics: Option<(u16, String)>,
+    health: Option<(u16, String)>,
+    rss_kb: Option<u64>,
+    peak_rss_kb: Option<u64>,
+}
+
+fn probe_daemon(control: SocketAddr, pid: u32) -> Result<Probes> {
+    Ok(Probes {
+        metrics: http_get(control, "/metrics")?,
+        health: http_get(control, "/health")?,
+        rss_kb: vm_status_kb(pid, "VmRSS:"),
+        peak_rss_kb: vm_status_kb(pid, "VmHWM:"),
+    })
+}
+
+/// Everything the summary reports on.
+struct Report<'a> {
+    args: &'a Args,
+    workload: &'a Workload,
+    session: &'a Session,
+    daemon_binary: &'a Path,
+    log_path: &'a Path,
+    pid: u32,
+    ready_after: Duration,
+    prime_attempts: usize,
+    frames: &'a [Frame],
+    pulses: &'a [Pulse],
+    outcome: &'a Outcome,
+    nonempty: usize,
+    probes: &'a Probes,
+    exit: (Duration, Option<i32>),
+    termination_logged: bool,
+}
+
+fn count_frames(frames: &[Frame], pred: impl Fn(&Frame) -> bool) -> usize {
+    frames.iter().filter(|f| pred(f)).count()
+}
+
+fn summary_json(r: &Report<'_>) -> Result<Value> {
+    let mut sorted = r.outcome.latencies_ns.clone();
+    sorted.sort_unstable();
+    let sent = r.pulses.len() as u64;
+    let lost = sent - r.outcome.matched - r.outcome.mismatched;
+    let extra_nonempty = r.nonempty.saturating_sub(r.pulses.len()) as u64;
+    let health_json = r
+        .probes
+        .health
+        .as_ref()
+        .and_then(|(_, body)| serde_json::from_str::<Value>(body).ok());
+    Ok(json!({
         "mode": "transport-live",
-        "config": config_path.display().to_string(),
-        "workload": workload_path.display().to_string(),
-        "fixture_sha256": workload.fixture_sha256,
-        "daemon_binary": binary.display().to_string(),
-        "daemon_pid": pid,
-        "ready_after_ns": ready_after.as_nanos() as u64,
-        "subscribe_frames": frames.iter().filter(|f| f.phase == "subscribe").count(),
-        "prime_attempts": prime_attempts,
-        "prime_frames": frames.iter().filter(|f| f.phase == "prime").count(),
-        "pulse_spacing_ns": spacing.as_nanos() as u64,
-        "pulses_sent": sends.len(),
-        "frames_received_total": frames.len(),
-        "measured_frames_total": frames.iter().filter(|f| matches!(f.phase, "measure" | "tail")).count(),
-        "measured_frames_empty": frames.iter().filter(|f| matches!(f.phase, "measure" | "tail") && f.channels.is_empty()).count(),
-        "measured_frames_nonempty": measured_nonempty.len(),
-        "matched": matched,
-        "mismatched": mismatched,
+        "config": r.args.config.display().to_string(),
+        "workload": r.args.workload.display().to_string(),
+        "fixture_sha256": r.workload.fixture_sha256,
+        "daemon_binary": r.daemon_binary.display().to_string(),
+        "daemon_pid": r.pid,
+        "ready_after_ns": r.ready_after.as_nanos() as u64,
+        "subscribe_frames": count_frames(r.frames, |f| f.phase == Phase::Subscribe),
+        "prime_attempts": r.prime_attempts,
+        "prime_frames": count_frames(r.frames, |f| f.phase == Phase::Prime),
+        "pulse_spacing_ns": r.session.spacing.as_nanos() as u64,
+        "pulses_sent": sent,
+        "frames_received_total": r.frames.len(),
+        "measured_frames_total": count_frames(r.frames, |f| f.phase.measured()),
+        "measured_frames_empty": count_frames(r.frames, |f| f.phase.measured() && f.channels.is_empty()),
+        "measured_frames_nonempty": r.nonempty,
+        "matched": r.outcome.matched,
+        "mismatched": r.outcome.mismatched,
         "lost": lost,
         "extra_nonempty": extra_nonempty,
         "latency_ns": {
@@ -480,27 +647,84 @@ fn main() -> Result<()> {
             "max": sorted.last().copied(),
             "min": sorted.first().copied(),
         },
-        "per_pulse": per_pulse,
-        "daemon_rss_kb": rss_kb,
-        "daemon_peak_rss_kb": peak_rss_kb,
-        "metrics_status": metrics.as_ref().map(|(s, _)| *s),
-        "metrics_text": metrics.as_ref().map(|(_, b)| b.clone()),
-        "health_status": health.as_ref().map(|(s, _)| *s),
-        "health_json": health
-            .as_ref()
-            .and_then(|(_, b)| serde_json::from_str::<serde_json::Value>(b).ok()),
-        "sigterm_exit_ns": exit_after.as_nanos() as u64,
-        "exit_code": exit_code,
-        "termination_logged": daemon_log.contains("Termination signal received"),
-        "daemon_log": log_path.display().to_string(),
-    });
+        "per_pulse": r.outcome.per_pulse,
+        "daemon_rss_kb": r.probes.rss_kb,
+        "daemon_peak_rss_kb": r.probes.peak_rss_kb,
+        "metrics_status": r.probes.metrics.as_ref().map(|(s, _)| *s),
+        "metrics_text": r.probes.metrics.as_ref().map(|(_, b)| b.clone()),
+        "health_status": r.probes.health.as_ref().map(|(s, _)| *s),
+        "health_json": health_json,
+        "sigterm_exit_ns": r.exit.0.as_nanos() as u64,
+        "exit_code": r.exit.1,
+        "termination_logged": r.termination_logged,
+        "daemon_log": r.log_path.display().to_string(),
+    }))
+}
+
+fn main() -> Result<()> {
+    let args = parse_args()?;
+    let cfg = DaemonConfig::load(&args.config).context("load config")?;
+    let workload: Workload =
+        serde_json::from_str(&fs::read_to_string(&args.workload).context("read workload")?)
+            .context("parse workload")?;
+    let session = Session::new(&cfg, &workload)?;
+    let control: SocketAddr = cfg
+        .control_bind
+        .as_deref()
+        .context("transport config needs control_bind")?
+        .parse()?;
+    let binary = daemon_binary()?;
+    let log_path = args.records.with_extension("daemon.log");
+
+    let sockets = open_sockets(&cfg)?;
+    let mut daemon = Daemon::spawn(&binary, &args.config, &log_path)?;
+    let pid = daemon.pid();
+    let ready_after = daemon.wait_ready(control)?;
+    let started = daemon.spawned_at;
+
+    let mut frames: Vec<Frame> = Vec::with_capacity(16_384);
+    confirm_subscription(&sockets.sub, &mut frames)?;
+    let mut batch_id = 1u64;
+    let prime_attempts = prime(&session, &sockets, &mut frames, &mut batch_id)?;
+    let pulses = measure(&session, &sockets, &mut frames, &mut batch_id)?;
+
+    let probes = probe_daemon(control, pid)?;
+    let exit = daemon.terminate()?;
+    let daemon_log = fs::read_to_string(&log_path).unwrap_or_default();
+    let (outcome, nonempty) = correlate(&pulses, &frames, &session.expected);
+    write_frames(&args.records, &frames, &pulses, started)?;
+
+    let report = Report {
+        args: &args,
+        workload: &workload,
+        session: &session,
+        daemon_binary: &binary,
+        log_path: &log_path,
+        pid,
+        ready_after,
+        prime_attempts,
+        frames: &frames,
+        pulses: &pulses,
+        outcome: &outcome,
+        nonempty,
+        probes: &probes,
+        exit,
+        termination_logged: daemon_log.contains("Termination signal received"),
+    };
+    let summary = summary_json(&report)?;
     fs::write(
-        &summary_path,
+        &args.summary,
         serde_json::to_string_pretty(&summary)? + "\n",
-    )?;
+    )
+    .with_context(|| format!("write {}", args.summary.display()))?;
     println!(
-        "transport-live: sent {} matched {matched} mismatched {mismatched} lost {lost} extra {extra_nonempty}; exit {exit_code:?} after {exit_after:?}",
-        sends.len()
+        "transport-live: sent {} matched {} mismatched {} lost {}; exit {:?} after {:?}",
+        pulses.len(),
+        outcome.matched,
+        outcome.mismatched,
+        summary["lost"],
+        exit.1,
+        exit.0
     );
     Ok(())
 }

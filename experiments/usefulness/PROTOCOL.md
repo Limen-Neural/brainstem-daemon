@@ -189,8 +189,13 @@ python3 -I -B experiments/usefulness/summarize.py experiments/usefulness/results
 and core count, memory size, features, and SHA-256 of every config and
 fixture file into `results/<sha>/identity.json`, keeps a per-step command
 log, and keeps partial results if a step fails. Raw per-tick records are
-gzipped JSONL. Results are committed in a follow-up commit; the measured SHA
-is that commit's parent.
+gzipped JSONL; step, command and daemon logs are committed next to them.
+`summarize.py` embeds `identity.json` without the `status` and
+`finished_utc` fields that `run.sh` finalizes after summarizing, so
+re-running it on committed results is byte-identical. The transport driver
+launches the `brainstem-daemon` binary built beside it in `target/release/`.
+Results are committed in a follow-up commit; the measured SHA is that
+commit's parent.
 
 Fixture ports: 5755 (producer PUB / daemon SUB), 5756 (daemon PUB), 9755
 (control). They must be free on 127.0.0.1.
