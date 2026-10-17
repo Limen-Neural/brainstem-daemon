@@ -5,16 +5,24 @@ Tracker: LIM-1457 / GitHub issue #70. Protocol: [`PROTOCOL.md`](PROTOCOL.md).
 | Item | Value |
 |---|---|
 | Pre-registration commit | `4c9bfc8` (protocol, fixture, workload, expectations, configs) |
-| Measured commit | `40cfd056c08abc86d0e29588e30d8fed119f52ea` |
-| Results | [`results/40cfd056c08abc86d0e29588e30d8fed119f52ea/`](results/40cfd056c08abc86d0e29588e30d8fed119f52ea/) (`identity.json`, `summary.json`, `summary.md`, raw `*.jsonl.gz`, daemon logs, per-step command logs) |
+| Measured commit | `a3247e5fbd759e54cbffa7e88db5eeb6ba8d2ce1` |
+| Results | [`results/a3247e5fbd759e54cbffa7e88db5eeb6ba8d2ce1/`](results/a3247e5fbd759e54cbffa7e88db5eeb6ba8d2ce1/): `identity.json`, `summary.json`, `summary.md`, raw `*.jsonl.gz`, `steps.log`, per-step command logs under `logs/`, and the three daemon logs |
 | Decision (pre-registered rule, §6) | **Supports further development** of the runtime path |
 
 The results commit is the child of the measured commit; `run.sh` refused to
 run on a dirty tree, so every raw file was produced by the code at the
-measured SHA. A first run at `b4bdbb1` failed in the transport driver (the
-image has no `kill` binary; daemon stdout was not captured). Its identity and
-command logs are retained under `results/b4bdbb1…/`; the driver fix is the
-only change between the two SHAs and touches no decision criterion.
+measured SHA.
+
+Run history:
+
+- `b4bdbb1`: first attempt, failed in the transport driver because the
+  sandbox image has no `kill` binary and daemon stdout was not captured.
+  Its `identity.json`, `steps.log` and command logs are retained under
+  `results/b4bdbb1…/`.
+- `40cfd05`: first complete run; all checks passed with the same decision.
+  Superseded (and removed from the tree) after code-health review led to
+  restructuring the drivers and tooling; its files remain in git history.
+- `a3247e5`: the measured run reported here, on the restructured drivers.
 
 ## Setup (measured run)
 
@@ -29,7 +37,8 @@ only change between the two SHAs and touches no decision criterion.
   synthetic and untrained, loaded through the live checkpoint gate
   (`model_id = spikenaut-snn:usefulness-lif8x16-v1`).
 - Workload: 20,000 ticks (10 × 2,000), 150 stimulus frames and 10
-  modulator-only packets per run, 1,000 warm-up ticks excluded from latency.
+  modulator-only packets per run (counts observed by the source and
+  recorded in each summary), 1,000 warm-up ticks excluded from latency.
 - Repetitions: 5 × daemon-live, 5 × baseline, 5 × daemon-simulation,
   3 × transport-live; each a separate process.
 - Measurement: `Instant` pairs per tick (daemon: source return → sink
@@ -62,33 +71,30 @@ All values are measured unless marked derived.
 
 | run | ready after | prime attempts | pulses sent / matched / lost | frames received (empty) | e2e p50 | e2e p99 | e2e max | daemon `VmHWM` | SIGTERM → exit |
 |---|---:|---:|---|---:|---:|---:|---:|---:|---:|
-| r1 | 10.3 ms | 1 | 200 / 200 / 0 | 4,240 (4,040) | 1.111 ms | 3.332 ms | 4.281 ms | 7,052 kB | 6.09 ms |
-| r2 | 12.1 ms | 1 | 200 / 200 / 0 | — | 1.109 ms | 3.459 ms | 4.233 ms | 7,036 kB | 6.23 ms |
-| r3 | 10.5 ms | 1 | 200 / 200 / 0 | — | 1.111 ms | 4.133 ms | 7.223 ms | 6,968 kB | 6.11 ms |
+| r1 | 10.3 ms | 1 | 200 / 200 / 0 | 4,253 (4,053) | 1.110 ms | 2.184 ms | 3.217 ms | 6,964 kB | 5.91 ms |
+| r2 | 10.2 ms | 1 | 200 / 200 / 0 | 4,250 (4,050) | 1.109 ms | 2.577 ms | 4.137 ms | 7,008 kB | 8.55 ms |
+| r3 | 10.2 ms | 1 | 200 / 200 / 0 | 4,245 (4,045) | 1.108 ms | 1.857 ms | 2.833 ms | 6,988 kB | 5.90 ms |
 
 Each measured pulse produced exactly one nonempty `Spikes` frame carrying the
 expected channel set; every idle tick produced an empty frame; `/metrics`
 reported `brainstem_ready 1` and `brainstem_fatal 0`; exit status 0 with
-`Termination signal received` logged.
+`Termination signal received` in each committed daemon log.
 
 **Performance, in-process** (per-tick latency after warm-up; see
 `summary.md` for every run).
 
 | mode | p50 | p99 | max | ticks/s | peak RSS |
 |---|---:|---:|---:|---:|---:|
-| baseline (step only), 5 runs | 0.95–1.69 µs | 1.76–2.00 µs | 34 µs – 792 µs | 638k–912k | 4.4–4.5 MB |
-| daemon-live, 5 runs | 1.07–1.91 µs | 3.23–4.84 µs | 68 µs – 3.02 ms | 477k–656k | 5.2–5.7 MB |
-| daemon-simulation, 5 runs | 0.60–1.09 µs | 2.45–3.53 µs | 20 µs – 547 µs | 747k–1,212k | 5.1–5.6 MB |
+| baseline (step only), 5 runs | 0.97–0.98 µs | 1.13–1.77 µs | 12–59 µs | 882k–944k | 4.3–4.5 MB |
+| daemon-live, 5 runs | 1.07–1.84 µs | 3.12–4.51 µs | 49–180 µs | 527k–798k | 5.6–5.7 MB |
+| daemon-simulation, 5 runs | 0.60–0.86 µs | 2.11–2.67 µs | 14–59 µs | 1,031k–1,319k | 5.1–5.7 MB |
 
 Typed decode (`accept_ipc_json`) per stimulus frame, daemon runs: p50
-1.1–1.9 µs (counted separately from tick latency).
+1.1–1.6 µs (counted separately from tick latency).
 
-Derived: daemon-live p99 ≤ 1 ms in every run (budget met, margin > 200×).
-Transport p99 ≤ 5 ms with zero loss in every run (budget met; r3 at
-4.13 ms is the closest). Two single-tick outliers exceeded 1 ms (daemon-live
-r1 max 3.02 ms, transport r3 max 7.22 ms); the criterion is p99, so they do
-not change the decision, but they are the first thing to look at under a
-real-time deployment on a shared host.
+Derived: daemon-live p99 ≤ 1 ms in every run (budget met, margin > 200×);
+no single tick exceeded 1 ms in this run. Transport p99 ≤ 5 ms with zero
+loss in every run (budget met; the largest single pulse took 4.1 ms).
 
 ## What works, what fails, limitations
 
@@ -98,13 +104,13 @@ Works:
   `run_for_ticks`) restores a nonblank sidecar, decodes typed `corpus-ipc`
   frames with masks and modulators, and produces exactly the spikes an
   independent model predicts, with correct accounting and health.
-- The daemon adds roughly 0.1–0.4 µs median and ~2–3 µs p99 over the bare
-  engine step for validation, bounded ingress, health and accounting, plus
-  ~1–2 µs decode per frame; memory overhead is ~1.2 MB in-process and
+- The daemon adds roughly 0.1–0.9 µs median and 1.5–2.7 µs p99 over the
+  bare engine step for validation, bounded ingress, health and accounting,
+  plus 1–2 µs decode per frame; memory overhead is ~1.2 MB in-process and
   ~2.6 MB for the full binary with ZeroMQ.
 - The binary is ready in ~10 ms, delivers every pulse over loopback ZeroMQ
   with ~1.1 ms median end-to-end (one tick period of quantization), and
-  exits cleanly ~6 ms after SIGTERM.
+  exits cleanly 6–9 ms after SIGTERM.
 - Simulation mode behaves as a genuine negative control (no spikes).
 
 Fails: nothing in the pre-registered set.
@@ -127,16 +133,21 @@ Limitations (all pre-registered or observed):
   would drive the stress multiplier to its floor (0.1). Worth revisiting in
   the decoder.
 - Linux-only (`/proc`, `sh -c kill`), shared host, 20,000-tick runs
-  (~30 ms of measured time each); outliers above are consistent with
-  scheduler noise, not attributed further.
+  (~25 ms of measured time each). The superseded `40cfd05` run saw two
+  single-tick outliers above 1 ms (3.0 ms in-process, 7.2 ms transport);
+  this run saw none, consistent with scheduler noise on a shared host rather
+  than a property of the daemon. The p99 criteria were met in both runs.
 - Release qualification and publication stay in LIM-1447; this is not a
   release gate.
 
 ## Protocol deviations
 
-None to the checks, metrics, or criteria. The only post-registration code
-change was the transport driver fix described above (`sh -c kill`, stdout
-capture), made before any transport result existed.
+None to the checks, metrics, or criteria. Post-registration code changes
+were limited to the drivers and tooling: the transport driver fix after the
+`b4bdbb1` failure (`sh -c kill`, stdout capture), and the restructuring
+into smaller functions after code-health review, which regenerates the
+fixtures byte-for-byte and reproduces the previous run's `summary.md`
+exactly from its raw data.
 
 ## Recommendation
 
