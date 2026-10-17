@@ -1,0 +1,97 @@
+{
+  "config": "experiments/usefulness/config/simulation.toml",
+  "details": {
+    "checkpoint": {
+      "content_sha256": "none",
+      "model_id": "simulation/blank",
+      "schema_id": "simulation/blank",
+      "source_path": "<simulation>"
+    },
+    "health": {
+      "checkpoint": {
+        "digest": null,
+        "id": "simulation/blank"
+      },
+      "fatal": null,
+      "input_freshness": {
+        "age_ms": 0,
+        "stale": false
+      },
+      "last_successful_tick_ms": 43,
+      "live": true,
+      "observed_at_ms": 43,
+      "phase": "running",
+      "queue_pressure": {
+        "capacity": 209,
+        "depth": 0,
+        "overloaded": false,
+        "ratio": 0.0
+      },
+      "ready": true,
+      "reasons": [],
+      "tick_age_ms": 0
+    },
+    "ingress": {
+      "control": {
+        "accepted": 0,
+        "coalesced": 0,
+        "dropped": 0,
+        "high_water_mark": 0,
+        "lost_or_coalesced": 0,
+        "rejected": 0,
+        "shutdown_refused": 0
+      },
+      "reward": {
+        "accepted": 500,
+        "coalesced": 0,
+        "dropped": 0,
+        "high_water_mark": 1,
+        "lost_or_coalesced": 0,
+        "rejected": 0,
+        "shutdown_refused": 0
+      },
+      "sensory": {
+        "accepted": 10000,
+        "coalesced": 0,
+        "dropped": 0,
+        "high_water_mark": 1,
+        "lost_or_coalesced": 0,
+        "rejected": 0,
+        "shutdown_refused": 0
+      },
+      "telemetry": {
+        "accepted": 0,
+        "coalesced": 0,
+        "dropped": 0,
+        "high_water_mark": 0,
+        "lost_or_coalesced": 0,
+        "rejected": 0,
+        "shutdown_refused": 0
+      }
+    },
+    "runtime_stats": {
+      "accepted_batches": 10000,
+      "diagnostic_emissions": 0,
+      "dropped_spikes": 0,
+      "emit_errors": 0,
+      "receive_errors": 0,
+      "rejected_batches": 0,
+      "suppressed_diagnostics": 0,
+      "ticks": 10000
+    }
+  },
+  "fixture_sha256": "2254bfc83416b7ebb3bef054b3163a20ea68694011b827530601bb662f070b1f",
+  "measured_span_ns": 42123507,
+  "measured_ticks": 9800,
+  "mode": "daemon-simulation",
+  "process_wall_ns": 52682321,
+  "rep": 3,
+  "ticks_per_s": 232649.19513942653,
+  "ticks_recorded": 10000,
+  "ticks_requested": 10000,
+  "variant": "main",
+  "vm_hwm_kb": 7820,
+  "vm_rss_kb": 6896,
+  "warmup_ticks_excluded": 200,
+  "workload_version": "usefulness-workload-v1"
+}

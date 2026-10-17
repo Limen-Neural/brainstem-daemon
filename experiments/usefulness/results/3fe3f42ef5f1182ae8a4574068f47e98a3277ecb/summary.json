@@ -1,0 +1,631 @@
+{
+  "measured_commit": "3fe3f42ef5f1182ae8a4574068f47e98a3277ecb",
+  "percentile_method": "nearest-rank",
+  "decision": "supports further development",
+  "checks": {
+    "I1": {
+      "pass": true,
+      "details": [
+        "pre-registered run inventory complete (5 reps x 5 in-process families, 3 transport reps)"
+      ]
+    },
+    "C1": {
+      "pass": true,
+      "details": [
+        "ticks == accepted == N, zero rejected/errors/dropped in every daemon run"
+      ]
+    },
+    "C2": {
+      "pass": true,
+      "details": [
+        "sensory accepted == N, reward accepted == modulated ticks, no class loss"
+      ]
+    },
+    "C3": {
+      "pass": true,
+      "details": [
+        "post-run health not fatal"
+      ]
+    },
+    "C4": {
+      "pass": true,
+      "details": [
+        "daemon-live raster == baseline raster in every repetition"
+      ]
+    },
+    "C5": {
+      "pass": true,
+      "details": [
+        "all repetitions of each mode/variant identical"
+      ]
+    },
+    "C6": {
+      "pass": true,
+      "details": [
+        "driven ticks fire exactly the mapped neurons"
+      ]
+    },
+    "C7": {
+      "pass": true,
+      "details": [
+        "every spike within the quiet window of its channel's input"
+      ]
+    },
+    "C8": {
+      "pass": true,
+      "details": [
+        "no spikes in quiet periods"
+      ]
+    },
+    "C9": {
+      "pass": true,
+      "details": [
+        "zeroed raster == main raster"
+      ]
+    },
+    "C10": {
+      "pass": true,
+      "details": [
+        "unmasked raster differs; neurons 4,5 fire"
+      ]
+    },
+    "C11": {
+      "pass": true,
+      "details": [
+        "modulated segment fires on fewer than 10/10 ticks in every cycle"
+      ]
+    },
+    "C12": {
+      "pass": true,
+      "details": [
+        "simulation control emits zero spikes"
+      ]
+    },
+    "T1": {
+      "pass": true,
+      "details": [
+        "SIGTERM exit 0 within 2 s with termination log, every rep"
+      ]
+    },
+    "T2": {
+      "pass": true,
+      "details": [
+        "every probe matched exactly once, no unexpected nonempty batches"
+      ]
+    },
+    "T3": {
+      "pass": true,
+      "details": [
+        "probe p99 <= 3000000 ns in every rep"
+      ]
+    },
+    "P1": {
+      "pass": true,
+      "details": [
+        "daemon-live p99 <= 1000000 ns in every run"
+      ]
+    },
+    "P2": {
+      "pass": true,
+      "details": [
+        "daemon-live >= 1000 ticks/s in every run"
+      ]
+    }
+  },
+  "in_process": {
+    "ticks_per_run": 10000,
+    "warmup_ticks_excluded": 200,
+    "modulated_ticks_per_run": 500,
+    "modulated_fire_counts_per_cycle": {
+      "min": 2,
+      "max": 2
+    },
+    "runs": [
+      {
+        "run": "baseline-main-r0",
+        "mode": "baseline",
+        "variant": "main",
+        "rep": 0,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 1549,
+          "p99_ns": 16329,
+          "max_ns": 92834
+        },
+        "ticks_per_s": 432563.16051125614,
+        "vm_hwm_kb": 8732,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "baseline-main-r1",
+        "mode": "baseline",
+        "variant": "main",
+        "rep": 1,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 926,
+          "p99_ns": 1452,
+          "max_ns": 44488
+        },
+        "ticks_per_s": 944165.155681273,
+        "vm_hwm_kb": 8800,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "baseline-main-r2",
+        "mode": "baseline",
+        "variant": "main",
+        "rep": 2,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 927,
+          "p99_ns": 1612,
+          "max_ns": 119118
+        },
+        "ticks_per_s": 908878.0225411024,
+        "vm_hwm_kb": 8780,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "baseline-main-r3",
+        "mode": "baseline",
+        "variant": "main",
+        "rep": 3,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 927,
+          "p99_ns": 1485,
+          "max_ns": 52744
+        },
+        "ticks_per_s": 937222.9872490813,
+        "vm_hwm_kb": 8676,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "baseline-main-r4",
+        "mode": "baseline",
+        "variant": "main",
+        "rep": 4,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 1540,
+          "p99_ns": 2537,
+          "max_ns": 58624
+        },
+        "ticks_per_s": 566082.2791350563,
+        "vm_hwm_kb": 8712,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-main-r0",
+        "mode": "daemon-live",
+        "variant": "main",
+        "rep": 0,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2956,
+          "p99_ns": 16796,
+          "max_ns": 87684
+        },
+        "ticks_per_s": 191651.98752595883,
+        "vm_hwm_kb": 7996,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-main-r1",
+        "mode": "daemon-live",
+        "variant": "main",
+        "rep": 1,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2913,
+          "p99_ns": 6019,
+          "max_ns": 71226
+        },
+        "ticks_per_s": 251443.07800811104,
+        "vm_hwm_kb": 7924,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-main-r2",
+        "mode": "daemon-live",
+        "variant": "main",
+        "rep": 2,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2878,
+          "p99_ns": 5524,
+          "max_ns": 71788
+        },
+        "ticks_per_s": 256025.0666305236,
+        "vm_hwm_kb": 7928,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-main-r3",
+        "mode": "daemon-live",
+        "variant": "main",
+        "rep": 3,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2917,
+          "p99_ns": 4786,
+          "max_ns": 64135
+        },
+        "ticks_per_s": 255757.132192145,
+        "vm_hwm_kb": 7880,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-main-r4",
+        "mode": "daemon-live",
+        "variant": "main",
+        "rep": 4,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 4415,
+          "p99_ns": 9257,
+          "max_ns": 62947
+        },
+        "ticks_per_s": 181171.50039932603,
+        "vm_hwm_kb": 7936,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-unmasked-r0",
+        "mode": "daemon-live",
+        "variant": "unmasked",
+        "rep": 0,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2961,
+          "p99_ns": 5789,
+          "max_ns": 45912
+        },
+        "ticks_per_s": 250829.3685869745,
+        "vm_hwm_kb": 7960,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-unmasked-r1",
+        "mode": "daemon-live",
+        "variant": "unmasked",
+        "rep": 1,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2981,
+          "p99_ns": 5668,
+          "max_ns": 369780
+        },
+        "ticks_per_s": 234031.10822685016,
+        "vm_hwm_kb": 7876,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-unmasked-r2",
+        "mode": "daemon-live",
+        "variant": "unmasked",
+        "rep": 2,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 3005,
+          "p99_ns": 5444,
+          "max_ns": 46703
+        },
+        "ticks_per_s": 247332.50630054323,
+        "vm_hwm_kb": 7952,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-unmasked-r3",
+        "mode": "daemon-live",
+        "variant": "unmasked",
+        "rep": 3,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 3004,
+          "p99_ns": 5058,
+          "max_ns": 56409
+        },
+        "ticks_per_s": 247962.64528776598,
+        "vm_hwm_kb": 7972,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-unmasked-r4",
+        "mode": "daemon-live",
+        "variant": "unmasked",
+        "rep": 4,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2981,
+          "p99_ns": 6193,
+          "max_ns": 179578
+        },
+        "ticks_per_s": 246323.48376207947,
+        "vm_hwm_kb": 7916,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-zeroed-r0",
+        "mode": "daemon-live",
+        "variant": "zeroed",
+        "rep": 0,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2967,
+          "p99_ns": 15855,
+          "max_ns": 54696
+        },
+        "ticks_per_s": 190194.80936240547,
+        "vm_hwm_kb": 7880,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-zeroed-r1",
+        "mode": "daemon-live",
+        "variant": "zeroed",
+        "rep": 1,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2864,
+          "p99_ns": 5648,
+          "max_ns": 54363
+        },
+        "ticks_per_s": 257327.01926350067,
+        "vm_hwm_kb": 8016,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-zeroed-r2",
+        "mode": "daemon-live",
+        "variant": "zeroed",
+        "rep": 2,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2920,
+          "p99_ns": 7624,
+          "max_ns": 86155
+        },
+        "ticks_per_s": 226443.02260305727,
+        "vm_hwm_kb": 8012,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-zeroed-r3",
+        "mode": "daemon-live",
+        "variant": "zeroed",
+        "rep": 3,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2977,
+          "p99_ns": 6876,
+          "max_ns": 77502
+        },
+        "ticks_per_s": 219204.84025760417,
+        "vm_hwm_kb": 7904,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-live-zeroed-r4",
+        "mode": "daemon-live",
+        "variant": "zeroed",
+        "rep": 4,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2877,
+          "p99_ns": 4820,
+          "max_ns": 79032
+        },
+        "ticks_per_s": 258342.81886443516,
+        "vm_hwm_kb": 7904,
+        "spike_ticks": 2500
+      },
+      {
+        "run": "daemon-simulation-main-r0",
+        "mode": "daemon-simulation",
+        "variant": "main",
+        "rep": 0,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2532,
+          "p99_ns": 4408,
+          "max_ns": 46374
+        },
+        "ticks_per_s": 286156.1174337987,
+        "vm_hwm_kb": 7772,
+        "spike_ticks": 0
+      },
+      {
+        "run": "daemon-simulation-main-r1",
+        "mode": "daemon-simulation",
+        "variant": "main",
+        "rep": 1,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2585,
+          "p99_ns": 6538,
+          "max_ns": 185953
+        },
+        "ticks_per_s": 247954.9535681578,
+        "vm_hwm_kb": 7728,
+        "spike_ticks": 0
+      },
+      {
+        "run": "daemon-simulation-main-r2",
+        "mode": "daemon-simulation",
+        "variant": "main",
+        "rep": 2,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2558,
+          "p99_ns": 6053,
+          "max_ns": 71680
+        },
+        "ticks_per_s": 262614.2817632041,
+        "vm_hwm_kb": 7704,
+        "spike_ticks": 0
+      },
+      {
+        "run": "daemon-simulation-main-r3",
+        "mode": "daemon-simulation",
+        "variant": "main",
+        "rep": 3,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2639,
+          "p99_ns": 6177,
+          "max_ns": 76922
+        },
+        "ticks_per_s": 232649.19513942653,
+        "vm_hwm_kb": 7820,
+        "spike_ticks": 0
+      },
+      {
+        "run": "daemon-simulation-main-r4",
+        "mode": "daemon-simulation",
+        "variant": "main",
+        "rep": 4,
+        "latency_post_warmup": {
+          "n": 9800,
+          "p50_ns": 2562,
+          "p99_ns": 4474,
+          "max_ns": 49530
+        },
+        "ticks_per_s": 284106.07964397914,
+        "vm_hwm_kb": 7448,
+        "spike_ticks": 0
+      }
+    ],
+    "derived_overhead_vs_baseline": [
+      {
+        "rep": 0,
+        "derived_p50_overhead_ns": 1407,
+        "derived_p99_overhead_ns": 467,
+        "derived_throughput_ratio": 0.44306127988208943
+      },
+      {
+        "rep": 1,
+        "derived_p50_overhead_ns": 1987,
+        "derived_p99_overhead_ns": 4567,
+        "derived_throughput_ratio": 0.26631260060288864
+      },
+      {
+        "rep": 2,
+        "derived_p50_overhead_ns": 1951,
+        "derived_p99_overhead_ns": 3912,
+        "derived_throughput_ratio": 0.2816935389357435
+      },
+      {
+        "rep": 3,
+        "derived_p50_overhead_ns": 1990,
+        "derived_p99_overhead_ns": 3301,
+        "derived_throughput_ratio": 0.2728882407620393
+      },
+      {
+        "rep": 4,
+        "derived_p50_overhead_ns": 2875,
+        "derived_p99_overhead_ns": 6720,
+        "derived_throughput_ratio": 0.3200444654020021
+      }
+    ]
+  },
+  "transport": {
+    "reps": [
+      {
+        "daemon_vm_hwm_kb": 6628,
+        "ready_ms": 10,
+        "priming_frames": 1,
+        "exit_status_code": 0,
+        "exit_ms": 3.229075,
+        "logged_termination": true,
+        "undecodable_frames": 0,
+        "run": "transport-r0",
+        "probes_sent": 200,
+        "probes_matched": 200,
+        "bad_probes": [],
+        "unexpected_nonempty_batches": 0,
+        "probe_latency": {
+          "n": 200,
+          "p50_ns": 1164669,
+          "p99_ns": 1777593,
+          "max_ns": 2025103
+        },
+        "batches_received_measure": 9995,
+        "measure_span_ms": 10005.034712,
+        "derived_batches_per_expected_tick": 0.998997033764614,
+        "batch_id_step_counts": {
+          "same_ms": 1277,
+          "one_ms": 7439,
+          "gap_gt_1ms": 1278,
+          "missing_ms_in_gaps": 1287
+        }
+      },
+      {
+        "daemon_vm_hwm_kb": 6556,
+        "ready_ms": 10,
+        "priming_frames": 1,
+        "exit_status_code": 0,
+        "exit_ms": 3.823047,
+        "logged_termination": true,
+        "undecodable_frames": 0,
+        "run": "transport-r1",
+        "probes_sent": 200,
+        "probes_matched": 200,
+        "bad_probes": [],
+        "unexpected_nonempty_batches": 0,
+        "probe_latency": {
+          "n": 200,
+          "p50_ns": 1017181,
+          "p99_ns": 1628040,
+          "max_ns": 3134431
+        },
+        "batches_received_measure": 10005,
+        "measure_span_ms": 10005.000665,
+        "derived_batches_per_expected_tick": 0.9999999335332378,
+        "batch_id_step_counts": {
+          "same_ms": 1312,
+          "one_ms": 7380,
+          "gap_gt_1ms": 1312,
+          "missing_ms_in_gaps": 1312
+        }
+      },
+      {
+        "daemon_vm_hwm_kb": 6592,
+        "ready_ms": 10,
+        "priming_frames": 1,
+        "exit_status_code": 0,
+        "exit_ms": 3.061562,
+        "logged_termination": true,
+        "undecodable_frames": 0,
+        "run": "transport-r2",
+        "probes_sent": 200,
+        "probes_matched": 200,
+        "bad_probes": [],
+        "unexpected_nonempty_batches": 0,
+        "probe_latency": {
+          "n": 200,
+          "p50_ns": 1097505,
+          "p99_ns": 1771948,
+          "max_ns": 3510460
+        },
+        "batches_received_measure": 10006,
+        "measure_span_ms": 10005.299772,
+        "derived_batches_per_expected_tick": 1.0000699857091697,
+        "batch_id_step_counts": {
+          "same_ms": 1447,
+          "one_ms": 7115,
+          "gap_gt_1ms": 1443,
+          "missing_ms_in_gaps": 1446
+        }
+      }
+    ],
+    "pooled_probe_latency": {
+      "n": 600,
+      "p50_ns": 1083595,
+      "p99_ns": 1771948,
+      "max_ns": 3510460
+    }
+  },
+  "note": "All values measured from raw files except keys prefixed 'derived'. Trained-model usefulness is not tested: the fixture is synthetic and untrained."
+}

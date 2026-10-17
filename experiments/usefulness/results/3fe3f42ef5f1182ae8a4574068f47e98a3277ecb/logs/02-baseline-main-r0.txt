@@ -1,0 +1,1 @@
+$ target/release/examples/usefulness_inprocess --mode baseline --variant main --rep 0 --out experiments/usefulness/results/3fe3f42ef5f1182ae8a4574068f47e98a3277ecb/raw

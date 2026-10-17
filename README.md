@@ -365,6 +365,16 @@ channels = 16
 model_path = "/unused/in/simulation.json"
 ```
 
+### Usefulness experiment
+
+[`experiments/usefulness/`](experiments/usefulness/) holds a reproducible,
+pre-registered experiment. It compares the daemon with a direct
+`SpikingNetwork::step` baseline on a typed `corpus-ipc` workload, in-process
+and through the real binary over ZeroMQ. The checkpoint is a synthetic,
+untrained fixture. See the [protocol](experiments/usefulness/PROTOCOL.md) and
+the [report](experiments/usefulness/REPORT.md). Run it from a clean checkout
+with `experiments/usefulness/run.sh` (Linux, needs `libzmq`).
+
 ### Bounded ingress
 
 Every in-process channel that can feed the tick loop goes through `BoundedIngress` (one queue per message class). OS `SIGINT`/`SIGTERM` stay out-of-band in `tokio::select!` so shutdown cannot sit behind bulk traffic.
