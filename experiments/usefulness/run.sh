@@ -3,10 +3,11 @@
 # Refuses a dirty tree, records identity, builds the release drivers and the
 # corpus-ipc binary, runs every repetition as a separate process, gzips the
 # raw per-tick JSONL, and summarizes. Partial results are kept on failure.
+# Logs under results/ are committed evidence: .gitignore re-includes them.
 set -euo pipefail
 
 ROOT=$(git rev-parse --show-toplevel)
-cd "$ROOT"
+cd "$ROOT" || exit 1
 EXP=experiments/usefulness
 TOOLCHAIN=1.98.1
 R_INPROCESS=${R_INPROCESS:-5}
@@ -112,7 +113,7 @@ for rep in $(seq 1 "$R_INPROCESS"); do
     done
 done
 for rep in $(seq 1 "$R_TRANSPORT"); do
-    step "transport-live-r$rep" target/release/examples/usefulness_transport target/release/brainstem-daemon \
+    step "transport-live-r$rep" target/release/examples/usefulness_transport \
         "$EXP/config/transport-live.toml" "$WORKLOAD" "$OUT/transport-live-r$rep.jsonl" "$OUT/transport-live-r$rep.summary.json"
     gzip -9 -n -f "$OUT/transport-live-r$rep.jsonl"
 done
