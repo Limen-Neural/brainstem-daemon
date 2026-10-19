@@ -30,7 +30,8 @@ CI (`.github/workflows/ci.yml`) runs `fmt`, `stub` (Linux, macOS, Windows), `cor
 - `src/config.rs`: `DaemonConfig` TOML types, serde defaults, PUB socket validation. `registry.rs`: config-driven `ServiceRegistry`.
 - `src/daemon.rs`: `BrainstemDaemon` tick loop (wall-clock `tokio` time). `backend.rs`: local stimulus-ingress and spike-egress traits (`BackendPair`, stub by default).
 - `src/checkpoint/`: Distill sidecar (`snn_model.json`) loader and the live-mode startup gate. `ingress/`: bounded queues feeding the tick loop (`corpus.rs` for ZeroMQ).
-- `src/health/`: liveness, readiness, degradation, sticky fatal state. `control.rs`: optional health and metrics listener. `logging.rs`.
+- `src/health/`: liveness, readiness, degradation, sticky fatal state.
+- `src/control.rs`: optional health and metrics listener. `src/logging.rs`: logging.
 - `src/runtime/`: deterministic restart and fault-injection harness (fakes, clock, durable state).
 - `tests/`: `config_startup.rs`; `thalamic_brainstem_smoke.rs` and `pub_lifecycle.rs` require `corpus-ipc` (Linux-only lifecycle test).
 - `docs/ci.md`: CI matrix and skips. `docs/health.md`: health contract. `README.md` has the backend truth table and the role and boundary matrix.
@@ -38,7 +39,7 @@ CI (`.github/workflows/ci.yml`) runs `fmt`, `stub` (Linux, macOS, Windows), `cor
 ## Invariants and non-goals (from `AGENTS.md` and `README.md`)
 
 - Inference-only runtime. No training or weight optimization (`plasticity-lab`), trading or mining adapters, or hardware control (`Spikenaut-Hardware`).
-- `corpus-ipc` and `zmq` stay optional and off by default; the default stub path opens no sockets and needs no `libzmq`.
+- `corpus-ipc` and `zmq` stay optional and off by default; the default stub path opens no ZeroMQ sockets and needs no `libzmq`, but an optional `control_bind` still opens the HTTP control listener.
 - Live mode fails closed on a missing, corrupt, or non-finite checkpoint. Do not add a silent fallback to a blank `with_dimensions()` network.
 - SNN dynamics come from `neuromod` 0.7; the daemon applies neuromodulator signals from `limbic-critic` but does not generate them.
 - Keep `Cargo.toml` `rust-version`, `rust-toolchain.toml`, every CI `toolchain:` string, `Dockerfile`, and `.devin/blueprint.yaml` on the same version (`REVIEW.md`).
