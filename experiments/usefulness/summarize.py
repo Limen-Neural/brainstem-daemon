@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""
-Turn raw usefulness-experiment results into the pre-registered checks and metrics.
+"""Turn raw usefulness-experiment results into the pre-registered checks and metrics."""
 
-See PROTOCOL.md §4–§6. Standard library only.
-
-Usage: summarize.py <results-dir>
-Writes <results-dir>/summary.json and <results-dir>/summary.md.
-
-Every number is labelled `measured` except the budget comparisons, which are
-`derived` from the pre-registered thresholds.
-"""
+# See PROTOCOL.md §4–§6. Standard library only.
+#
+# Usage: summarize.py <results-dir>
+# Writes <results-dir>/summary.json and <results-dir>/summary.md.
+#
+# Every number is labelled `measured` except the budget comparisons, which are
+# `derived` from the pre-registered thresholds.
 
 import glob
 import gzip

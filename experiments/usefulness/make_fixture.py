@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""
-Generate the synthetic fixture, the deterministic workload, and the expected spike sets.
+"""Generate the synthetic fixture, the deterministic workload, and the expected spike sets."""
 
-Standard library only. Re-running this script must reproduce the committed
-files byte-for-byte; `run.sh` checks that.
-
-The expected spike sets come from `reference_model.py`, a from-the-docs
-re-implementation of the LIF bank in `neuromod` 0.7.0 `SpikingNetwork::step`.
-It is independent of the Rust engine, so the daemon and the direct-engine
-baseline are both checked against a third, hand-written model.
-"""
+# Standard library only. Re-running this script must reproduce the committed
+# files byte-for-byte; `run.sh` checks that.
+#
+# The expected spike sets come from `reference_model.py`, a from-the-docs
+# re-implementation of the LIF bank in `neuromod` 0.7.0 `SpikingNetwork::step`.
+# It is independent of the Rust engine, so the daemon and the direct-engine
+# baseline are both checked against a third, hand-written model.
 
 import hashlib
 import json
@@ -63,13 +61,10 @@ def require(condition, message):
 
 
 def weight_rows():
-    """
-    Structured weight rows that each sit exactly on the engine's L1 budget.
-
-    Neuron i < 8 listens to channel i only (weight 2.0). Neuron 8+k listens
-    to channels k and (k+1) % 8 (weight 1.0 each). Every row sums to 2.0, so
-    the per-step renormalization is a no-op.
-    """
+    """Structured weight rows that each sit exactly on the engine's L1 budget."""
+    # Neuron i < 8 listens to channel i only (weight 2.0). Neuron 8+k listens
+    # to channels k and (k+1) % 8 (weight 1.0 each). Every row sums to 2.0, so
+    # the per-step renormalization is a no-op.
     rows = []
     for i in range(CHANNELS):
         row = [0.0] * CHANNELS
@@ -144,12 +139,9 @@ def one_hot(channel, amplitude=1.0):
 
 
 def cycle_events():
-    """
-    Events at their offsets inside one 2,000-tick cycle (see SEGMENTS).
-
-    Every other tick is idle: the source returns `None` and the daemon
-    zero-fills.
-    """
+    """Events at their offsets inside one 2,000-tick cycle (see SEGMENTS)."""
+    # Every other tick is idle: the source returns `None` and the daemon
+    # zero-fills.
     events = {}
     for channel in range(CHANNELS):
         events[PULSE_SPACING * channel] = frame(one_hot(channel), valid_mask())

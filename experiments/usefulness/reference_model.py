@@ -1,25 +1,23 @@
-"""
-Hand-written reference of the `neuromod` LIF bank used to derive expected spike sets.
+"""Hand-written reference of the `neuromod` LIF bank used to derive expected spike sets."""
 
-It follows the documented order of work in `SpikingNetwork::step` (crates.io
-`neuromod` 0.7.0; this normal-mode pipeline is unchanged from 0.6.0) for an
-LIF-only network with `reward_lr = 0.0` (the loader's inference setting):
-
-1. stress = max(1 - NE, 0.1); lr = 0.5 * DA
-2. per neuron: decay = 0.15 - 0.05 * ACh; threshold blends toward
-   0.20 - 0.05 DA + 0.15 NE - 0.05 5-HT (+0.005 if it spiked last tick,
-   else -0.001), clamped to [0.05, 0.50], at rate lr
-3. per channel: s = clamp(|stim|, 0, 1); err = |s - pred|; pred = 0.1 s + 0.9 pred
-4. Bernoulli input encoding (RNG) only feeds STDP traces; with reward_lr = 0
-   no weight ever changes, so it is omitted here
-5. current = sum(w * (s + 0.5 err)) * 0.45 * stress; v += current; v -= v * decay
-6. fire when v >= threshold (reset to 0); if anything fired, every other
-   neuron loses 0.05 (floored at 0)
-7. L1 renormalization to 2.0 per row is a no-op for rows that already sum to 2.0
-
-Standard library only. Floats are f64; the generator asserts a margin so f32
-rounding in the engine cannot flip a threshold crossing.
-"""
+# It follows the documented order of work in `SpikingNetwork::step` (crates.io
+# `neuromod` 0.7.0; this normal-mode pipeline is unchanged from 0.6.0) for an
+# LIF-only network with `reward_lr = 0.0` (the loader's inference setting):
+#
+# 1. stress = max(1 - NE, 0.1); lr = 0.5 * DA
+# 2. per neuron: decay = 0.15 - 0.05 * ACh; threshold blends toward
+#    0.20 - 0.05 DA + 0.15 NE - 0.05 5-HT (+0.005 if it spiked last tick,
+#    else -0.001), clamped to [0.05, 0.50], at rate lr
+# 3. per channel: s = clamp(|stim|, 0, 1); err = |s - pred|; pred = 0.1 s + 0.9 pred
+# 4. Bernoulli input encoding (RNG) only feeds STDP traces; with reward_lr = 0
+#    no weight ever changes, so it is omitted here
+# 5. current = sum(w * (s + 0.5 err)) * 0.45 * stress; v += current; v -= v * decay
+# 6. fire when v >= threshold (reset to 0); if anything fired, every other
+#    neuron loses 0.05 (floored at 0)
+# 7. L1 renormalization to 2.0 per row is a no-op for rows that already sum to 2.0
+#
+# Standard library only. Floats are f64; the generator asserts a margin so f32
+# rounding in the engine cannot flip a threshold crossing.
 
 WEIGHT_BUDGET = 2.0
 PRED_ALPHA = 0.1
