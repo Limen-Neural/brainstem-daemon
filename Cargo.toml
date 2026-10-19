@@ -18,6 +18,7 @@ exclude = [
     ".github/",
     ".devin/",
     "AGENTS.md",
+    "CLAUDE.md",
     "REVIEW.md",
     "Dockerfile",
     ".codacy.yml",
