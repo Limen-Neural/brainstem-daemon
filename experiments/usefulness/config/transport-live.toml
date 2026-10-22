@@ -1,0 +1,18 @@
+# Live mode for the `corpus-ipc` binary driven by `examples/usefulness_transport.rs`.
+# Fixed loopback ports: the driver binds its producer PUB on spine_sub_port
+# (the daemon SUB connects there), subscribes to the daemon PUB on
+# spine_pub_port, and probes /readyz on control_bind.
+runtime_mode   = "live"
+tick_rate_hz   = 1000
+log_level      = "info"
+lif_count      = 16
+izh_count      = 0
+channels       = 8
+model_path     = "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json"
+spine_sub_port = 5755
+spine_pub_port = 5756
+spine_pub_bind_host          = "127.0.0.1"
+spine_pub_sndhwm             = 1000
+spine_pub_linger_ms          = 0
+spine_pub_send_empty_batches = true
+control_bind   = "127.0.0.1:9755"

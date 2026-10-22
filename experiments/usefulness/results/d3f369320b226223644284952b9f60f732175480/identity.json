@@ -1,0 +1,34 @@
+{
+  "sha": "d3f369320b226223644284952b9f60f732175480",
+  "status": "passed",
+  "started_utc": "2026-10-17T04:14:20.864197+00:00",
+  "toolchain": "1.98.1",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "features": [
+    "corpus-ipc"
+  ],
+  "profile": "release",
+  "kernel": "6.8.0-137-generic",
+  "os": "Debian GNU/Linux 12 (bookworm)",
+  "cpu_model": "AMD EPYC 9354P 32-Core Processor",
+  "cpu_count": 64,
+  "mem_total_kb": 791774148,
+  "repetitions": {
+    "inprocess": 5,
+    "transport": 3
+  },
+  "file_sha256": {
+    "Cargo.lock": "ce9c6b5c26e801fd930629423825daf35215bdde72dea6c7aa63d5903089f287",
+    "examples/usefulness_inprocess.rs": "fb8f46cefdc0bcc7f32ee0166ad862352300e98839137e04f6a0dada85b952c2",
+    "examples/usefulness_transport.rs": "06036de9e1c5f4c95d3085697046c0f205f3552ca42c5dca339e4c33fb0fdce8",
+    "experiments/usefulness/config/live.toml": "50b2526233d48e34b3360e7ff9ef27eb3614cc4611d32c12c372dcd7cb42614d",
+    "experiments/usefulness/config/simulation.toml": "6e104380864e3ce3973dd0ca8951c3d4108b7cb83cce95772dc90f06bfaa924b",
+    "experiments/usefulness/config/transport-live.toml": "9ca1d075659e14f4aa5ed6b0d876db10547d39e5bbd70d1a9ad89db7373fe03b",
+    "experiments/usefulness/fixtures/expected_spikes.json": "556ea8a9ce0da442e756e25b74b8009360cc0e46942cc8e2cd46c1227559d1b8",
+    "experiments/usefulness/fixtures/lif8x16-v1/MANIFEST.json": "22811f126089f132a758f39cd3d978ee9eab362bb170dd7d4220c99993590f9f",
+    "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+    "experiments/usefulness/fixtures/workload.json": "6b5e7ec0b1f59406725d0335e80dc3caf39e0197e24e4046dda5311b5f0f026e"
+  },
+  "finished_utc": "2026-10-17T04:15:12.739491+00:00"
+}

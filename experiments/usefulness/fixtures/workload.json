@@ -1,0 +1,469 @@
+{
+  "version": "usefulness-workload-v1",
+  "fixture_version": "lif8x16-v1",
+  "fixture_sha256": "9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60",
+  "channels": 8,
+  "ticks_per_cycle": 2000,
+  "cycles": 10,
+  "ticks": 20000,
+  "warmup_ticks": 1000,
+  "segments": {
+    "A_isolated_pulses": [
+      0,
+      160
+    ],
+    "B_burst": [
+      200,
+      202
+    ],
+    "C_two_channels": [
+      300,
+      301
+    ],
+    "D_weak_pulse": [
+      400,
+      401
+    ],
+    "M_masked": [
+      500,
+      520
+    ],
+    "Z_zero_equivalent": [
+      600,
+      620
+    ],
+    "N_modulators": [
+      700,
+      720
+    ],
+    "idle_settle": [
+      720,
+      2000
+    ]
+  },
+  "cycle_events": [
+    {
+      "offset": 0,
+      "values": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 20,
+      "values": [
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 40,
+      "values": [
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 60,
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 80,
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 100,
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 120,
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 140,
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 200,
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 201,
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 300,
+      "values": [
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 400,
+      "values": [
+        0.0,
+        0.0,
+        0.3,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 500,
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 600,
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": null
+    },
+    {
+      "offset": 700,
+      "values": [],
+      "valid_mask": null,
+      "modulators": {
+        "dopamine": 0.5,
+        "cortisol": 0.2,
+        "acetylcholine": 0.4,
+        "tempo": 0.5
+      }
+    },
+    {
+      "offset": 701,
+      "values": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "valid_mask": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "modulators": {
+        "dopamine": 0.5,
+        "cortisol": 0.2,
+        "acetylcholine": 0.4,
+        "tempo": 0.5
+      }
+    }
+  ],
+  "transport": {
+    "pulse_spacing_ticks": 20,
+    "pulses": 200,
+    "amplitude": 1.0,
+    "expected_by_channel": {
+      "0": [
+        0,
+        8,
+        15
+      ],
+      "1": [
+        1,
+        8,
+        9
+      ],
+      "2": [
+        2,
+        9,
+        10
+      ],
+      "3": [
+        3,
+        10,
+        11
+      ],
+      "4": [
+        4,
+        11,
+        12
+      ],
+      "5": [
+        5,
+        12,
+        13
+      ],
+      "6": [
+        6,
+        13,
+        14
+      ],
+      "7": [
+        7,
+        14,
+        15
+      ]
+    }
+  }
+}
