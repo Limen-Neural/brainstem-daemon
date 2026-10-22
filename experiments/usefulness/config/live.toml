@@ -1,0 +1,11 @@
+# In-process live mode: restores the repository fixture checkpoint.
+# Paths are relative to the repository root (run from there; `~` is not expanded).
+runtime_mode   = "live"
+lif_count      = 16
+izh_count      = 0
+channels       = 8
+tick_rate_hz   = 1000
+log_level      = "warn"
+spine_sub_port = 15555
+spine_pub_port = 15556
+model_path     = "experiments/usefulness/fixtures/snn_model.json"
