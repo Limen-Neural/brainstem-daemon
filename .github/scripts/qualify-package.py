@@ -304,10 +304,11 @@ def install(gate, package, features):
 
 def qualify_mode(gate, package, mode, features):
     env = dict(gate.env)
-    # Same linker workaround as the corpus-ipc CI job: rust-lld + static
-    # libzmq SIGSEGVs the test binary on ubuntu-latest 26.04 under Rust 1.99.
+    # Extracted crates still read `.cargo/config.toml`. Set the same defines
+    # here so a caller-supplied CXXFLAGS cannot drop them during qualification.
     if mode == "corpus-ipc":
-        env["RUSTFLAGS"] = "-C linker-features=-lld"
+        env["CFLAGS"] = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
+        env["CXXFLAGS"] = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
     gate = replace(gate, mode=mode, env=env)
     # Never reuse checkout artifacts, or artifacts from the other backend.
     gate.env["CARGO_TARGET_DIR"] = str(gate.work / f"target-{mode}")

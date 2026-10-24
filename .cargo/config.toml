@@ -1,0 +1,9 @@
+# zeromq-src 0.2.6 (via zmq-sys) does not define HAVE_POSIX_MEMALIGN, so
+# yqueue chunks come from malloc. command_t is 64-byte aligned. GCC's
+# x86-64-v3 default on Ubuntu 26.04 copies that type with vmovdqa, which
+# SIGSEGVs on the misaligned slot. These defines turn on posix_memalign
+# at the cache-line size libzmq's CMake uses. Linux and macOS have
+# posix_memalign; this feature is not built on Windows in CI.
+[env]
+CFLAGS = { value = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64", force = true }
+CXXFLAGS = { value = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64", force = true }

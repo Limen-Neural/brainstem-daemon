@@ -77,11 +77,6 @@ jobs:
   corpus-ipc:
     name: corpus-ipc (ubuntu)
     runs-on: ubuntu-latest
-    # Rust 1.99's default rust-lld links the static libzmq test binary into a
-    # SIGSEGV on ubuntu-latest (26.04) before any test prints. The system
-    # linker does not. Stub jobs do not link libzmq.
-    env:
-      RUSTFLAGS: -C linker-features=-lld
     # Bound the job even if a native socket call regresses into a blocking wait.
     timeout-minutes: 15
     steps:
@@ -108,9 +103,10 @@ jobs:
             ~/.cargo/git
             target
           # Feature-scoped: corpus-ipc restore-keys must not prefix-match stub.
-          key: ${{ runner.os }}-corpus-ipc-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml') }}
+          # v2: do not reuse libzmq objects built without the alignment defines.
+          key: ${{ runner.os }}-corpus-ipc-v2-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
           restore-keys: |
-            ${{ runner.os }}-corpus-ipc-
+            ${{ runner.os }}-corpus-ipc-v2-
 
       - name: Run clippy (all-features)
         env:
@@ -128,30 +124,7 @@ jobs:
         env:
           CC: gcc
           CXX: g++
-        run: |
-          set +e
-          cargo test --locked --all-features
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            # The lib test binary SIGSEGVs on ubuntu-latest before any test
-            # name is printed. Capture the faulting frame on that runner.
-            sudo apt-get install -y gdb
-            echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope >/dev/null || true
-            bin=$(find target/debug/deps -maxdepth 1 -type f -executable -name 'brainstem_daemon-*' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
-            echo "faulting binary: $bin"
-            uname -a
-            grep -m1 'flags\|model name' /proc/cpuinfo || true
-            readelf -n "$bin" || true
-            ldd "$bin" || true
-            gdb -batch \
-              -ex "set pagination off" \
-              -ex "set debuginfod enabled off" \
-              -ex "run" \
-              -ex "thread apply all bt" \
-              -ex "info registers" \
-              -- "$bin" || true
-          fi
-          exit "$status"
+        run: cargo test --locked --all-features
 
   package:
     name: packaged release (ubuntu)
