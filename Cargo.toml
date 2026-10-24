@@ -4,7 +4,7 @@ version = "0.3.0"
 edition = "2024"
 # Keep identical to rust-toolchain.toml `channel` and the CI workflow
 # `toolchain:` pin (see REVIEW.md "MSRV pin rule").
-rust-version = "1.98.1"
+rust-version = "1.99.0"
 description = "Headless spiking-neural-network runtime: inference, telemetry, and optional ZeroMQ I/O"
 authors = ["Raul Cardenas Montoya <montoyaraul34@gmail.com>"]
 license = "MIT OR Apache-2.0"

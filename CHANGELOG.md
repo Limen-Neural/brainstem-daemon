@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Align MSRV and toolchain pins to **Rust 1.99.0** (`Cargo.toml`,
+  `rust-toolchain.toml`, CI, package qualification, `Dockerfile`,
+  `AGENTS.md`, `README.md`, `.devin/blueprint.yaml`) so the daemon matches
+  the Limen-Neural stack pin on axon-encoder, synaptic-wiring, and
+  corpus-ipc main. crates.io `corpus-ipc` 0.1.0 still declares Rust 1.98.1
+  (#98).
 - Bump `neuromod` from crates.io **0.6.0** to **0.7.0** (pre-1.0 range
   `>=0.7.0, <0.8.0`). `SpikingNetwork::step` keeps the same
   `(stimuli, modulators)` signature; 0.7 adds `StepError` variants the daemon
