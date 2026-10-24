@@ -1,0 +1,44 @@
+== regenerate-fixture: python3 -I -B experiments/usefulness/make_fixture.py
+   ok
+== fixture-unchanged: git diff --exit-code -- experiments/usefulness/fixtures
+   ok
+== build: env CC=gcc CXX=g++ cargo +1.98.1 build --locked --release --features corpus-ipc --bin brainstem-daemon --example usefulness_inprocess --example usefulness_transport
+   ok
+== daemon-live-r1: target/release/examples/usefulness_inprocess daemon-live experiments/usefulness/config/live.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-live-r1.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-live-r1.summary.json
+   ok
+== baseline-r1: target/release/examples/usefulness_inprocess baseline experiments/usefulness/config/live.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/baseline-r1.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/baseline-r1.summary.json
+   ok
+== daemon-simulation-r1: target/release/examples/usefulness_inprocess daemon-simulation experiments/usefulness/config/simulation.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-simulation-r1.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-simulation-r1.summary.json
+   ok
+== daemon-live-r2: target/release/examples/usefulness_inprocess daemon-live experiments/usefulness/config/live.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-live-r2.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-live-r2.summary.json
+   ok
+== baseline-r2: target/release/examples/usefulness_inprocess baseline experiments/usefulness/config/live.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/baseline-r2.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/baseline-r2.summary.json
+   ok
+== daemon-simulation-r2: target/release/examples/usefulness_inprocess daemon-simulation experiments/usefulness/config/simulation.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-simulation-r2.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-simulation-r2.summary.json
+   ok
+== daemon-live-r3: target/release/examples/usefulness_inprocess daemon-live experiments/usefulness/config/live.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-live-r3.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-live-r3.summary.json
+   ok
+== baseline-r3: target/release/examples/usefulness_inprocess baseline experiments/usefulness/config/live.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/baseline-r3.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/baseline-r3.summary.json
+   ok
+== daemon-simulation-r3: target/release/examples/usefulness_inprocess daemon-simulation experiments/usefulness/config/simulation.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-simulation-r3.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-simulation-r3.summary.json
+   ok
+== daemon-live-r4: target/release/examples/usefulness_inprocess daemon-live experiments/usefulness/config/live.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-live-r4.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-live-r4.summary.json
+   ok
+== baseline-r4: target/release/examples/usefulness_inprocess baseline experiments/usefulness/config/live.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/baseline-r4.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/baseline-r4.summary.json
+   ok
+== daemon-simulation-r4: target/release/examples/usefulness_inprocess daemon-simulation experiments/usefulness/config/simulation.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-simulation-r4.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-simulation-r4.summary.json
+   ok
+== daemon-live-r5: target/release/examples/usefulness_inprocess daemon-live experiments/usefulness/config/live.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-live-r5.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-live-r5.summary.json
+   ok
+== baseline-r5: target/release/examples/usefulness_inprocess baseline experiments/usefulness/config/live.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/baseline-r5.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/baseline-r5.summary.json
+   ok
+== daemon-simulation-r5: target/release/examples/usefulness_inprocess daemon-simulation experiments/usefulness/config/simulation.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-simulation-r5.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/daemon-simulation-r5.summary.json
+   ok
+== transport-live-r1: target/release/examples/usefulness_transport --daemon target/release/brainstem-daemon experiments/usefulness/config/transport-live.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/transport-live-r1.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/transport-live-r1.summary.json
+   ok
+== transport-live-r2: target/release/examples/usefulness_transport --daemon target/release/brainstem-daemon experiments/usefulness/config/transport-live.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/transport-live-r2.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/transport-live-r2.summary.json
+   ok
+== transport-live-r3: target/release/examples/usefulness_transport --daemon target/release/brainstem-daemon experiments/usefulness/config/transport-live.toml experiments/usefulness/fixtures/workload.json experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/transport-live-r3.jsonl experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/transport-live-r3.summary.json
+   ok
+== summarize: python3 -I -B experiments/usefulness/summarize.py experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480
+   ok

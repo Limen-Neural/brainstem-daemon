@@ -5,3 +5,5 @@
 exclude_paths:
   - "Cargo.lock"
   - "target/**"
+  # Agent guidance, not project documentation; avoids Markdown false alarms.
+  - "CLAUDE.md"

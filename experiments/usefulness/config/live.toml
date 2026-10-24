@@ -1,0 +1,12 @@
+# In-process live mode for `examples/usefulness_inprocess.rs` (daemon-live and
+# baseline). Paths are relative to the repository root; `~` is not expanded.
+runtime_mode   = "live"
+tick_rate_hz   = 1000
+log_level      = "warn"
+lif_count      = 16
+izh_count      = 0
+channels       = 8
+model_path     = "experiments/usefulness/fixtures/lif8x16-v1/snn_model.json"
+# Required keys; no-ops for the in-process run (no sockets are opened).
+spine_sub_port = 5755
+spine_pub_port = 5756

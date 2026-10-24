@@ -1,0 +1,17 @@
+fixture sha256 9d30e6a1968db99552974577025c676663ca3d88d11a9445abbd270e4c1b3a60
+nonempty expected ticks 150; min margin 0.0094; transport margin 0.1291
+  tick     0: [0, 8, 15]
+  tick    20: [1, 8, 9]
+  tick    40: [2, 9, 10]
+  tick    60: [3, 10, 11]
+  tick    80: [4, 11, 12]
+  tick   100: [5, 12, 13]
+  tick   120: [6, 13, 14]
+  tick   140: [7, 14, 15]
+  tick   200: [3, 10, 11]
+  tick   201: [3, 10, 11]
+  tick   300: [1, 5, 8, 9, 12, 13]
+  tick   400: [2]
+  tick   500: [6, 13, 14]
+  tick   600: [6, 13, 14]
+  tick   701: [0, 8, 15]
