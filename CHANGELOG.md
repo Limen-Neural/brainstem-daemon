@@ -30,7 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them. Static libzmq from `zeromq-src` 0.2.6 is built with
   `HAVE_POSIX_MEMALIGN` and a 64-byte cache line so `command_t` copies stay
   aligned under x86-64-v3 GCC (Ubuntu 26.04); without that, `vmovdqa`
-  SIGSEGVs in the queue.
+  SIGSEGVs in the queue. `.cargo/config.toml` passes those defines, appended
+  to any existing `CFLAGS` / `CXXFLAGS`, only when this package is the Cargo
+  root (a checkout, an extracted crate, or `cargo install`) and only for the
+  Unix triples named there. Windows is not included. An external crate that
+  depends on this package must set the same flags itself; this crate's build
+  script runs after `zeromq-src` and cannot inject them.
 - Bump `neuromod` from crates.io **0.6.0** to **0.7.0** (pre-1.0 range
   `>=0.7.0, <0.8.0`). `SpikingNetwork::step` keeps the same
   `(stimuli, modulators)` signature; 0.7 adds `StepError` variants the daemon

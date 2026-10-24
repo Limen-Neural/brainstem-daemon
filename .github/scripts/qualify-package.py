@@ -20,6 +20,10 @@ import tomllib
 import urllib.request
 
 CARGO = ["cargo", "+1.99.0"]
+# Same defines as `.cargo/config.toml`. The external consumer is a different
+# Cargo root, so it does not load that file; zeromq-src is built before this
+# crate and cannot inherit a flag from this crate's build script.
+LIBZMQ_ALIGN_DEFINES = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
 MODES = (("stub", []), ("corpus-ipc", ["--features", "corpus-ipc"]))
 # Attempts to start the daemon when a freshly allocated loopback port was
 # claimed by another process between allocation and the daemon's bind.
@@ -302,13 +306,19 @@ def install(gate, package, features):
     return root / "bin" / "brainstem-daemon"
 
 
+def append_libzmq_align_defines(env):
+    """Keep caller compiler flags and add the libzmq alignment defines."""
+    for key in ("CFLAGS", "CXXFLAGS"):
+        env[key] = " ".join(part for part in (env.get(key, ""), LIBZMQ_ALIGN_DEFINES) if part)
+
+
 def qualify_mode(gate, package, mode, features):
     env = dict(gate.env)
-    # Extracted crates still read `.cargo/config.toml`. Set the same defines
-    # here so a caller-supplied CXXFLAGS cannot drop them during qualification.
+    # Append, so a caller-supplied CFLAGS/CXXFLAGS is not replaced. The
+    # extracted package also loads `.cargo/config.toml`; the consumer crate
+    # does not, and needs these variables in the process environment.
     if mode == "corpus-ipc":
-        env["CFLAGS"] = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
-        env["CXXFLAGS"] = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
+        append_libzmq_align_defines(env)
     gate = replace(gate, mode=mode, env=env)
     # Never reuse checkout artifacts, or artifacts from the other backend.
     gate.env["CARGO_TARGET_DIR"] = str(gate.work / f"target-{mode}")

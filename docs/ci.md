@@ -38,7 +38,9 @@ The job has a 15-minute timeout as a final guard against native blocking calls.
   and Windows images are left on the portable stub matrix so optional
   native deps do not gate default CI. Enable `corpus-ipc` locally on
   those OSes after you have a C++ toolchain (and optionally system
-  ZeroMQ). Stub and `corpus-ipc` jobs both use Rust 1.99.0.
+  ZeroMQ). The checkout's `.cargo/config.toml` passes the libzmq alignment
+  defines for macOS triples. It does not pass them for Windows, which has
+  no `posix_memalign`. Stub and `corpus-ipc` jobs both use Rust 1.99.0.
 - `cargo fmt --check` runs on Linux only. rustfmt output does not depend
   on the host OS.
 

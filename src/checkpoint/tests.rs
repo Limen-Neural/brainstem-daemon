@@ -22,7 +22,11 @@ fn unique_dir() -> PathBuf {
             std::process::id(),
             FIXTURE_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
-    let _ = fs::remove_dir_all(&dir);
+    match fs::remove_dir_all(&dir) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => panic!("fixture dir cleanup: {err}"),
+    }
     fs::create_dir_all(&dir).expect("fixture dir");
     dir
 }

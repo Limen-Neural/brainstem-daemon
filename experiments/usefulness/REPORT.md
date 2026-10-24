@@ -159,6 +159,11 @@ regenerated the fixtures byte-for-byte and reproduced the previous run's
 `summary.md` exactly from its raw data; the engine bump left the
 pre-registered expectations unchanged and all equality checks pass on it.
 
+The reproduction toolchain in `PROTOCOL.md` and `run.sh` later moved from
+Rust 1.98.1 to Rust 1.99.0 with the crate's minimum supported Rust version.
+The committed result files still reflect the Rust 1.98.1 run that produced
+them.
+
 ## Recommendation
 
 The evidence supports continuing development of the runtime path: the
