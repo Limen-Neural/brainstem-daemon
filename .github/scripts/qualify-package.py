@@ -19,7 +19,7 @@ import time
 import tomllib
 import urllib.request
 
-CARGO = ["cargo", "+1.98.1"]
+CARGO = ["cargo", "+1.99.0"]
 MODES = (("stub", []), ("corpus-ipc", ["--features", "corpus-ipc"]))
 # Attempts to start the daemon when a freshly allocated loopback port was
 # claimed by another process between allocation and the daemon's bind.
@@ -368,7 +368,7 @@ def candidate_sha(gate, repo):
     sha = gate.run("git-sha", ["git", "rev-parse", "HEAD"], repo).strip()
     dirty = gate.run("git-status", ["git", "status", "--porcelain", "--untracked-files=no"], repo)
     require(not dirty.strip(), "qualification requires a clean committed checkout")
-    gate.run("rustc", ["rustc", "+1.98.1", "--version", "--verbose"], repo)
+    gate.run("rustc", ["rustc", "+1.99.0", "--version", "--verbose"], repo)
     gate.run("cargo", CARGO + ["--version"], repo)
     return sha
 

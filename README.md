@@ -95,11 +95,13 @@ The optional `corpus-ipc` feature depends on the published `corpus-ipc` crate (`
 
 ## Building
 
-Requires **Rust 1.98.1 only**. That version is the single source of truth
+Requires **Rust 1.99.0 only**. That version is the single source of truth
 across `rust-toolchain.toml` `channel`, `Cargo.toml` `rust-version`,
 `.github/workflows/ci.yml` `toolchain:`, and `Dockerfile` `FROM rust:`
 (see [REVIEW.md](REVIEW.md) "MSRV pin rule"). Do not use other toolchains.
-It matches published `corpus-ipc` 0.1 and the rest of the Spikenaut software stack.
+It matches `axon-encoder`, `synaptic-wiring`, and `corpus-ipc` on main.
+Published crates.io `corpus-ipc` 0.1.0 declares `rust-version` 1.98.1, which
+this MSRV can build.
 
 ```bash
 # Release build, default stub backend (no libzmq)

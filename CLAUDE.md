@@ -7,7 +7,7 @@ toolchain pin rule are in `AGENTS.md` (imported above); do not duplicate them he
 
 ## Commands
 
-Run from the repo root. "Verified" means it ran successfully in a fresh checkout on Rust 1.98.1 (the pin in
+Run from the repo root. "Verified" means it ran successfully in a fresh checkout on Rust 1.99.0 (the pin in
 `rust-toolchain.toml`), Linux, CPU only. `Cargo.lock` is tracked, so `--locked` is correct.
 
 | Command | Status |

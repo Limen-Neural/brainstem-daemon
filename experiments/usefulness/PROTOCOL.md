@@ -178,8 +178,10 @@ a compatible artifact without `output_weights` exists.
 ```bash
 # Debian/Ubuntu packages, pinned toolchain, dependency fetch (network needed once)
 sudo apt-get install -y build-essential curl pkg-config libzmq3-dev python3
-rustup toolchain install 1.98.1 --profile minimal
-cargo +1.98.1 fetch --locked
+rustup toolchain install 1.99.0 --profile minimal
+cargo +1.99.0 fetch --locked
+# Committed results record the toolchain that measured them (Rust 1.98.1).
+# A fresh run uses the repository pin above.
 # Verify the fixture and expectations regenerate byte-for-byte, then run.
 python3 -I -B experiments/usefulness/make_fixture.py && git diff --exit-code experiments/usefulness/fixtures
 experiments/usefulness/run.sh                      # refuses a dirty tree

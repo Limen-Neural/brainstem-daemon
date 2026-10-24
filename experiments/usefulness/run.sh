@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 cd "$ROOT" || exit 1
 EXP=experiments/usefulness
-TOOLCHAIN=1.98.1
+TOOLCHAIN=1.99.0
 R_INPROCESS=${R_INPROCESS:-5}
 R_TRANSPORT=${R_TRANSPORT:-3}
 

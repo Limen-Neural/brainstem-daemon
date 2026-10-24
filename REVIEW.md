@@ -12,13 +12,16 @@ only. See [`docs/ci.md`](docs/ci.md).
 
 `Cargo.toml` `rust-version`, `rust-toolchain.toml` `channel`, and every
 `toolchain:` string in `.github/workflows/ci.yml` must stay **identical**
-(currently **1.98.1**). `Dockerfile` `FROM rust:` tags and
+(currently **1.99.0**). `Dockerfile` `FROM rust:` tags and
 `.devin/blueprint.yaml` rustup pins must match too.
 
 To bump MSRV:
 
 1. Set the new version in `Cargo.toml`, `rust-toolchain.toml`, `ci.yml`,
    `Dockerfile`, `.devin/blueprint.yaml`, `README.md`, and `AGENTS.md`.
+   Update the same version in `docs/ci.md`,
+   `.github/scripts/qualify-package.py`, and `experiments/usefulness/`
+   (`run.sh`, `PROTOCOL.md`). Leave recorded experiment results unchanged.
 2. Run the mandatory stub commands below on that toolchain.
 3. Do not bump only one pin.
 
@@ -36,8 +39,10 @@ and does **not** need `libzmq`.
 The optional `corpus-ipc` feature (same as `--all-features` today) compiles
 ZeroMQ via `zmq-sys` / `zeromq-src` (needs a C++ compiler). Install
 `libzmq3-dev` on Debian/Ubuntu if you prefer a system library. The crate
-pin is **Rust 1.98.1**, matching published `corpus-ipc` 0.1, so these
-commands do not need `--ignore-rust-version`.
+pin is **Rust 1.99.0**, matching `axon-encoder`, `synaptic-wiring`, and
+`corpus-ipc` on main. Published crates.io `corpus-ipc` 0.1.0 declares
+`rust-version` 1.98.1, which this pin can build, so these commands do not
+need `--ignore-rust-version`.
 
 See README [Backends (temporary)](README.md#backends-temporary) for the
 feature → backend → config-key truth table (including env vars that are
