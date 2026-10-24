@@ -6,11 +6,15 @@
 #
 # The `cc` crate appends `CFLAGS_<triple>` and `CXXFLAGS_<triple>` (hyphens
 # written as underscores) to any `CFLAGS` / `CXXFLAGS` already set, so
-# caller flags stay. Cargo's `[env]` table is not target-scoped, so the
-# keys are listed per Unix triple. Windows is omitted: its CRT has no
-# posix_memalign. This file applies only when this package is the Cargo
-# root (a checkout, an extracted crate, or `cargo install`). An external
-# crate that depends on brainstem-daemon must set the same variables.
+# caller flags stay. Cargo's `[env]` table is not target-scoped, so each
+# supported triple is named below: x86_64 and aarch64, for Linux gnu,
+# Linux musl, and macOS. Any other target, including other Unix targets,
+# does not get these defines; set `CFLAGS` and `CXXFLAGS` there yourself.
+# A global `CFLAGS` entry is not used, because it would also apply on
+# Windows, whose CRT has no posix_memalign. This file applies only when
+# this package is the Cargo root (a checkout, an extracted crate, or
+# `cargo install`). An external crate that depends on brainstem-daemon
+# must set the same variables.
 [env]
 CFLAGS_x86_64_unknown_linux_gnu = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
 CXXFLAGS_x86_64_unknown_linux_gnu = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
