@@ -303,7 +303,12 @@ def install(gate, package, features):
 
 
 def qualify_mode(gate, package, mode, features):
-    gate = replace(gate, mode=mode)
+    env = dict(gate.env)
+    # Same linker workaround as the corpus-ipc CI job: rust-lld + static
+    # libzmq SIGSEGVs the test binary on ubuntu-latest 26.04 under Rust 1.99.
+    if mode == "corpus-ipc":
+        env["RUSTFLAGS"] = "-C linker-features=-lld"
+    gate = replace(gate, mode=mode, env=env)
     # Never reuse checkout artifacts, or artifacts from the other backend.
     gate.env["CARGO_TARGET_DIR"] = str(gate.work / f"target-{mode}")
     build_and_document(gate, package, features)

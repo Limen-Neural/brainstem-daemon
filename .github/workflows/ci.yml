@@ -77,6 +77,11 @@ jobs:
   corpus-ipc:
     name: corpus-ipc (ubuntu)
     runs-on: ubuntu-latest
+    # Rust 1.99's default rust-lld links the static libzmq test binary into a
+    # SIGSEGV on ubuntu-latest (26.04) before any test prints. The system
+    # linker does not. Stub jobs do not link libzmq.
+    env:
+      RUSTFLAGS: -C linker-features=-lld
     # Bound the job even if a native socket call regresses into a blocking wait.
     timeout-minutes: 15
     steps:

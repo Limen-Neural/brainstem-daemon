@@ -24,7 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AGENTS.md`, `README.md`, `.devin/blueprint.yaml`) so the daemon matches
   the Limen-Neural stack pin on axon-encoder, synaptic-wiring, and
   corpus-ipc main. crates.io `corpus-ipc` 0.1.0 still declares Rust 1.98.1
-  (#98).
+  (#98). The usefulness runner and its reproduction steps use the same
+  pin. Committed result files stay on the Rust 1.98.1 run that produced
+  them. On Ubuntu 26.04 the `corpus-ipc` test binary is linked with the
+  system linker because Rust 1.99's rust-lld segfaults that binary.
 - Bump `neuromod` from crates.io **0.6.0** to **0.7.0** (pre-1.0 range
   `>=0.7.0, <0.8.0`). `SpikingNetwork::step` keeps the same
   `(stimuli, modulators)` signature; 0.7 adds `StepError` variants the daemon

@@ -178,18 +178,21 @@ a compatible artifact without `output_weights` exists.
 ```bash
 # Debian/Ubuntu packages, pinned toolchain, dependency fetch (network needed once)
 sudo apt-get install -y build-essential curl pkg-config libzmq3-dev python3
-rustup toolchain install 1.98.1 --profile minimal
-cargo +1.98.1 fetch --locked
+rustup toolchain install 1.99.0 --profile minimal
+cargo +1.99.0 fetch --locked
 # Verify the fixture and expectations regenerate byte-for-byte, then run.
 python3 -I -B experiments/usefulness/make_fixture.py && git diff --exit-code experiments/usefulness/fixtures
 experiments/usefulness/run.sh                      # refuses a dirty tree
 python3 -I -B experiments/usefulness/summarize.py experiments/usefulness/results/<sha>
 ```
 
-`run.sh` records the commit SHA, `rustc`/`cargo` versions, kernel, CPU model
-and core count, memory size, features, and SHA-256 of every config and
-fixture file into `results/<sha>/identity.json`, keeps a per-step command
-log, and keeps partial results if a step fails. Raw per-tick records are
+`run.sh` builds with the toolchain in `TOOLCHAIN` (Rust 1.99.0, the crate's
+minimum supported Rust version). The committed results under `results/`
+record the Rust 1.98.1 run that produced them. `run.sh` records the commit
+SHA, `rustc`/`cargo` versions, kernel, CPU model and core count, memory
+size, features, and SHA-256 of every config and fixture file into
+`results/<sha>/identity.json`, keeps a per-step command log, and keeps
+partial results if a step fails. Raw per-tick records are
 gzipped JSONL; step, command and daemon logs are committed next to them.
 `summarize.py` embeds `identity.json` without the `status` and
 `finished_utc` fields that `run.sh` finalizes after summarizing, so
