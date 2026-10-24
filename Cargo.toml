@@ -43,7 +43,7 @@ toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tokio = { version = "1", features = ["full"] }
-dirs = "5"
+dirs = "7"
 zmq = { version = "0.10", optional = true }
 sha2 = "0.11"
 
