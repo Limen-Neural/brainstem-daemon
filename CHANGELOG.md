@@ -23,8 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rust-toolchain.toml`, CI, package qualification, `Dockerfile`,
   `AGENTS.md`, `README.md`, `.devin/blueprint.yaml`) so the daemon matches
   the Limen-Neural stack pin on axon-encoder, synaptic-wiring, and
-  corpus-ipc main. crates.io `corpus-ipc` 0.1.0 still declares Rust 1.98.1
-  (#98). The usefulness runner and its reproduction steps use the same
+  corpus-ipc main. Building this crate, including from crates.io, requires
+  Rust 1.99.0; a 1.98.x toolchain is rejected. crates.io `corpus-ipc` 0.1.0
+  still declares Rust 1.98.1 (#98). The usefulness runner and its reproduction steps use the same
   pin. Committed result files stay on the Rust 1.98.1 run that produced
   them. On Ubuntu 26.04 the `corpus-ipc` test binary is linked with the
   system linker because Rust 1.99's rust-lld segfaults that binary.
