@@ -1,0 +1,30 @@
+# zeromq-src 0.2.6 (via zmq-sys) does not define HAVE_POSIX_MEMALIGN, so
+# yqueue chunks come from malloc. command_t is 64-byte aligned. GCC's
+# x86-64-v3 default on Ubuntu 26.04 copies that type with vmovdqa, which
+# SIGSEGVs on the misaligned slot. These defines turn on posix_memalign
+# at 64 bytes, the cache-line size libzmq's CMake uses.
+#
+# The `cc` crate appends `CFLAGS_<triple>` and `CXXFLAGS_<triple>` (hyphens
+# written as underscores) to any `CFLAGS` / `CXXFLAGS` already set, so
+# caller flags stay. Cargo's `[env]` table is not target-scoped, so each
+# supported triple is named below: x86_64 and aarch64, for Linux gnu,
+# Linux musl, and macOS. Any other target, including other Unix targets,
+# does not get these defines; set `CFLAGS` and `CXXFLAGS` there yourself.
+# A global `CFLAGS` entry is not used, because it would also apply on
+# Windows, whose CRT has no posix_memalign. This file applies only when
+# this package is the Cargo root (a checkout, an extracted crate, or
+# `cargo install`). An external crate that depends on brainstem-daemon
+# must set the same variables.
+[env]
+CFLAGS_x86_64_unknown_linux_gnu = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
+CXXFLAGS_x86_64_unknown_linux_gnu = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
+CFLAGS_aarch64_unknown_linux_gnu = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
+CXXFLAGS_aarch64_unknown_linux_gnu = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
+CFLAGS_x86_64_unknown_linux_musl = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
+CXXFLAGS_x86_64_unknown_linux_musl = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
+CFLAGS_aarch64_unknown_linux_musl = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
+CXXFLAGS_aarch64_unknown_linux_musl = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
+CFLAGS_x86_64_apple_darwin = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
+CXXFLAGS_x86_64_apple_darwin = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
+CFLAGS_aarch64_apple_darwin = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
+CXXFLAGS_aarch64_apple_darwin = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"

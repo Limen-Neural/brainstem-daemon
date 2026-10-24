@@ -4,7 +4,7 @@ GitHub Actions (`.github/workflows/ci.yml`) checks that the default stub
 backend is portable, and that optional ZeroMQ features still build where
 system `libzmq` is available.
 
-All jobs install **Rust 1.98.1** — the same string as `Cargo.toml`
+All jobs install **Rust 1.99.0** — the same string as `Cargo.toml`
 `rust-version` and `rust-toolchain.toml` `channel` (see REVIEW.md
 "MSRV pin rule").
 
@@ -38,7 +38,9 @@ The job has a 15-minute timeout as a final guard against native blocking calls.
   and Windows images are left on the portable stub matrix so optional
   native deps do not gate default CI. Enable `corpus-ipc` locally on
   those OSes after you have a C++ toolchain (and optionally system
-  ZeroMQ). Stub and `corpus-ipc` jobs both use Rust 1.98.1.
+  ZeroMQ). The checkout's `.cargo/config.toml` passes the libzmq alignment
+  defines for macOS triples. It does not pass them for Windows, which has
+  no `posix_memalign`. Stub and `corpus-ipc` jobs both use Rust 1.99.0.
 - `cargo fmt --check` runs on Linux only. rustfmt output does not depend
   on the host OS.
 
@@ -54,7 +56,7 @@ optional `corpus-ipc` / `--all-features` commands on Linux.
 The `packaged release` job checks the PR's exact head SHA (or the pushed SHA
 on `main`), not the synthetic PR merge commit. It deliberately avoids checkout
 build caches. Reproduce it on Linux with Python 3.11.6+ (including tarfile's
-safe extraction filter), GCC/G++, `libzmq3-dev`, and Rust 1.98.1:
+safe extraction filter), GCC/G++, `libzmq3-dev`, and Rust 1.99.0:
 
 ```bash
 # Run from a clean, committed checkout. Use a new, empty evidence directory.
@@ -64,10 +66,10 @@ python3 .github/scripts/qualify-package.py target/package-evidence
 The driver runs these gates without `--allow-dirty`, `--no-verify`, or
 `--ignore-rust-version`:
 
-1. Record `cargo +1.98.1 package --locked --list`. Require manifests and
+1. Record `cargo +1.99.0 package --locked --list`. Require manifests and
    lockfile, README, both licenses, toolchain pin, VCS identity, and every tracked
    source/test fixture. Reject repository-only directories and build artifacts.
-2. Run `cargo +1.98.1 package --locked`, retain the `.crate` and SHA-256,
+2. Run `cargo +1.99.0 package --locked`, retain the `.crate` and SHA-256,
    verify its embedded Git identity, and extract it outside the checkout.
 3. Build/test the extracted package separately with default features and
    `--features corpus-ipc`. Run `cargo doc --locked --no-deps` with
@@ -83,7 +85,7 @@ The driver runs these gates without `--allow-dirty`, `--no-verify`, or
 5. Build and run a tiny external path-dependent library consumer in each mode.
    It loads simulation config, restores the blank simulation network, and
    verifies that missing live checkpoints are rejected through the public API.
-6. Run `cargo +1.98.1 publish --dry-run --locked` from the clean checkout.
+6. Run `cargo +1.99.0 publish --dry-run --locked` from the clean checkout.
    Cargo packages/verifies it again; **nothing is uploaded to crates.io**.
 
 CI uploads `package-qualification-<candidate-sha>` with 90-day retention when

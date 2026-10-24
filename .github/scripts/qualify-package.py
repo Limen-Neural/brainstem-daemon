@@ -19,7 +19,11 @@ import time
 import tomllib
 import urllib.request
 
-CARGO = ["cargo", "+1.98.1"]
+CARGO = ["cargo", "+1.99.0"]
+# Same defines as `.cargo/config.toml`. The external consumer is a different
+# Cargo root, so it does not load that file; zeromq-src is built before this
+# crate and cannot inherit a flag from this crate's build script.
+LIBZMQ_ALIGN_DEFINES = "-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64"
 MODES = (("stub", []), ("corpus-ipc", ["--features", "corpus-ipc"]))
 # Attempts to start the daemon when a freshly allocated loopback port was
 # claimed by another process between allocation and the daemon's bind.
@@ -302,8 +306,20 @@ def install(gate, package, features):
     return root / "bin" / "brainstem-daemon"
 
 
+def append_libzmq_align_defines(env):
+    """Keep caller compiler flags and add the libzmq alignment defines."""
+    for key in ("CFLAGS", "CXXFLAGS"):
+        env[key] = " ".join(part for part in (env.get(key, ""), LIBZMQ_ALIGN_DEFINES) if part)
+
+
 def qualify_mode(gate, package, mode, features):
-    gate = replace(gate, mode=mode)
+    env = dict(gate.env)
+    # Append, so a caller-supplied CFLAGS/CXXFLAGS is not replaced. The
+    # extracted package also loads `.cargo/config.toml`; the consumer crate
+    # does not, and needs these variables in the process environment.
+    if mode == "corpus-ipc":
+        append_libzmq_align_defines(env)
+    gate = replace(gate, mode=mode, env=env)
     # Never reuse checkout artifacts, or artifacts from the other backend.
     gate.env["CARGO_TARGET_DIR"] = str(gate.work / f"target-{mode}")
     build_and_document(gate, package, features)
@@ -368,7 +384,7 @@ def candidate_sha(gate, repo):
     sha = gate.run("git-sha", ["git", "rev-parse", "HEAD"], repo).strip()
     dirty = gate.run("git-status", ["git", "status", "--porcelain", "--untracked-files=no"], repo)
     require(not dirty.strip(), "qualification requires a clean committed checkout")
-    gate.run("rustc", ["rustc", "+1.98.1", "--version", "--verbose"], repo)
+    gate.run("rustc", ["rustc", "+1.99.0", "--version", "--verbose"], repo)
     gate.run("cargo", CARGO + ["--version"], repo)
     return sha
 

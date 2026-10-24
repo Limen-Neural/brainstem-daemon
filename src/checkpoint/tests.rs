@@ -11,6 +11,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn unique_dir() -> PathBuf {
+    // Names are only unique inside this process. A restored `target/` cache
+    // can reuse the same pid and sequence and leave `snn_model.json` behind,
+    // which directory resolution prefers over `dataset/merged_v2/`.
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join("checkpoint-fixtures")
@@ -19,6 +22,11 @@ fn unique_dir() -> PathBuf {
             std::process::id(),
             FIXTURE_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
+    match fs::remove_dir_all(&dir) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => panic!("fixture dir cleanup: {err}"),
+    }
     fs::create_dir_all(&dir).expect("fixture dir");
     dir
 }

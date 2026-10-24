@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Last updated: 2026-09-17
+Last updated: 2026-10-24
 
 This file guides autonomous agents working on `brainstem-daemon`.
 
@@ -33,14 +33,14 @@ Default (stub) commands — no `libzmq` required:
 
 Optional `corpus-ipc` / `--all-features` commands need the system ZeroMQ
 dev package (`libzmq3-dev` on Debian/Ubuntu). They are not vendored.
-Run them on the **1.98.1** pin (`rust-toolchain.toml` / `Cargo.toml`
-`rust-version`); published `corpus-ipc` 0.1 declares that MSRV, so do
-not pass `--ignore-rust-version`:
+Run them on the **1.99.0** pin (`rust-toolchain.toml` / `Cargo.toml`
+`rust-version`). crates.io `corpus-ipc` 0.1.0 declares Rust 1.98.1, which
+this toolchain satisfies, so do not pass `--ignore-rust-version`:
 
 - `cargo test --locked --all-features`
 - `cargo clippy --locked --all-targets --all-features -- -D warnings`
 
-If a `--all-features` build fails because the C++ compiler cannot find a standard-library header, set the C Compiler (CC) and C++ Compiler (CXX) variables first (still on 1.98.1):
+If a `--all-features` build fails because the C++ compiler cannot find a standard-library header, set the C Compiler (CC) and C++ Compiler (CXX) variables first (still on 1.99.0):
 
 - `CC=gcc CXX=g++ cargo build --locked --all-features`
 - `CC=gcc CXX=g++ cargo test --locked --all-features`
@@ -48,7 +48,15 @@ If a `--all-features` build fails because the C++ compiler cannot find a standar
 
 ## Cursor Cloud setup
 
-This repository is preconfigured on the Cursor Cloud virtual machine. The Rust toolchain is pinned to **1.98.1 only** via `rust-toolchain.toml` (keep `Cargo.toml` `rust-version` and CI `toolchain:` in lockstep; see REVIEW.md "MSRV pin rule"). At startup the environment runs `cargo fetch`.
+This repository is preconfigured on the Cursor Cloud virtual machine.
+
+The Rust toolchain is pinned to Rust 1.99.0 only, via `rust-toolchain.toml`.
+
+Keep `Cargo.toml` `rust-version` and every CI toolchain value on that same pin.
+
+See the minimum supported Rust version (MSRV) pin rule in REVIEW.md.
+
+At startup the environment runs `cargo fetch`.
 
 ### Backend features
 
@@ -59,7 +67,7 @@ If you need ZeroMQ networking, enable the `corpus-ipc` feature.
 - The `corpus-ipc` feature pulls published `corpus-ipc` 0.1 from crates.io (`features = ["zmq"]`) and this crate's optional `zmq` dependency.
 - Published `corpus-ipc` compiles libzmq via `zmq-sys`. You need a C++ compiler; `libzmq3-dev` is still useful on Debian/Ubuntu.
 - The `corpus-ipc` crate does not vendor ZeroMQ as a git submodule.
-- Stub and `corpus-ipc` builds share this crate's MSRV **1.98.1** (same as published `corpus-ipc` 0.1).
+- Stub and `corpus-ipc` builds share this crate's MSRV **1.99.0**. crates.io `corpus-ipc` 0.1.0 declares Rust 1.98.1; corpus-ipc on main is 1.99.0.
 
 Prefer the README [Backends (temporary)](README.md#backends-temporary) section as the user-facing truth table, unless a newer code change supersedes it.
 That table maps Cargo flags to the backend and to which config keys and env vars apply.

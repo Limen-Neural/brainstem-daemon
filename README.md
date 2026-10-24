@@ -76,6 +76,8 @@ cargo install brainstem-daemon
 cargo install brainstem-daemon --features corpus-ipc
 ```
 
+A checkout or `cargo install` of this package applies the libzmq alignment defines in `.cargo/config.toml` on the Unix triples listed there. See [Backends (temporary)](#backends-temporary) for an external crate that depends on this package.
+
 As a library dependency (crates.io, not a git pin) — pick **one** table; do not
 paste both keys into the same `Cargo.toml`:
 
@@ -95,11 +97,13 @@ The optional `corpus-ipc` feature depends on the published `corpus-ipc` crate (`
 
 ## Building
 
-Requires **Rust 1.98.1 only**. That version is the single source of truth
+Requires **Rust 1.99.0 only**. That version is the single source of truth
 across `rust-toolchain.toml` `channel`, `Cargo.toml` `rust-version`,
 `.github/workflows/ci.yml` `toolchain:`, and `Dockerfile` `FROM rust:`
 (see [REVIEW.md](REVIEW.md) "MSRV pin rule"). Do not use other toolchains.
-It matches published `corpus-ipc` 0.1 and the rest of the Spikenaut software stack.
+It matches the 1.99.0 pin on axon-encoder, synaptic-wiring, and corpus-ipc
+main. crates.io `corpus-ipc` 0.1.0 declares Rust 1.98.1, which this compiler
+accepts.
 
 ```bash
 # Release build, default stub backend (no libzmq)
@@ -238,6 +242,8 @@ diagnostic to stderr and safely falls back to the validated TOML level.
 ### Backends (temporary)
 
 Default Cargo features are empty (`default = []` in `Cargo.toml`). That path uses the in-memory **stub** backend (`StubStimulusSource` + `NoopSpikeSink`) and does **not** need ZeroMQ. The optional `corpus-ipc` feature (same as `--all-features` today) pulls `corpus-ipc` **from crates.io** (`0.1`, `features = ["zmq"]`) plus this crate's optional `zmq` dependency. Published `corpus-ipc` compiles libzmq via `zmq-sys` / `zeromq-src` (a C++ compiler is required; a system `libzmq` package is not). It does not vendor ZeroMQ as a git submodule.
+
+`zeromq-src` 0.2.6 allocates libzmq queue chunks with `malloc` unless `HAVE_POSIX_MEMALIGN` is set. On x86-64-v3 GCC (Ubuntu 26.04) that misaligned `command_t` slot SIGSEGVs. When this package is the Cargo root, `.cargo/config.toml` passes `-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64` as `CFLAGS_<triple>` and `CXXFLAGS_<triple>` for x86_64 and aarch64 Linux gnu, Linux musl, and macOS. Any other target, including other Unix targets, does not get those defines; set `CFLAGS` and `CXXFLAGS` yourself there. The `cc` crate appends the listed keys to any `CFLAGS` / `CXXFLAGS` already set. A global `CFLAGS` entry is not used, because it would also apply on Windows, whose CRT has no `posix_memalign`. An external crate that depends on `brainstem-daemon` does not load this file, and this crate cannot pass the defines into `zeromq-src` (that native library is compiled first). Set the same defines in `CFLAGS` and `CXXFLAGS`, or in the matching `CFLAGS_<triple>` / `CXXFLAGS_<triple>` variables (hyphens written as underscores), before building `--features corpus-ipc`.
 
 `DaemonConfig` deserialization is **not** feature-gated: `spine_sub_port`, `spine_pub_port`, and `model_path` are still required in TOML even on the stub path (`services`, `runtime_mode`, `ingress`, and `control_bind` are optional; `runtime_mode` defaults to `live`; `ingress` defaults to the bounded-queue table below; `control_bind` unset = no extra socket). Effect at runtime depends on which backend is **wired** and on `runtime_mode`.
 

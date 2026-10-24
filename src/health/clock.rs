@@ -40,7 +40,7 @@ impl FakeClock {
         let add = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
         let _ = self
             .offset_nanos
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
                 Some(current.saturating_add(add))
             });
     }
