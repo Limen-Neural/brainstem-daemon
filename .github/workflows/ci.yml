@@ -128,7 +128,30 @@ jobs:
         env:
           CC: gcc
           CXX: g++
-        run: cargo test --locked --all-features
+        run: |
+          set +e
+          cargo test --locked --all-features
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            # The lib test binary SIGSEGVs on ubuntu-latest before any test
+            # name is printed. Capture the faulting frame on that runner.
+            sudo apt-get install -y gdb
+            echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope >/dev/null || true
+            bin=$(find target/debug/deps -maxdepth 1 -type f -executable -name 'brainstem_daemon-*' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+            echo "faulting binary: $bin"
+            uname -a
+            grep -m1 'flags\|model name' /proc/cpuinfo || true
+            readelf -n "$bin" || true
+            ldd "$bin" || true
+            gdb -batch \
+              -ex "set pagination off" \
+              -ex "set debuginfod enabled off" \
+              -ex "run" \
+              -ex "thread apply all bt" \
+              -ex "info registers" \
+              -- "$bin" || true
+          fi
+          exit "$status"
 
   package:
     name: packaged release (ubuntu)
