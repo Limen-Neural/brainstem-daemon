@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-registered, reproducible usefulness experiment under
   `experiments/usefulness/` comparing the daemon with a direct-engine baseline
   on a synthetic untrained fixture, with raw results and a report (#70).
+- Secondary usefulness experiment under `experiments/usefulness-secondary/`
+  (#70, #96). It is an independent replication with its own pre-registered
+  protocol, versioned synthetic fixture, typed `corpus-ipc` workload,
+  `corpus-ipc`-gated `usefulness_secondary_*` example drivers (in-process and
+  over ZeroMQ), a locked runner, a stdlib summarizer with a run-inventory
+  gate, and raw results and a report on Rust 1.99.0 / `neuromod` 0.7.0.
 - CPU-only Linux qualification of the real PUB binary lifecycle under SIGTERM
   and SIGINT, including absent/stalled subscribers, clean exit and port release
   (#68). Strengthened socket tests cover finite-linger teardown, failed-send

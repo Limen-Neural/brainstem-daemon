@@ -1,0 +1,17 @@
+# Subprocess live mode for the feature-enabled binary (corpus-ipc / ZeroMQ).
+# The daemon SUB connects to tcp://127.0.0.1:spine_sub_port (the driver binds a PUB
+# there). The daemon PUB binds 127.0.0.1:spine_pub_port.
+runtime_mode   = "live"
+lif_count      = 16
+izh_count      = 0
+channels       = 8
+tick_rate_hz   = 1000
+log_level      = "info"
+spine_sub_port = 15565
+spine_pub_port = 15566
+spine_pub_bind_host          = "127.0.0.1"
+spine_pub_sndhwm             = 1000
+spine_pub_linger_ms          = 0
+spine_pub_send_empty_batches = true
+model_path     = "experiments/usefulness-secondary/fixtures/snn_model.json"
+control_bind   = "127.0.0.1:15567"

@@ -1,0 +1,37 @@
+{
+  "workload_version": "usefulness-workload-v1",
+  "description": "Typed corpus-ipc stimulus stream for the in-process runs. One StimulusBatch frame (schema corpus-ipc.stimulus.v1) is sent on every tick, idle ticks included. Ticks with modulators also get one IpcMessage::Neuromodulators frame. The cycle below repeats `cycles` times.",
+  "channels": 8,
+  "cycles": 50,
+  "warmup_cycles": 1,
+  "quiet_window_ticks": 30,
+  "drive_threshold": 0.5,
+  "segments": [
+    { "name": "single",   "ticks": 10, "values": [1.0, 0, 0, 0, 0, 0, 0, 0] },
+    { "name": "idle",     "ticks": 40, "values": [0, 0, 0, 0, 0, 0, 0, 0] },
+    { "name": "pair",     "ticks": 10, "values": [0, 0, 0, 1.0, 0, 0.6, 0, 0] },
+    { "name": "idle",     "ticks": 40, "values": [0, 0, 0, 0, 0, 0, 0, 0] },
+    { "name": "masked",   "ticks": 10, "values": [0, 1.0, 1.0, 0, 0, 0, 0, 0],
+      "valid_mask": [true, true, false, true, true, true, true, true] },
+    { "name": "idle",     "ticks": 40, "values": [0, 0, 0, 0, 0, 0, 0, 0] },
+    { "name": "modulated", "ticks": 10, "values": [0, 0, 0, 0, 0, 0, 1.0, 0],
+      "neuromodulators": { "dopamine": 0.0, "cortisol": 0.0, "acetylcholine": 0.5, "tempo": 1.0 } },
+    { "name": "idle",     "ticks": 40, "values": [0, 0, 0, 0, 0, 0, 0, 0] }
+  ],
+  "variants": {
+    "main": "segments exactly as listed",
+    "zeroed": "every masked slot (valid_mask false) gets value 0.0 and mask true; must give the same raster as main",
+    "unmasked": "valid_mask removed, so the 1.0 placeholder in channel 2 is applied; must differ from main (proves the mask check is not vacuous)"
+  },
+  "transport": {
+    "tick_rate_hz": 1000,
+    "probes": 200,
+    "probe_interval_ms": 50,
+    "probe_value": 1.0,
+    "probe_channel_rule": "probe p stimulates channel p mod 8 for one frame; all other channels 0.0, mask all true",
+    "priming_channel": 0,
+    "priming_interval_ms": 50,
+    "priming_timeout_ms": 5000,
+    "settle_ms": 200
+  }
+}

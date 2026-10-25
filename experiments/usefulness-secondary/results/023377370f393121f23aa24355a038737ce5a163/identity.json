@@ -1,0 +1,40 @@
+{
+  "status": "complete",
+  "measured_commit": "023377370f393121f23aa24355a038737ce5a163",
+  "recorded_at_utc": "2026-10-25T20:58:35Z",
+  "toolchain": {
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+    "active_toolchain": "1.99.0-x86_64-unknown-linux-gnu (overridden by '/home/user/workspace/brainstem-daemon/rust-toolchain.toml')",
+    "libzmq_pkg_config": "4.3.5",
+    "python": "3.11.16"
+  },
+  "host": {
+    "os": "Debian GNU/Linux 13 (trixie)",
+    "kernel": "Linux 6.1.158+ #1 SMP PREEMPT_DYNAMIC Tue Jul 28 15:38:05 UTC 2026 x86_64",
+    "cpu_model": "Intel(R) Xeon(R) Processor @ 2.60GHz",
+    "logical_cpus": 8,
+    "mem_total_kb": 16392012
+  },
+  "build": {
+    "profile": "release",
+    "features": [
+      "corpus-ipc"
+    ],
+    "locked": true
+  },
+  "repetitions": {
+    "in_process": 5,
+    "transport": 3
+  },
+  "input_sha256": {
+    "experiments/usefulness-secondary/PROTOCOL.md": "bcfdff898b6c6c144c877794c3282a14d76603a344ac44964aaf1326506522eb",
+    "experiments/usefulness-secondary/fixtures/snn_model.json": "2254bfc83416b7ebb3bef054b3163a20ea68694011b827530601bb662f070b1f",
+    "experiments/usefulness-secondary/fixtures/fixture-manifest.json": "d8cd73f2ad5884820ee72ba4fb9d5a0d15213f969086fee5e1f129fe1a35163c",
+    "experiments/usefulness-secondary/fixtures/workload.json": "94b7d0f2c7e595166a9d3b095f47e2a632d886a46b18b8c7484500265891de7e",
+    "experiments/usefulness-secondary/config/live.toml": "bc20369fbddaabb8bfeb575070c22f42a9368b6c1003b75e5eca7064cd31dae0",
+    "experiments/usefulness-secondary/config/simulation.toml": "dd2bb64870bb83d5ef28d69fc248a807ed1bdda4b743ba005cfb30f312b0bdd1",
+    "experiments/usefulness-secondary/config/transport-live.toml": "df8625d34ec8f207ce3dcffefcd882327a74b24954f4f39107663880cf719740",
+    "Cargo.lock": "e5e4c24bcf4626104b5e179e847ad7a8103c9d7cd9504d328444d6ca0f10538a"
+  }
+}

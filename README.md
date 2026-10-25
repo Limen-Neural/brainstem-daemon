@@ -358,6 +358,14 @@ baseline on a synthetic, untrained fixture (`PROTOCOL.md`, `run.sh`,
 `summarize.py`, `REPORT.md`). It measures runtime correctness, latency,
 throughput, and memory; it is not release qualification.
 
+[`experiments/usefulness-secondary/`](experiments/usefulness-secondary/) is
+an independent, secondary replication with its own fixture, workload,
+drivers (`usefulness_secondary_*` examples), and
+[report](experiments/usefulness-secondary/REPORT.md). It runs in-process and
+through the real binary over ZeroMQ, and reaches the same decision. Run it
+from a clean checkout with `experiments/usefulness-secondary/run.sh` (Linux,
+needs `libzmq`).
+
 ### Thalamic → corpus-ipc → Brainstem smoke
 
 CPU-only integration coverage (no GPU) lives in `tests/thalamic_brainstem_smoke.rs` and is gated on `--features corpus-ipc` so default stub tests never need `libzmq`.

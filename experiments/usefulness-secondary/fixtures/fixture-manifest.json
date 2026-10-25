@@ -1,0 +1,16 @@
+{
+  "fixture_version": "usefulness-fixture-v1",
+  "file": "snn_model.json",
+  "sha256": "2254bfc83416b7ebb3bef054b3163a20ea68694011b827530601bb662f070b1f",
+  "synthetic": true,
+  "trained": false,
+  "statement": "Hand-designed synthetic LIF sidecar for the usefulness experiment. It is NOT a trained model and carries no learned capability. Its structure exists only so expected spikes are derivable from the weights.",
+  "format": "Distill sidecar JSON (spikenaut-sidecar-json/v1), source spikenaut_julia, no output_weights key",
+  "dimensions": { "lif_count": 16, "izh_count": 0, "channels": 8 },
+  "neuron_parameters": { "decay_rate": 0.15, "threshold": 0.30, "membrane_potential": 0.0, "last_spike": false },
+  "weights": "neuron n has weight 2.0 on input channel floor(n / 2) and 0.0 on every other channel; every row sums to 2.0, the neuromod 0.6 L1 weight budget, so renormalization leaves it unchanged",
+  "channel_to_neurons": {
+    "0": [0, 1], "1": [2, 3], "2": [4, 5], "3": [6, 7],
+    "4": [8, 9], "5": [10, 11], "6": [12, 13], "7": [14, 15]
+  }
+}

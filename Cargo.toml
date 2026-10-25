@@ -73,6 +73,16 @@ required-features = ["corpus-ipc"]
 name = "usefulness_transport"
 required-features = ["corpus-ipc"]
 
+# Secondary usefulness experiment drivers (experiments/usefulness-secondary).
+# Not built by the default stub gate.
+[[example]]
+name = "usefulness_secondary_inprocess"
+required-features = ["corpus-ipc"]
+
+[[example]]
+name = "usefulness_secondary_transport"
+required-features = ["corpus-ipc"]
+
 # Cargo profiles (dev / release / release-with-debug / test / bench).
 # Keep settings conservative — no maximum-optimization knobs that over-promise
 # for a headless inference daemon. Aligned with the `neuromod` profile pattern.
