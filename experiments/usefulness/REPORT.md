@@ -6,7 +6,7 @@ Tracker: LIM-1457 / GitHub issue #70. Protocol: [`PROTOCOL.md`](PROTOCOL.md).
 |---|---|
 | Pre-registration commit | `7b145a1` (protocol, fixture, workload, expectations, configs) |
 | Measured commit | `d3f369320b226223644284952b9f60f732175480` |
-| Results | [`results/d3f369320b226223644284952b9f60f732175480/`](results/d3f369320b226223644284952b9f60f732175480/): `identity.json`, `summary.json`, `summary.md`, raw `*.jsonl.gz`, `steps.log`, per-step command logs under `logs/`, and the three daemon logs |
+| Results | [`results/d3f369320b226223644284952b9f60f732175480/`](https://github.com/Limen-Neural/brainstem-daemon/tree/main/experiments/usefulness/results/d3f369320b226223644284952b9f60f732175480/): `identity.json`, `summary.json`, `summary.md`, raw `*.jsonl.gz`, `steps.log`, per-step command logs under `logs/`, and the three daemon logs |
 | Decision (pre-registered rule, §6) | **Supports further development** of the runtime path |
 
 The results commit is the child of the measured commit; `run.sh` refused to
