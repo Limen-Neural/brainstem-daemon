@@ -1,0 +1,27 @@
+{
+  "config": "experiments/usefulness-secondary/config/live.toml",
+  "details": {
+    "baseline_steps": 10000,
+    "checkpoint": {
+      "content_sha256": "2254bfc83416b7ebb3bef054b3163a20ea68694011b827530601bb662f070b1f",
+      "model_id": "spikenaut-snn:usefulness-fixture-v1",
+      "schema_id": "spikenaut-sidecar-json/v1",
+      "source_path": "experiments/usefulness-secondary/fixtures/snn_model.json"
+    },
+    "dropped_spikes": 0
+  },
+  "fixture_sha256": "2254bfc83416b7ebb3bef054b3163a20ea68694011b827530601bb662f070b1f",
+  "measured_span_ns": 8125117,
+  "measured_ticks": 9800,
+  "mode": "baseline",
+  "process_wall_ns": 16600965,
+  "rep": 2,
+  "ticks_per_s": 1206136.477788566,
+  "ticks_recorded": 10000,
+  "ticks_requested": 10000,
+  "variant": "main",
+  "vm_hwm_kb": 8740,
+  "vm_rss_kb": 7568,
+  "warmup_ticks_excluded": 200,
+  "workload_version": "usefulness-workload-v1"
+}

@@ -1,0 +1,41 @@
+HTTP/1.1 200 OK
+Content-Type: text/plain; version=0.0.4
+Content-Length: 1636
+Connection: close
+
+# HELP brainstem_live 1 if the process health reporter is running.
+# TYPE brainstem_live gauge
+brainstem_live 1
+# HELP brainstem_ready 1 if initialized, checkpoint-valid, not draining, not fatal.
+# TYPE brainstem_ready gauge
+brainstem_ready 1
+# HELP brainstem_phase 1 for the current health phase.
+# TYPE brainstem_phase gauge
+brainstem_phase{phase="starting"} 0
+brainstem_phase{phase="loading_checkpoint"} 0
+brainstem_phase{phase="running"} 1
+brainstem_phase{phase="degraded"} 0
+brainstem_phase{phase="draining"} 0
+brainstem_phase{phase="fatal"} 0
+# HELP brainstem_degraded Recoverable degradation by stable reason code.
+# TYPE brainstem_degraded gauge
+brainstem_degraded{reason="stale_input"} 0
+brainstem_degraded{reason="overload"} 0
+# HELP brainstem_fatal 1 if this process has entered a sticky fatal state.
+# TYPE brainstem_fatal gauge
+brainstem_fatal 0
+# HELP brainstem_last_successful_tick_ms Milliseconds from process start until the last successful tick (not tick age); NaN if none yet.
+# TYPE brainstem_last_successful_tick_ms gauge
+brainstem_last_successful_tick_ms 10218
+# HELP brainstem_tick_age_ms Milliseconds since the last successful tick; NaN if none yet.
+# TYPE brainstem_tick_age_ms gauge
+brainstem_tick_age_ms 0
+# HELP brainstem_input_age_ms Age of last ingress (or checkpoint, if none) in milliseconds; NaN if none yet.
+# TYPE brainstem_input_age_ms gauge
+brainstem_input_age_ms 49
+# HELP brainstem_queue_depth Ingress queue depth.
+# TYPE brainstem_queue_depth gauge
+brainstem_queue_depth 0
+# HELP brainstem_queue_capacity Ingress queue capacity.
+# TYPE brainstem_queue_capacity gauge
+brainstem_queue_capacity 209
