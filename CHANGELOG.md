@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Runtime counters (`ticks`, accepted/rejected batches, receive/emit errors,
+  dropped spikes, emitted/suppressed diagnostics) are published through the
+  health handle into `HealthSnapshot.counters` and exposed on `/health` and as
+  unlabeled `brainstem_*_total` counters on `/metrics` (LIM-1450).
 - Pre-registered, reproducible usefulness experiment under
   `experiments/usefulness/` comparing the daemon with a direct-engine baseline
   on a synthetic untrained fixture, with raw results and a report (#70).
