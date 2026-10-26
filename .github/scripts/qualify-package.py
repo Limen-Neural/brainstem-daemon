@@ -179,10 +179,7 @@ def lost_port_race(log, attempt, start):
 
 
 def attempt_config(gate, binary, label, attempt):
-    """Write and record a fresh config for one startup attempt.
-
-    Simulation by default; with gate.fixture, live mode (the default) on that sidecar.
-    """
+    """Write and record a fresh config: simulation, or live on gate.fixture if set."""
     config_text, control_port = daemon_config(*(() if gate.fixture is None else (gate.fixture, 16)))
     header = SIMULATION_HEADER if gate.fixture is None else ""
     simulation = gate.write_config(f"{label}-attempt{attempt}.toml", header + config_text)
