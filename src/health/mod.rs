@@ -21,7 +21,7 @@ pub use handle::HealthHandle;
 pub use machine::{HealthEvent, HealthLimits, HealthMachine};
 pub use snapshot::{
     CheckpointIdentity, FatalCode, FatalState, HealthPhase, HealthSnapshot, InputFreshness,
-    QueuePressure, ReasonCode,
+    QueuePressure, ReasonCode, RuntimeCounters,
 };
 
 #[cfg(test)]

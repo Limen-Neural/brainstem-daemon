@@ -21,6 +21,7 @@ use crate::checkpoint::{self, ModelProvenance};
 pub use crate::config::{DaemonConfig, RuntimeMode, pub_endpoint};
 use crate::health::{
     CheckpointIdentity, FatalCode, HealthEvent, HealthHandle, HealthLimits, HealthSnapshot,
+    RuntimeCounters,
 };
 #[cfg(test)]
 use crate::ingress::IngressConfig;
@@ -56,6 +57,21 @@ pub struct RuntimeStats {
     pub last_batch_id: Option<u64>,
     pub last_valid_mask: Option<Vec<bool>>,
     pub loaded_checkpoint: Option<ModelProvenance>,
+}
+
+impl From<&RuntimeStats> for RuntimeCounters {
+    fn from(stats: &RuntimeStats) -> Self {
+        Self {
+            ticks: stats.ticks,
+            accepted_batches: stats.accepted_batches,
+            rejected_batches: stats.rejected_batches,
+            receive_errors: stats.receive_errors,
+            emit_errors: stats.emit_errors,
+            dropped_spikes: stats.dropped_spikes,
+            diagnostic_emissions: stats.diagnostic_emissions,
+            suppressed_diagnostics: stats.suppressed_diagnostics,
+        }
+    }
 }
 
 /// Headless spiking-network daemon.
@@ -819,7 +835,27 @@ impl Default for TickDiagnostics {
     }
 }
 
+/// Run one tick, then publish the cumulative counters to the health handle.
+///
+/// Publishing is one in-memory event (no I/O, no backend lock) applied on every
+/// exit path of the tick, so scrapers see failures even when a tick returns early.
 fn run_tick(
+    source: &mut dyn StimulusSource,
+    network: &mut SpikingNetwork,
+    sink: &mut dyn SpikeSink,
+    stimuli: &mut [f32],
+    spike_buf: &mut Vec<LocalSpikeEvent>,
+    ingress: &BoundedIngress,
+    report: &mut TickReport<'_>,
+) {
+    run_tick_body(source, network, sink, stimuli, spike_buf, ingress, report);
+    let counters = RuntimeCounters::from(&*report.stats);
+    report
+        .health
+        .apply(HealthEvent::CountersPublished(counters));
+}
+
+fn run_tick_body(
     source: &mut dyn StimulusSource,
     network: &mut SpikingNetwork,
     sink: &mut dyn SpikeSink,
@@ -1830,6 +1866,9 @@ mod tests {
             stats.ticks, 0,
             "rejected input must not advance a network tick"
         );
+        // The early-return path still publishes counters to the health handle.
+        assert_eq!(snap.counters, RuntimeCounters::from(&stats));
+        assert_eq!(snap.counters.rejected_batches, 1);
         assert!(sink.emitted.is_empty(), "no spike batch for rejected input");
         // Held network state is untouched (modulators validated before decode).
         assert_eq!(network.modulators, NeuroModulators::default());
