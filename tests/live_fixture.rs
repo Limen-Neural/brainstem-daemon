@@ -66,11 +66,19 @@ impl StimulusSource for Drive {
     }
 }
 
-struct Capture(Arc<Mutex<Vec<SpikeEvent>>>);
+struct Capture {
+    spikes: Arc<Mutex<Vec<SpikeEvent>>>,
+    flushes: Arc<Mutex<u32>>,
+}
 
 impl SpikeSink for Capture {
     fn emit(&mut self, spikes: &[SpikeEvent], _batch_time: std::time::Duration) -> Result<()> {
-        self.0.lock().unwrap().extend_from_slice(spikes);
+        self.spikes.lock().unwrap().extend_from_slice(spikes);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        *self.flushes.lock().unwrap() += 1;
         Ok(())
     }
 }
@@ -83,12 +91,16 @@ fn live_fixture_restores_ticks_and_shuts_down() {
     assert_eq!(provenance.model_id, "spikenaut-snn:live-fixture-v1");
 
     let spikes = Arc::new(Mutex::new(Vec::new()));
+    let flushes = Arc::new(Mutex::new(0));
     let shut_down = Arc::new(Mutex::new(false));
     let pair = BackendPair {
         source: Box::new(Drive {
             shut_down: shut_down.clone(),
         }),
-        sink: Box::new(Capture(spikes.clone())),
+        sink: Box::new(Capture {
+            spikes: spikes.clone(),
+            flushes: flushes.clone(),
+        }),
     };
     let stats = BrainstemDaemon::try_with_backend(live_config(), pair)
         .unwrap()
@@ -100,9 +112,16 @@ fn live_fixture_restores_ticks_and_shuts_down() {
     assert_eq!(stats.emit_errors, 0);
     let loaded = stats.loaded_checkpoint.expect("checkpoint loaded");
     assert_eq!(loaded.content_sha256, FIXTURE_SHA256);
+    let spikes = spikes.lock().unwrap();
+    assert!(!spikes.is_empty(), "driving channel 3 must produce spikes");
     assert!(
-        spikes.lock().unwrap().iter().any(|s| s.channel == 3),
-        "driving channel 3 must make neuron 3 spike"
+        spikes.iter().all(|s| s.channel == 3),
+        "only the stimulated neuron may spike"
+    );
+    assert_eq!(
+        *flushes.lock().unwrap(),
+        1,
+        "sink must be flushed on shutdown"
     );
     assert!(*shut_down.lock().unwrap(), "source shutdown must run");
 }
