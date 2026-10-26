@@ -207,6 +207,8 @@ pub struct HealthSnapshot {
     pub input_freshness: InputFreshness,
     pub queue_pressure: QueuePressure,
     pub fatal: Option<FatalState>,
+    /// Absent in snapshots serialized before counters existed; defaults to zero.
+    #[serde(default)]
     pub counters: RuntimeCounters,
     pub observed_at_ms: u64,
 }
@@ -288,7 +290,8 @@ fn write_runtime_gauges(out: &mut String, snap: &HealthSnapshot) {
 
 fn write_runtime_counters(out: &mut String, counters: &RuntimeCounters) {
     for (name, help, value) in counters.metrics() {
-        push_metric(out, name, help, "counter", value);
+        push_metric_header(out, name, help, "counter");
+        push_sample(out, name, value);
     }
 }
 
@@ -300,16 +303,11 @@ fn push_optional_gauge(out: &mut String, name: &str, help: &str, value: Option<u
 }
 
 fn push_gauge(out: &mut String, name: &str, help: &str, value: impl std::fmt::Display) {
-    push_metric(out, name, help, "gauge", value);
+    push_metric_header(out, name, help, "gauge");
+    push_sample(out, name, value);
 }
 
-fn push_metric(
-    out: &mut String,
-    name: &str,
-    help: &str,
-    kind: &str,
-    value: impl std::fmt::Display,
-) {
+fn push_metric_header(out: &mut String, name: &str, help: &str, kind: &str) {
     out.push_str("# HELP ");
     out.push_str(name);
     out.push(' ');
@@ -320,6 +318,9 @@ fn push_metric(
     out.push(' ');
     out.push_str(kind);
     out.push('\n');
+}
+
+fn push_sample(out: &mut String, name: &str, value: impl std::fmt::Display) {
     out.push_str(name);
     out.push(' ');
     out.push_str(&value.to_string());

@@ -79,8 +79,8 @@ field-wise maximum) and reset when the process restarts, which Prometheus
 
 | `/health` field (`counters.*`) | `/metrics` counter | Meaning |
 |---|---|---|
-| `ticks` | `brainstem_ticks_total` | Ticks that stepped the network. Rejected-input ticks are not counted. |
-| `accepted_batches` | `brainstem_accepted_batches_total` | Backend batches carrying a `batch_id` that were accepted into ingress. |
+| `ticks` | `brainstem_ticks_total` | Successful network steps. A tick whose drained input is non-finite (rejected before the step) or whose step fails is not counted; backend-rejected or receive-error ticks still step on queued or zero-filled input and are counted. |
+| `accepted_batches` | `brainstem_accepted_batches_total` | Non-rejected backend packets carrying a `batch_id`, counted before bounded-queue admission (a later queue overflow does not decrement it). |
 | `rejected_batches` | `brainstem_rejected_batches_total` | Batches rejected: backend-flagged, receive failure, or non-finite input. |
 | `receive_errors` | `brainstem_receive_errors_total` | Backend receive failures, including rate-limited repeats. |
 | `emit_errors` | `brainstem_emit_errors_total` | Spike emission failures, including rate-limited repeats. |
@@ -88,8 +88,10 @@ field-wise maximum) and reset when the process restarts, which Prometheus
 | `diagnostic_emissions` | `brainstem_diagnostic_emissions_total` | Tick diagnostics actually logged after rate limiting. |
 | `suppressed_diagnostics` | `brainstem_suppressed_diagnostics_total` | Recurring diagnostic occurrences suppressed by rate limiting. |
 
-New runtime counters (for example skipped ticks) plug into the same path: add a
-field to `RuntimeCounters` and one row to its `metrics()` table.
+New runtime counters (for example skipped ticks) plug into the same path: add
+the field to `RuntimeStats`, copy it in `From<&RuntimeStats> for RuntimeCounters`
+(`src/daemon.rs`), and add the field, its `merged_monotonic` line, and one row
+to `RuntimeCounters::metrics()` (`src/health/snapshot.rs`).
 
 ## Checkpoint identity
 

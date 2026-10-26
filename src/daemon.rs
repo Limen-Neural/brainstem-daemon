@@ -231,7 +231,7 @@ impl BrainstemDaemon {
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    run_tick(
+                    run_tick_published(
                         &mut *backend.source,
                         &mut network,
                         &mut *backend.sink,
@@ -334,7 +334,7 @@ fn drive_ticks(
     let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
     let mut diagnostics = TickDiagnostics::default();
     for _ in 0..ticks {
-        run_tick(
+        run_tick_published(
             &mut *backend.source,
             network,
             &mut *backend.sink,
@@ -839,7 +839,7 @@ impl Default for TickDiagnostics {
 ///
 /// Publishing is one in-memory event (no I/O, no backend lock) applied on every
 /// exit path of the tick, so scrapers see failures even when a tick returns early.
-fn run_tick(
+fn run_tick_published(
     source: &mut dyn StimulusSource,
     network: &mut SpikingNetwork,
     sink: &mut dyn SpikeSink,
@@ -848,14 +848,14 @@ fn run_tick(
     ingress: &BoundedIngress,
     report: &mut TickReport<'_>,
 ) {
-    run_tick_body(source, network, sink, stimuli, spike_buf, ingress, report);
+    run_tick(source, network, sink, stimuli, spike_buf, ingress, report);
     let counters = RuntimeCounters::from(&*report.stats);
     report
         .health
         .apply(HealthEvent::CountersPublished(counters));
 }
 
-fn run_tick_body(
+fn run_tick(
     source: &mut dyn StimulusSource,
     network: &mut SpikingNetwork,
     sink: &mut dyn SpikeSink,
@@ -1840,7 +1840,7 @@ mod tests {
         // Inject directly through the SAME ingress handle passed to run_tick.
         assert!(ingress.enqueue(class, packet).accepted());
 
-        run_tick(
+        run_tick_published(
             &mut source,
             &mut network,
             &mut sink,

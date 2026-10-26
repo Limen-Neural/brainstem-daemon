@@ -370,18 +370,21 @@ mod tests {
     fn health_json_carries_every_runtime_counter() {
         let raw = String::from_utf8(render_http("GET /health HTTP/1.1\r\n\r\n", &counted_snap()))
             .unwrap();
-        for field in [
-            "\"ticks\":11",
-            "\"accepted_batches\":10",
-            "\"rejected_batches\":3",
-            "\"receive_errors\":2",
-            "\"emit_errors\":1",
-            "\"dropped_spikes\":4",
-            "\"diagnostic_emissions\":5",
-            "\"suppressed_diagnostics\":6",
-        ] {
-            assert!(raw.contains(field), "missing {field} in {raw}");
-        }
+        let body = raw.split("\r\n\r\n").nth(1).expect("http body");
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            json["counters"],
+            serde_json::json!({
+                "ticks": 11,
+                "accepted_batches": 10,
+                "rejected_batches": 3,
+                "receive_errors": 2,
+                "emit_errors": 1,
+                "dropped_spikes": 4,
+                "diagnostic_emissions": 5,
+                "suppressed_diagnostics": 6
+            })
+        );
     }
 
     #[test]

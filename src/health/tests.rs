@@ -438,6 +438,16 @@ fn counters_never_decrease() {
 }
 
 #[test]
+fn snapshot_without_counters_field_still_deserializes() {
+    let (mut m, _) = machine();
+    m.apply(HealthEvent::ProcessStarted);
+    let mut json = serde_json::to_value(m.snapshot()).unwrap();
+    json.as_object_mut().unwrap().remove("counters");
+    let snap: HealthSnapshot = serde_json::from_value(json).unwrap();
+    assert_eq!(snap.counters, RuntimeCounters::default());
+}
+
+#[test]
 fn counters_survive_drain() {
     let (mut m, _) = machine();
     bring_ready(&mut m);
