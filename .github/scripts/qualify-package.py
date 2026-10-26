@@ -77,6 +77,8 @@ class Gate:
     sha: str = ""
     mode: str = ""
     timeout: int = 1800
+    # Sidecar for a live-mode start; None means the simulation config.
+    fixture: Path = None
 
     def record(self, entry):
         with (self.evidence / "commands.jsonl").open("a") as commands:
@@ -176,13 +178,13 @@ def lost_port_race(log, attempt, start):
     return attempt < PORT_ATTEMPTS and "address already in use" in output
 
 
-def attempt_config(gate, binary, label, attempt, fixture=None):
+def attempt_config(gate, binary, label, attempt):
     """Write and record a fresh config for one startup attempt.
 
-    Simulation by default; with fixture, live mode (the default) on that sidecar.
+    Simulation by default; with gate.fixture, live mode (the default) on that sidecar.
     """
-    config_text, control_port = daemon_config(*(() if fixture is None else (fixture, 16)))
-    header = SIMULATION_HEADER if fixture is None else ""
+    config_text, control_port = daemon_config(*(() if gate.fixture is None else (gate.fixture, 16)))
+    header = SIMULATION_HEADER if gate.fixture is None else ""
     simulation = gate.write_config(f"{label}-attempt{attempt}.toml", header + config_text)
     gate.record({"label": label, "attempt": attempt, "command": [str(binary), "--config", str(simulation)],
                  "cwd": str(gate.work)})
@@ -200,13 +202,13 @@ def spawn_daemon(gate, binary, config, log):
     )
 
 
-def start_ready_daemon(gate, binary, label, log, fixture=None):
+def start_ready_daemon(gate, binary, label, log):
     """Spawn the simulation daemon and return it and its config once ready."""
     # A premature exit fails the gate unless this attempt's own log shows a
     # lost port race. Only then are new ports tried, and each attempt keeps
     # its own config file and log section.
     for attempt in itertools.count(1):
-        simulation, control_port = attempt_config(gate, binary, label, attempt, fixture)
+        simulation, control_port = attempt_config(gate, binary, label, attempt)
         log.write(f"[attempt {attempt}] config={simulation.name}\n")
         log.flush()
         start = Path(log.name).stat().st_size
@@ -263,7 +265,7 @@ def check_live_fixture(gate, binary, package):
     require(fixture.is_file(), "packaged live fixture is missing")
     label = f"{gate.mode}-live-fixture"
     with (gate.evidence / f"{label}.log").open("w") as log:
-        process, _ = start_ready_daemon(gate, binary, label, log, fixture)
+        process, _ = start_ready_daemon(replace(gate, fixture=fixture), binary, label, log)
         stop_gracefully(process, signal.SIGTERM, label)
         log.write("\nQUALIFIED: live fixture; /readyz=200; SIGTERM; graceful exit=0\n")
     print(f"[{label}] live restore; /readyz=200; graceful exit=0", flush=True)
