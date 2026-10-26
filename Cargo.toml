@@ -17,6 +17,7 @@ categories = ["science", "simulation", "command-line-utilities"]
 exclude = [
     ".github/",
     ".devin/",
+    ".agents/",
     "AGENTS.md",
     "CLAUDE.md",
     "REVIEW.md",
@@ -24,6 +25,7 @@ exclude = [
     ".codacy.yml",
     ".deepsource.toml",
     "docs/",
+    "experiments/usefulness/results/",
 ]
 
 [package.metadata.docs.rs]

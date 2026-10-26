@@ -31,7 +31,8 @@ PORT_ATTEMPTS = 3
 # Target/Rust flags that could mask a packaged build failure if inherited.
 INHERITED_BUILD_ENV = ("CARGO_TARGET_DIR", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS",
                        "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", "RUST_LOG")
-REPOSITORY_ONLY = (".github/", ".devin/", "docs/", "target/")
+REPOSITORY_ONLY = (".github/", ".devin/", ".agents/", "docs/", "target/",
+                   "experiments/usefulness/results/")
 SIMULATION_HEADER = 'runtime_mode = "simulation"\n'
 
 CONSUMER_MANIFEST = '''[package]
