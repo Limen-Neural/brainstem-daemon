@@ -117,21 +117,21 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def daemon_config():
+def daemon_config(model_path="missing-checkpoint.json", size=4):
     """Return (config text, control port) with three distinct loopback ports."""
     ports = set()
     while len(ports) < 3:
         ports.add(free_port())
     sub_port, pub_port, control_port = sorted(ports)
-    text = f'''lif_count = 4
+    text = f'''lif_count = {size}
 izh_count = 0
-channels = 4
+channels = {size}
 tick_rate_hz = 100
 log_level = "info"
 spine_sub_port = {sub_port}
 spine_pub_port = {pub_port}
 control_bind = "127.0.0.1:{control_port}"
-model_path = "missing-checkpoint.json"
+model_path = {json.dumps(str(model_path))}
 '''
     return text, control_port
 
@@ -176,10 +176,14 @@ def lost_port_race(log, attempt, start):
     return attempt < PORT_ATTEMPTS and "address already in use" in output
 
 
-def attempt_config(gate, binary, label, attempt):
-    """Write and record a fresh simulation config for one startup attempt."""
-    config_text, control_port = daemon_config()
-    simulation = gate.write_config(f"{label}-attempt{attempt}.toml", SIMULATION_HEADER + config_text)
+def attempt_config(gate, binary, label, attempt, fixture=None):
+    """Write and record a fresh config for one startup attempt.
+
+    Simulation by default; with fixture, live mode (the default) on that sidecar.
+    """
+    config_text, control_port = daemon_config(*(() if fixture is None else (fixture, 16)))
+    header = SIMULATION_HEADER if fixture is None else ""
+    simulation = gate.write_config(f"{label}-attempt{attempt}.toml", header + config_text)
     gate.record({"label": label, "attempt": attempt, "command": [str(binary), "--config", str(simulation)],
                  "cwd": str(gate.work)})
     return simulation, control_port
@@ -196,13 +200,13 @@ def spawn_daemon(gate, binary, config, log):
     )
 
 
-def start_ready_daemon(gate, binary, label, log):
+def start_ready_daemon(gate, binary, label, log, fixture=None):
     """Spawn the simulation daemon and return it and its config once ready."""
     # A premature exit fails the gate unless this attempt's own log shows a
     # lost port race. Only then are new ports tried, and each attempt keeps
     # its own config file and log section.
     for attempt in itertools.count(1):
-        simulation, control_port = attempt_config(gate, binary, label, attempt)
+        simulation, control_port = attempt_config(gate, binary, label, attempt, fixture)
         log.write(f"[attempt {attempt}] config={simulation.name}\n")
         log.flush()
         start = Path(log.name).stat().st_size
@@ -253,6 +257,18 @@ def check_live_rejection(gate, binary, config_text):
     checkpoint.unlink()
 
 
+def check_live_fixture(gate, binary, package):
+    """Require a live-mode start on the packaged nonblank fixture to become ready and exit 0."""
+    fixture = package / "tests" / "fixtures" / "live" / "snn_model.json"
+    require(fixture.is_file(), "packaged live fixture is missing")
+    label = f"{gate.mode}-live-fixture"
+    with (gate.evidence / f"{label}.log").open("w") as log:
+        process, _ = start_ready_daemon(gate, binary, label, log, fixture)
+        stop_gracefully(process, signal.SIGTERM, label)
+        log.write("\nQUALIFIED: live fixture; /readyz=200; SIGTERM; graceful exit=0\n")
+    print(f"[{label}] live restore; /readyz=200; graceful exit=0", flush=True)
+
+
 def check_cli(gate, binary):
     """Require the installed CLI's options and the packaged version."""
     help_text = gate.run(f"{gate.mode}-help", [binary, "--help"], gate.work)
@@ -262,13 +278,14 @@ def check_cli(gate, binary):
             "installed version does not match the package")
 
 
-def smoke(gate, binary):
+def smoke(gate, binary, package):
     gate = replace(gate, timeout=10)
     check_cli(gate, binary)
     check_graceful_shutdown(gate, binary, signal.SIGINT)
     simulation = check_graceful_shutdown(gate, binary, signal.SIGTERM)
     # Live is the default: the same ports and model_path without runtime_mode.
     check_live_rejection(gate, binary, simulation.read_text().removeprefix(SIMULATION_HEADER))
+    check_live_fixture(gate, binary, package)
     return simulation
 
 
@@ -324,7 +341,7 @@ def qualify_mode(gate, package, mode, features):
     # Never reuse checkout artifacts, or artifacts from the other backend.
     gate.env["CARGO_TARGET_DIR"] = str(gate.work / f"target-{mode}")
     build_and_document(gate, package, features)
-    simulation = smoke(gate, install(gate, package, features))
+    simulation = smoke(gate, install(gate, package, features), package)
     run_consumer(gate, package, features, simulation)
 
 
