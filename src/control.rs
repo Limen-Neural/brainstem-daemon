@@ -299,7 +299,7 @@ mod tests {
     use super::*;
     use crate::health::{
         CheckpointIdentity, FakeClock, HealthEvent, HealthHandle, HealthLimits, HealthMachine,
-        ReasonCode,
+        ReasonCode, RuntimeCounters,
     };
 
     fn ready_snap() -> HealthSnapshot {
@@ -348,6 +348,65 @@ mod tests {
         assert!(raw.starts_with("HTTP/1.1 200 OK"));
         assert!(raw.contains("\"live\":true"));
         assert!(raw.contains("\"ready\":false"));
+    }
+
+    fn counted_snap() -> HealthSnapshot {
+        let mut machine = HealthMachine::new(FakeClock::default(), HealthLimits::default());
+        machine.apply(HealthEvent::ProcessStarted);
+        machine.apply(HealthEvent::CountersPublished(RuntimeCounters {
+            ticks: 11,
+            accepted_batches: 10,
+            rejected_batches: 3,
+            receive_errors: 2,
+            emit_errors: 1,
+            dropped_spikes: 4,
+            diagnostic_emissions: 5,
+            suppressed_diagnostics: 6,
+        }));
+        machine.snapshot()
+    }
+
+    #[test]
+    fn health_json_carries_every_runtime_counter() {
+        let raw = String::from_utf8(render_http("GET /health HTTP/1.1\r\n\r\n", &counted_snap()))
+            .unwrap();
+        let body = raw.split("\r\n\r\n").nth(1).expect("http body");
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            json["counters"],
+            serde_json::json!({
+                "ticks": 11,
+                "accepted_batches": 10,
+                "rejected_batches": 3,
+                "receive_errors": 2,
+                "emit_errors": 1,
+                "dropped_spikes": 4,
+                "diagnostic_emissions": 5,
+                "suppressed_diagnostics": 6
+            })
+        );
+    }
+
+    #[test]
+    fn metrics_expose_runtime_counters_as_total_counters() {
+        let raw = String::from_utf8(render_http(
+            "GET /metrics HTTP/1.1\r\n\r\n",
+            &counted_snap(),
+        ))
+        .unwrap();
+        for line in [
+            "brainstem_ticks_total 11",
+            "brainstem_accepted_batches_total 10",
+            "brainstem_rejected_batches_total 3",
+            "brainstem_receive_errors_total 2",
+            "brainstem_emit_errors_total 1",
+            "brainstem_dropped_spikes_total 4",
+            "brainstem_diagnostic_emissions_total 5",
+            "brainstem_suppressed_diagnostics_total 6",
+        ] {
+            assert!(raw.contains(&format!("\n{line}\n")), "missing {line}");
+        }
+        assert!(raw.contains("# TYPE brainstem_ticks_total counter"));
     }
 
     #[test]

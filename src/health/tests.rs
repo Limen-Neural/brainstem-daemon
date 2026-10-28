@@ -399,6 +399,88 @@ fn prometheus_labels_are_low_cardinality_and_omit_detail() {
     assert!(text.contains("reason=\"overload\""));
 }
 
+fn sample_counters() -> RuntimeCounters {
+    RuntimeCounters {
+        ticks: 8,
+        accepted_batches: 7,
+        rejected_batches: 6,
+        receive_errors: 5,
+        emit_errors: 4,
+        dropped_spikes: 3,
+        diagnostic_emissions: 2,
+        suppressed_diagnostics: 1,
+    }
+}
+
+#[test]
+fn counters_start_at_zero_and_publish_into_snapshot() {
+    let (mut m, _) = machine();
+    m.apply(HealthEvent::ProcessStarted);
+    assert_eq!(m.snapshot().counters, RuntimeCounters::default());
+    m.apply(HealthEvent::CountersPublished(sample_counters()));
+    assert_eq!(m.snapshot().counters, sample_counters());
+}
+
+#[test]
+fn counters_never_decrease() {
+    let (mut m, _) = machine();
+    m.apply(HealthEvent::ProcessStarted);
+    m.apply(HealthEvent::CountersPublished(sample_counters()));
+    m.apply(HealthEvent::CountersPublished(RuntimeCounters {
+        ticks: 1,
+        emit_errors: 9,
+        ..RuntimeCounters::default()
+    }));
+    let c = m.snapshot().counters;
+    assert_eq!(c.ticks, 8, "lower publish must not reduce a counter");
+    assert_eq!(c.emit_errors, 9, "higher publish still advances");
+    assert_eq!(c.rejected_batches, 6);
+}
+
+#[test]
+fn snapshot_without_counters_field_still_deserializes() {
+    let (mut m, _) = machine();
+    m.apply(HealthEvent::ProcessStarted);
+    let mut json = serde_json::to_value(m.snapshot()).unwrap();
+    json.as_object_mut().unwrap().remove("counters");
+    let snap: HealthSnapshot = serde_json::from_value(json).unwrap();
+    assert_eq!(snap.counters, RuntimeCounters::default());
+}
+
+#[test]
+fn counters_survive_drain() {
+    let (mut m, _) = machine();
+    bring_ready(&mut m);
+    m.apply(HealthEvent::CountersPublished(sample_counters()));
+    m.apply(HealthEvent::BeginDrain);
+    assert_eq!(m.snapshot().counters, sample_counters());
+}
+
+#[test]
+fn prometheus_exposes_every_counter_as_unlabeled_total() {
+    let (mut m, _) = machine();
+    m.apply(HealthEvent::ProcessStarted);
+    m.apply(HealthEvent::CountersPublished(sample_counters()));
+    let text = m.snapshot().prometheus_text();
+    for (name, value) in [
+        ("brainstem_ticks_total", 8),
+        ("brainstem_accepted_batches_total", 7),
+        ("brainstem_rejected_batches_total", 6),
+        ("brainstem_receive_errors_total", 5),
+        ("brainstem_emit_errors_total", 4),
+        ("brainstem_dropped_spikes_total", 3),
+        ("brainstem_diagnostic_emissions_total", 2),
+        ("brainstem_suppressed_diagnostics_total", 1),
+    ] {
+        assert!(text.contains(&format!("# TYPE {name} counter\n")), "{name}");
+        assert!(text.contains(&format!("\n{name} {value}\n")), "{name}");
+        assert!(
+            !text.contains(&format!("{name}{{")),
+            "{name} must be unlabeled"
+        );
+    }
+}
+
 #[test]
 fn try_snapshot_does_not_block_on_write_lock() {
     let handle = HealthHandle::started(limits());

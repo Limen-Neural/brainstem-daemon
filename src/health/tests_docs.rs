@@ -18,6 +18,16 @@ fn documented_running_snapshot_uses_null_digest() {
             "input_freshness": { "age_ms": 0, "stale": false },
             "queue_pressure": { "depth": 0, "capacity": 0, "ratio": null, "overloaded": false },
             "fatal": null,
+            "counters": {
+                "ticks": 0,
+                "accepted_batches": 0,
+                "rejected_batches": 0,
+                "receive_errors": 0,
+                "emit_errors": 0,
+                "dropped_spikes": 0,
+                "diagnostic_emissions": 0,
+                "suppressed_diagnostics": 0
+            },
             "observed_at_ms": 0
         })
     );

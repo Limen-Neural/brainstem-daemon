@@ -67,6 +67,32 @@ with unchanged invalid configuration fails again. Exit `1` does not suppress
 [systemd service example](../README.md#systemd-user-service-fedora-43), then fix
 the configuration before resetting the failed unit and restarting it.
 
+## Runtime counters
+
+The tick loop publishes its cumulative `RuntimeStats` counters to the health
+handle once per tick (one in-memory `CountersPublished` event, no I/O and no
+backend lock), including ticks that return early. They appear in `/health`
+under `counters` and on `/metrics` as unlabeled Prometheus counters. Counters
+only increase for the life of the process (the health machine keeps the
+field-wise maximum) and reset when the process restarts, which Prometheus
+`rate()`/`increase()` handle as a counter reset.
+
+| `/health` field (`counters.*`) | `/metrics` counter | Meaning |
+|---|---|---|
+| `ticks` | `brainstem_ticks_total` | Successful network steps. A tick whose drained input is non-finite (rejected before the step) or whose step fails is not counted; backend-rejected or receive-error ticks still step on queued or zero-filled input and are counted. |
+| `accepted_batches` | `brainstem_accepted_batches_total` | Non-rejected backend packets carrying a `batch_id`, counted before bounded-queue admission (a later queue overflow does not decrement it). |
+| `rejected_batches` | `brainstem_rejected_batches_total` | Batches rejected: backend-flagged, receive failure, or non-finite input. |
+| `receive_errors` | `brainstem_receive_errors_total` | Backend receive failures, including rate-limited repeats. |
+| `emit_errors` | `brainstem_emit_errors_total` | Spike emission failures, including rate-limited repeats. |
+| `dropped_spikes` | `brainstem_dropped_spikes_total` | Spikes discarded because their IDs did not fit the wire type. |
+| `diagnostic_emissions` | `brainstem_diagnostic_emissions_total` | Tick diagnostics actually logged after rate limiting. |
+| `suppressed_diagnostics` | `brainstem_suppressed_diagnostics_total` | Recurring diagnostic occurrences suppressed by rate limiting. |
+
+New runtime counters (for example skipped ticks) plug into the same path: add
+the field to `RuntimeStats`, copy it in `From<&RuntimeStats> for RuntimeCounters`
+(`src/daemon.rs`), and add the field, its `merged_monotonic` line, and one row
+to `RuntimeCounters::metrics()` (`src/health/snapshot.rs`).
+
 ## Checkpoint identity
 
 Live mode copies [`ModelProvenance::model_id`](../src/checkpoint/mod.rs) and
@@ -89,6 +115,7 @@ Healthy (ready to consume events) after a live sidecar restore:
   "input_freshness": { "age_ms": 0, "stale": false },
   "queue_pressure": { "depth": 0, "capacity": 216, "ratio": 0.0, "overloaded": false },
   "fatal": null,
+  "counters": { "ticks": 0, "accepted_batches": 0, "rejected_batches": 0, "receive_errors": 0, "emit_errors": 0, "dropped_spikes": 0, "diagnostic_emissions": 0, "suppressed_diagnostics": 0 },
   "observed_at_ms": 0
 }
 ```
@@ -107,6 +134,7 @@ Degraded (still ready; supervisors should not bounce the process):
   "input_freshness": { "age_ms": 100, "stale": true },
   "queue_pressure": { "depth": 95, "capacity": 100, "ratio": 0.95, "overloaded": true },
   "fatal": null,
+  "counters": { "ticks": 412, "accepted_batches": 400, "rejected_batches": 3, "receive_errors": 1, "emit_errors": 0, "dropped_spikes": 0, "diagnostic_emissions": 2, "suppressed_diagnostics": 5 },
   "observed_at_ms": 100
 }
 ```
@@ -125,6 +153,7 @@ Fatal (never returns to ready in this process):
   "input_freshness": { "age_ms": null, "stale": false },
   "queue_pressure": { "depth": 0, "capacity": 0, "ratio": null, "overloaded": false },
   "fatal": { "code": "checkpoint_invalid", "detail": "blank weights" },
+  "counters": { "ticks": 0, "accepted_batches": 0, "rejected_batches": 0, "receive_errors": 0, "emit_errors": 0, "dropped_spikes": 0, "diagnostic_emissions": 0, "suppressed_diagnostics": 0 },
   "observed_at_ms": 0
 }
 ```

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use super::clock::Clock;
 use super::snapshot::{
     CheckpointIdentity, FatalCode, FatalState, HealthPhase, HealthSnapshot, InputFreshness,
-    QueuePressure, ReasonCode,
+    QueuePressure, ReasonCode, RuntimeCounters,
 };
 
 /// Thresholds for recoverable degradation.
@@ -61,14 +61,28 @@ fn finite_or(value: f64, fallback: f64) -> f64 {
 pub enum HealthEvent {
     ProcessStarted,
     InitializationCompleted,
-    InitializationFailed { detail: String },
-    CheckpointValidated { identity: CheckpointIdentity },
-    CheckpointRejected { detail: String },
+    InitializationFailed {
+        detail: String,
+    },
+    CheckpointValidated {
+        identity: CheckpointIdentity,
+    },
+    CheckpointRejected {
+        detail: String,
+    },
     TickSucceeded,
     IngressObserved,
-    QueuePressure { depth: u64, capacity: u64 },
+    QueuePressure {
+        depth: u64,
+        capacity: u64,
+    },
+    /// Latest cumulative runtime counters. Applied as a monotonic max.
+    CountersPublished(RuntimeCounters),
     BeginDrain,
-    Fatal { code: FatalCode, detail: String },
+    Fatal {
+        code: FatalCode,
+        detail: String,
+    },
 }
 
 /// Pure health state machine. Drive it with [`super::FakeClock`] in tests.
@@ -87,6 +101,7 @@ pub struct HealthMachine {
     queue_depth: u64,
     queue_capacity: u64,
     overloaded: bool,
+    counters: RuntimeCounters,
     fatal: Option<FatalState>,
 }
 
@@ -107,6 +122,7 @@ impl HealthMachine {
             queue_depth: 0,
             queue_capacity: 0,
             overloaded: false,
+            counters: RuntimeCounters::default(),
             fatal: None,
         }
     }
@@ -116,7 +132,8 @@ impl HealthMachine {
         match event {
             HealthEvent::TickSucceeded
             | HealthEvent::IngressObserved
-            | HealthEvent::QueuePressure { .. } => self.apply_runtime(event, now),
+            | HealthEvent::QueuePressure { .. }
+            | HealthEvent::CountersPublished(_) => self.apply_runtime(event, now),
             other => self.apply_lifecycle(other, now),
         }
     }
@@ -194,6 +211,9 @@ impl HealthMachine {
         match event {
             HealthEvent::TickSucceeded => self.last_tick = Some(now),
             HealthEvent::IngressObserved => self.last_ingress = Some(now),
+            HealthEvent::CountersPublished(next) => {
+                self.counters = self.counters.merged_monotonic(next);
+            }
             HealthEvent::QueuePressure { depth, capacity } => {
                 self.queue_depth = depth;
                 self.queue_capacity = capacity;
@@ -230,6 +250,7 @@ impl HealthMachine {
             },
             queue_pressure: self.queue_pressure(),
             fatal: self.fatal.clone(),
+            counters: self.counters,
             observed_at_ms: ms(now),
         }
     }
