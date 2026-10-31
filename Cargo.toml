@@ -35,7 +35,7 @@ all-features = false
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-corpus-ipc = { version = "0.1.0", features = ["zmq"], optional = true }
+corpus-ipc = { version = "0.2.1", features = ["zmq"], optional = true }
 # Pre-1.0: Cargo treats 0.7.z as compatible (`>=0.7.0, <0.8.0`).
 # Starting pin for the 0.7 bump was crates.io 0.6.0 (LIM-1509).
 neuromod = "0.7.0"
