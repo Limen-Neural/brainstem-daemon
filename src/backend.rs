@@ -467,7 +467,7 @@ mod zmq_impl {
             let corpus_spikes = std::mem::replace(&mut self.corpus_buf, Vec::with_capacity(cap));
 
             // Unversioned tagged JSON (`{"Spikes":{...}}`) matches the pre-envelope
-            // encoding still accepted by corpus-ipc 0.1. The envelope encoder
+            // encoding still accepted by corpus-ipc wire v1. The envelope encoder
             // (`encode_ipc_message_json`) is a wire-format change for existing PUB
             // consumers, so it is not used here.
             let msg = IpcMessage::Spikes(SpikeBatch {

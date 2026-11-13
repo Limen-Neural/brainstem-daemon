@@ -320,7 +320,7 @@ mod tests {
 
     // ── Non-finite typed-IPC rejection (issue #66) ───────────────────────────
     //
-    // Observed layering (verified against corpus-ipc 0.1.0):
+    // Observed layering (verified against corpus-ipc 0.2.1):
     //   * The direct decoded-struct path (`accept_ipc_message`) rejects a
     //     non-finite `values` entry inside `accept_stimulus_batch` via
     //     `batch.validate()` -> `check_finite_slice("values", ..)`, surfaced as
