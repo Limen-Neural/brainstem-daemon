@@ -37,7 +37,7 @@ and does **not** need `libzmq`.
 The optional `corpus-ipc` feature (same as `--all-features` today) compiles
 ZeroMQ via `zmq-sys` / `zeromq-src` (needs a C++ compiler). Install
 `libzmq3-dev` on Debian/Ubuntu if you prefer a system library. The crate
-pin is **Rust 1.99.0**. crates.io `corpus-ipc` 0.1.0 declares Rust 1.98.1,
+pin is **Rust 1.99.0**. crates.io `corpus-ipc` 0.2.1 declares Rust 1.85,
 which this toolchain satisfies, so these commands do not need
 `--ignore-rust-version`.
 

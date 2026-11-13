@@ -28,7 +28,7 @@ use crate::ingress::IngressConfig;
 use crate::ingress::{BoundedIngress, MessageClass, OverflowPolicy};
 use crate::registry::ServiceRegistry;
 
-/// Env var read by crates.io `corpus-ipc` 0.1 `ZmqIpcBackend::initialize`.
+/// Env var read by published `corpus-ipc` `ZmqIpcBackend::initialize`.
 pub const CORPUS_IPC_READOUT_ENV: &str = "CORPUS_IPC_ZMQ_READOUT_IPC";
 /// Legacy name still set by the binary for older tooling; published corpus-ipc ignores it.
 pub const LEGACY_SPIKENAUT_READOUT_ENV: &str = "SPIKENAUT_ZMQ_READOUT_IPC";
