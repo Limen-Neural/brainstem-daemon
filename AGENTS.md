@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Last updated: 2026-10-24
+Last updated: 2026-11-13
 
 This file guides autonomous agents working on `brainstem-daemon`.
 
@@ -34,7 +34,7 @@ Default (stub) commands — no `libzmq` required:
 Optional `corpus-ipc` / `--all-features` commands need the system ZeroMQ
 dev package (`libzmq3-dev` on Debian/Ubuntu). They are not vendored.
 Run them on the **1.99.0** pin (`rust-toolchain.toml` / `Cargo.toml`
-`rust-version`). crates.io `corpus-ipc` 0.1.0 declares Rust 1.98.1, which
+`rust-version`). crates.io `corpus-ipc` 0.2.1 declares Rust 1.85, which
 this toolchain satisfies, so do not pass `--ignore-rust-version`:
 
 - `cargo test --locked --all-features`
@@ -64,10 +64,10 @@ For most development, use the in-memory stub backend. It needs no `libzmq` and n
 
 If you need ZeroMQ networking, enable the `corpus-ipc` feature.
 
-- The `corpus-ipc` feature pulls published `corpus-ipc` 0.1 from crates.io (`features = ["zmq"]`) and this crate's optional `zmq` dependency.
+- The `corpus-ipc` feature pulls published `corpus-ipc` 0.2.1 from crates.io (`features = ["zmq"]`) and this crate's optional `zmq` dependency.
 - Published `corpus-ipc` compiles libzmq via `zmq-sys`. You need a C++ compiler; `libzmq3-dev` is still useful on Debian/Ubuntu.
 - The `corpus-ipc` crate does not vendor ZeroMQ as a git submodule.
-- Stub and `corpus-ipc` builds share this crate's MSRV **1.99.0**. crates.io `corpus-ipc` 0.1.0 declares Rust 1.98.1; corpus-ipc on main is 1.99.0.
+- Stub and `corpus-ipc` builds use this crate's MSRV **1.99.0**; crates.io `corpus-ipc` 0.2.1 declares Rust 1.85.
 
 Prefer the README [Backends (temporary)](README.md#backends-temporary) section as the user-facing truth table, unless a newer code change supersedes it.
 That table maps Cargo flags to the backend and to which config keys and env vars apply.
