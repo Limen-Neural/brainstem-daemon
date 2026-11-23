@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
     })?;
 
     // Set the readout endpoint env var(s) when corpus-ipc feature is enabled.
-    // Binary controls the endpoint. crates.io corpus-ipc 0.1 reads
+    // Binary controls the endpoint. Published corpus-ipc reads
     // CORPUS_IPC_ZMQ_READOUT_IPC; SPIKENAUT_ZMQ_READOUT_IPC is still set for
     // compatibility with older tooling.
 
@@ -91,7 +91,7 @@ async fn run(cfg: DaemonConfig, config_path: PathBuf) -> anyhow::Result<()> {
         // ZMQ backend is not reconnected here (repeat initialize replaces the SUB
         // socket). SNN restoration is owned by `restore_network` /
         // `BrainstemDaemon::run_with_restored_network`, not by
-        // `ZmqIpcBackend::initialize` (published corpus-ipc 0.1 still names
+        // `ZmqIpcBackend::initialize` (published corpus-ipc still names
         // the argument `_model_path` and ignores it).
 
         let zmq_context = zmq::Context::new();

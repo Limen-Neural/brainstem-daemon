@@ -29,13 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Bump the optional `corpus-ipc` dependency from crates.io **0.1.0** to
+  **0.2.1** (`features = ["zmq"]`). Wire version stays 1, so stimulus/spike
+  frames remain compatible; `BackendError` gains a `Protocol` variant that
+  this crate does not match exhaustively, and upstream `thiserror` moves to
+  2.x. No tick-path logic or cadence changes (LIM-1563, #106).
 - Align MSRV and toolchain pins to **Rust 1.99.0** (`Cargo.toml`,
   `rust-toolchain.toml`, CI, package qualification, `Dockerfile`,
   `AGENTS.md`, `README.md`, `.devin/blueprint.yaml`) so the daemon matches
   the Limen-Neural stack pin on axon-encoder, synaptic-wiring, and
   corpus-ipc main. Building this crate, including from crates.io, requires
   Rust 1.99.0; a 1.98.x toolchain is rejected. crates.io `corpus-ipc` 0.1.0
-  still declares Rust 1.98.1 (#98). The usefulness runner and its reproduction steps use the same
+  declared Rust 1.98.1 (#98). The usefulness runner and its reproduction steps use the same
   pin. Committed result files stay on the Rust 1.98.1 run that produced
   them. Static libzmq from `zeromq-src` 0.2.6 is built with
   `HAVE_POSIX_MEMALIGN` and a 64-byte cache line so `command_t` copies stay
