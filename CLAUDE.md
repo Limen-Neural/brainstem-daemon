@@ -9,7 +9,8 @@ toolchain pin rule are in `AGENTS.md` (imported above); do not duplicate them he
 
 Run from the repo root. "Verified" means it ran successfully in a fresh checkout on Rust 1.99.0 (the pin in
 `rust-toolchain.toml`), CPU only; the run platform is noted per row where it matters. `Cargo.lock` is tracked,
-so `--locked` is correct.
+so `--locked` is correct. The `CC=gcc CXX=g++` prefix below is Unix-shell syntax; on
+PowerShell set them first with `$env:CC='gcc'; $env:CXX='g++'`.
 
 | Command | Status |
 |---|---|

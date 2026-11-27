@@ -131,9 +131,9 @@ Distinguish a scheduler skip from the nearby conditions:
 | Egress loss/failure | `emit_errors`, `dropped_spikes` | The step ran; encoding or publishing its spikes failed. |
 
 The `StimulusSource` contract phrase "skip this tick" (a `None` packet) means
-no fresh packet from that call — the tick still runs, draining any queued
-sensory input and stepping on queued or zero-filled stimuli — and is
-unrelated to a scheduler skip.
+no fresh packet from that call — the tick still runs and drains any queued
+sensory input (the step proceeds on queued or zero-filled stimuli unless a
+drained packet is itself non-finite) — and is unrelated to a scheduler skip.
 Rate-limited `warn` diagnostics (`skipped_this_wakeup`, cumulative
 `ticks_skipped`, `suppressed`) share the runtime's existing one-second minimum
 gap; every dropped slot is counted whether the diagnostic emits or suppresses.
