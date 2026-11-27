@@ -402,6 +402,7 @@ fn prometheus_labels_are_low_cardinality_and_omit_detail() {
 fn sample_counters() -> RuntimeCounters {
     RuntimeCounters {
         ticks: 8,
+        ticks_skipped: 9,
         accepted_batches: 7,
         rejected_batches: 6,
         receive_errors: 5,
@@ -448,6 +449,22 @@ fn snapshot_without_counters_field_still_deserializes() {
 }
 
 #[test]
+fn counters_without_ticks_skipped_still_deserialize() {
+    // Snapshots serialized before ticks_skipped existed carry eight counters.
+    let (mut m, _) = machine();
+    m.apply(HealthEvent::ProcessStarted);
+    m.apply(HealthEvent::CountersPublished(sample_counters()));
+    let mut json = serde_json::to_value(m.snapshot()).unwrap();
+    json["counters"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ticks_skipped");
+    let snap: HealthSnapshot = serde_json::from_value(json).unwrap();
+    assert_eq!(snap.counters.ticks_skipped, 0);
+    assert_eq!(snap.counters.ticks, 8);
+}
+
+#[test]
 fn counters_survive_drain() {
     let (mut m, _) = machine();
     bring_ready(&mut m);
@@ -464,6 +481,7 @@ fn prometheus_exposes_every_counter_as_unlabeled_total() {
     let text = m.snapshot().prometheus_text();
     for (name, value) in [
         ("brainstem_ticks_total", 8),
+        ("brainstem_ticks_skipped_total", 9),
         ("brainstem_accepted_batches_total", 7),
         ("brainstem_rejected_batches_total", 6),
         ("brainstem_receive_errors_total", 5),
