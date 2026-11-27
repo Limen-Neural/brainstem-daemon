@@ -8,16 +8,17 @@ toolchain pin rule are in `AGENTS.md` (imported above); do not duplicate them he
 ## Commands
 
 Run from the repo root. "Verified" means it ran successfully in a fresh checkout on Rust 1.99.0 (the pin in
-`rust-toolchain.toml`), Linux, CPU only. `Cargo.lock` is tracked, so `--locked` is correct.
+`rust-toolchain.toml`), CPU only; the run platform is noted per row where it matters. `Cargo.lock` is tracked,
+so `--locked` is correct.
 
 | Command | Status |
 |---|---|
-| `cargo fmt --check` | verified |
-| `cargo clippy --locked --all-targets -- -D warnings` | verified |
-| `cargo build --locked` | verified |
+| `cargo fmt --check` | verified (Linux and Windows) |
+| `cargo clippy --locked --all-targets -- -D warnings` | verified (Linux and Windows) |
+| `cargo build --locked` | verified (Linux and Windows) |
 | `cargo test --locked` | verified (174 unit tests passed on Windows; the ignored SIGTERM test is unix-only so Linux reports 1 ignored; plus `config_startup`, `live_fixture`) |
-| `CC=gcc CXX=g++ cargo clippy --locked --all-targets --all-features -- -D warnings` | verified (no system `libzmq`; `zmq-sys` built from source; plain clippy also verified on Windows) |
-| `CC=gcc CXX=g++ cargo test --locked --all-features` | verified (197 unit tests passed; `thalamic_os_process_restart_does_not_leak_safety` fails on Windows — it reads Linux `/proc/self/exe`; `pub_lifecycle` is `#![cfg(target_os = "linux")]`) |
+| `CC=gcc CXX=g++ cargo clippy --locked --all-targets --all-features -- -D warnings` | verified (no system `libzmq`; `zmq-sys` built from source; verified on Linux and Windows) |
+| `CC=gcc CXX=g++ cargo test --locked --all-features` | verified on Linux; on Windows 197 unit tests pass but `thalamic_os_process_restart_does_not_leak_safety` fails (it reads Linux `/proc/self/exe`) and `pub_lifecycle` is `#![cfg(target_os = "linux")]` |
 | `cargo build --release --bin brainstem-daemon` | not run (disk limits; the debug builds above cover compilation) |
 | `python3 .github/scripts/qualify-package.py target/package-evidence` | not run (CI `package` job; needs `libzmq3-dev`, runs packaging and publish dry-run) |
 

@@ -241,10 +241,7 @@ impl BrainstemDaemon {
         loop {
             tokio::select! {
                 scheduled = ticker.tick() => {
-                    let skipped = skip_tracker.observe(scheduled);
-                    if skipped > 0 {
-                        record_scheduler_skips(skipped, &mut stats, &mut diagnostics);
-                    }
+                    observe_and_record_skips(scheduled, &mut skip_tracker, &mut stats, &mut diagnostics);
                     run_tick_published(
                         &mut *backend.source,
                         &mut network,
@@ -259,20 +256,7 @@ impl BrainstemDaemon {
                         },
                     );
                 }
-                _ = heartbeat.tick() => {
-                    info!(
-                        ticks = stats.ticks,
-                        ticks_skipped = stats.ticks_skipped,
-                        accepted_batches = stats.accepted_batches,
-                        rejected_batches = stats.rejected_batches,
-                        receive_errors = stats.receive_errors,
-                        emit_errors = stats.emit_errors,
-                        dropped_spikes = stats.dropped_spikes,
-                        diagnostic_emissions = stats.diagnostic_emissions,
-                        suppressed_diagnostics = stats.suppressed_diagnostics,
-                        "runtime heartbeat and shed summary"
-                    );
-                }
+                _ = heartbeat.tick() => log_heartbeat(&stats),
                 _ = &mut shutdown => {
                     info!("Termination signal received, shutting down");
                     health.apply(HealthEvent::BeginDrain);
@@ -709,8 +693,10 @@ fn skipped_slots(gap: Duration, period: Duration) -> u64 {
     if period_nanos == 0 {
         return 0;
     }
-    let periods = u64::try_from(gap.as_nanos() / period_nanos).unwrap_or(u64::MAX);
-    periods.saturating_sub(1)
+    // Subtract the consumed slot before clamping so extreme gaps saturate to
+    // u64::MAX rather than u64::MAX - 1.
+    let periods = (gap.as_nanos() / period_nanos).saturating_sub(1);
+    u64::try_from(periods).unwrap_or(u64::MAX)
 }
 
 /// Health reporter plus smoke counters updated together on every tick.
@@ -872,6 +858,38 @@ fn record_scheduler_skips(
             stats.suppressed_diagnostics = stats.suppressed_diagnostics.saturating_add(1);
         }
     }
+}
+
+/// Count scheduler slots dropped since the previous consumed tick, if any.
+///
+/// The cheap path for on-time ticks and Tokio catch-up bursts: no stats
+/// update, no diagnostic occurrence, no extra work in the select arm.
+fn observe_and_record_skips(
+    scheduled: time::Instant,
+    tracker: &mut SkipTracker,
+    stats: &mut RuntimeStats,
+    diagnostics: &mut TickDiagnostics,
+) {
+    let skipped = tracker.observe(scheduled);
+    if skipped > 0 {
+        record_scheduler_skips(skipped, stats, diagnostics);
+    }
+}
+
+/// Periodic `info!` summary of the runtime counters.
+fn log_heartbeat(stats: &RuntimeStats) {
+    info!(
+        ticks = stats.ticks,
+        ticks_skipped = stats.ticks_skipped,
+        accepted_batches = stats.accepted_batches,
+        rejected_batches = stats.rejected_batches,
+        receive_errors = stats.receive_errors,
+        emit_errors = stats.emit_errors,
+        dropped_spikes = stats.dropped_spikes,
+        diagnostic_emissions = stats.diagnostic_emissions,
+        suppressed_diagnostics = stats.suppressed_diagnostics,
+        "runtime heartbeat and shed summary"
+    );
 }
 
 /// Count accepted/rejected batches and admit onto class queues.
@@ -1271,6 +1289,16 @@ mod tests {
         }
     }
 
+    /// Shared expectation after 25 same-key diagnostic occurrences at limiter
+    /// interval 10: emitted at occurrences 1, 11, and 21, so 3 emissions and
+    /// 22 suppressions; `suppressed()` reports only occurrences since the last
+    /// emission (25 - 21 = 4).
+    fn assert_interval_10_emission_pattern(stats: &RuntimeStats, diagnostics: &TickDiagnostics) {
+        assert_eq!(stats.diagnostic_emissions, 3);
+        assert_eq!(stats.suppressed_diagnostics, 22);
+        assert_eq!(diagnostics.suppressed_total(), 4);
+    }
+
     fn write_config_toml(stem: &str, body: &str) -> PathBuf {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")
@@ -1659,9 +1687,7 @@ mod tests {
 
         assert_eq!(stats.receive_errors, 25);
         assert_eq!(stats.rejected_batches, 25);
-        assert_eq!(stats.diagnostic_emissions, 3);
-        assert_eq!(stats.suppressed_diagnostics, 22);
-        assert_eq!(diagnostics.suppressed_total(), 4);
+        assert_interval_10_emission_pattern(&stats, &diagnostics);
     }
 
     #[test]
@@ -2197,9 +2223,7 @@ mod tests {
         assert_eq!(stats.rejected_batches, 25);
         assert_eq!(stats.accepted_batches, 0);
         // Same cadence as a fixed-index source (emit at 1, 11, 21).
-        assert_eq!(stats.diagnostic_emissions, 3);
-        assert_eq!(stats.suppressed_diagnostics, 22);
-        assert_eq!(diagnostics.suppressed_total(), 4);
+        assert_interval_10_emission_pattern(&stats, &diagnostics);
         assert!(health.snapshot().live);
     }
 
@@ -2694,7 +2718,7 @@ block_timeout_ms = 0
         // saturate, never overflow-panic or wrap to a small number.
         assert_eq!(
             skipped_slots(Duration::MAX, Duration::from_nanos(1)),
-            u64::MAX - 1
+            u64::MAX
         );
     }
 
@@ -2814,10 +2838,7 @@ block_timeout_ms = 0
             record_scheduler_skips(1, &mut stats, &mut diagnostics);
         }
         assert_eq!(stats.ticks_skipped, 30);
-        assert_eq!(stats.diagnostic_emissions, 3);
-        assert_eq!(stats.suppressed_diagnostics, 22);
-        // suppressed() counts occurrences since the last emission (25 - 21).
-        assert_eq!(diagnostics.suppressed_total(), 4);
+        assert_interval_10_emission_pattern(&stats, &diagnostics);
 
         // Unrelated counters are untouched.
         assert_eq!(stats.ticks, 0);
