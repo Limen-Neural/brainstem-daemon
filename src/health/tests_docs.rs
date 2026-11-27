@@ -20,6 +20,7 @@ fn documented_running_snapshot_uses_null_digest() {
             "fatal": null,
             "counters": {
                 "ticks": 0,
+                "ticks_skipped": 0,
                 "accepted_batches": 0,
                 "rejected_batches": 0,
                 "receive_errors": 0,

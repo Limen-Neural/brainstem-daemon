@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropped spikes, emitted/suppressed diagnostics) are published through the
   health handle into `HealthSnapshot.counters` and exposed on `/health` and as
   unlabeled `brainstem_*_total` counters on `/metrics` (LIM-1450).
+- `ticks_skipped`: a saturating counter of scheduler slots dropped by
+  `MissedTickBehavior::Skip` after a late tick, derived from the gap between
+  consecutive scheduled instants. Published through `RuntimeStats` into
+  `HealthSnapshot.counters` on `/health`, as `brainstem_ticks_skipped_total`
+  on `/metrics`, in the runtime heartbeat log, and through a rate-limited
+  `scheduler skipped ticks` warning. Tick cadence and `MissedTickBehavior`
+  are unchanged (#71).
 - Pre-registered, reproducible usefulness experiment under
   `experiments/usefulness/` comparing the daemon with a direct-engine baseline
   on a synthetic untrained fixture, with raw results and a report (#70).

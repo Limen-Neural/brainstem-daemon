@@ -80,6 +80,7 @@ field-wise maximum) and reset when the process restarts, which Prometheus
 | `/health` field (`counters.*`) | `/metrics` counter | Meaning |
 |---|---|---|
 | `ticks` | `brainstem_ticks_total` | Successful network steps. A tick whose drained input is non-finite (rejected before the step) or whose step fails is not counted; backend-rejected or receive-error ticks still step on queued or zero-filled input and are counted. |
+| `ticks_skipped` | `brainstem_ticks_skipped_total` | Scheduler slots dropped by `MissedTickBehavior::Skip` after a late tick; the period never ran. See [Scheduler skips](#scheduler-skips). |
 | `accepted_batches` | `brainstem_accepted_batches_total` | Non-rejected backend packets carrying a `batch_id`, counted before bounded-queue admission (a later queue overflow does not decrement it). |
 | `rejected_batches` | `brainstem_rejected_batches_total` | Batches rejected: backend-flagged, receive failure, or non-finite input. |
 | `receive_errors` | `brainstem_receive_errors_total` | Backend receive failures, including rate-limited repeats. |
@@ -88,10 +89,54 @@ field-wise maximum) and reset when the process restarts, which Prometheus
 | `diagnostic_emissions` | `brainstem_diagnostic_emissions_total` | Tick diagnostics actually logged after rate limiting. |
 | `suppressed_diagnostics` | `brainstem_suppressed_diagnostics_total` | Recurring diagnostic occurrences suppressed by rate limiting. |
 
-New runtime counters (for example skipped ticks) plug into the same path: add
+New runtime counters plug into the same path, as `ticks_skipped` does: add
 the field to `RuntimeStats`, copy it in `From<&RuntimeStats> for RuntimeCounters`
 (`src/daemon.rs`), and add the field, its `merged_monotonic` line, and one row
 to `RuntimeCounters::metrics()` (`src/health/snapshot.rs`).
+
+## Scheduler skips
+
+`ticks_skipped` counts scheduler slots that Tokio `MissedTickBehavior::Skip`
+drops when the loop runs late — the period never ran and `SpikingNetwork::step`
+was never called for it. `Interval::tick()` returns the *scheduled* instant of
+the slot it fires; under `Skip`, consecutive returned instants are always
+whole periods apart, so each consumed tick records
+`(scheduled_n − scheduled_{n−1}) / period − 1` (saturating; the first tick
+counts 0).
+
+A wakeup that runs late *inside* Tokio's ~5 ms tolerance is not a skip: Tokio
+bursts through the pending slots, the scheduled instants stay one period
+apart, and the count stays 0. Only slots past that tolerance are dropped and
+counted — the counter mirrors what the scheduler actually did instead of
+estimating lateness, so it cannot report a skip that did not happen.
+
+`ticks_skipped` is an observability signal only:
+
+- it sets no reason code, does not move `phase`, and does not affect `ready`
+  or `live`;
+- missed network steps are not replayed — cadence realigns to the original
+  schedule with no catch-up burst;
+- `run_for_ticks`/`drive_ticks` have no scheduler interval and always report 0;
+- skips are attributed on the wakeup that observes the gap; a trailing
+  unconsumed slot at shutdown is never counted.
+
+Distinguish a scheduler skip from the nearby conditions:
+
+| Condition | Signal | What actually happened |
+|---|---|---|
+| Scheduler skip | `ticks_skipped` | The period never ran; no `network.step` for that slot. |
+| No ingress | `input_freshness.age_ms` / `stale` | The tick ran and stepped on queued or zero-filled input; `ticks` keeps rising. |
+| Rejected input | `rejected_batches` | Input was rejected (backend-flagged, receive failure, or non-finite); the tick still steps unless the drained packet itself was non-finite. |
+| Receive error | `receive_errors` | `StimulusSource::next_ingress` failed; the tick still ran. |
+| Egress loss/failure | `emit_errors`, `dropped_spikes` | The step ran; encoding or publishing its spikes failed. |
+
+The `StimulusSource` contract phrase "skip this tick" (a `None` packet) means
+no fresh packet from that call — the tick still runs and drains any queued
+sensory input (the step proceeds on queued or zero-filled stimuli unless a
+drained packet is itself non-finite) — and is unrelated to a scheduler skip.
+Rate-limited `warn` diagnostics (`skipped_this_wakeup`, cumulative
+`ticks_skipped`, `suppressed`) share the runtime's existing one-second minimum
+gap; every dropped slot is counted whether the diagnostic emits or suppresses.
 
 ## Checkpoint identity
 
@@ -115,7 +160,7 @@ Healthy (ready to consume events) after a live sidecar restore:
   "input_freshness": { "age_ms": 0, "stale": false },
   "queue_pressure": { "depth": 0, "capacity": 216, "ratio": 0.0, "overloaded": false },
   "fatal": null,
-  "counters": { "ticks": 0, "accepted_batches": 0, "rejected_batches": 0, "receive_errors": 0, "emit_errors": 0, "dropped_spikes": 0, "diagnostic_emissions": 0, "suppressed_diagnostics": 0 },
+  "counters": { "ticks": 0, "ticks_skipped": 0, "accepted_batches": 0, "rejected_batches": 0, "receive_errors": 0, "emit_errors": 0, "dropped_spikes": 0, "diagnostic_emissions": 0, "suppressed_diagnostics": 0 },
   "observed_at_ms": 0
 }
 ```
@@ -134,7 +179,7 @@ Degraded (still ready; supervisors should not bounce the process):
   "input_freshness": { "age_ms": 100, "stale": true },
   "queue_pressure": { "depth": 95, "capacity": 100, "ratio": 0.95, "overloaded": true },
   "fatal": null,
-  "counters": { "ticks": 412, "accepted_batches": 400, "rejected_batches": 3, "receive_errors": 1, "emit_errors": 0, "dropped_spikes": 0, "diagnostic_emissions": 2, "suppressed_diagnostics": 5 },
+  "counters": { "ticks": 412, "ticks_skipped": 6, "accepted_batches": 400, "rejected_batches": 3, "receive_errors": 1, "emit_errors": 0, "dropped_spikes": 0, "diagnostic_emissions": 2, "suppressed_diagnostics": 5 },
   "observed_at_ms": 100
 }
 ```
@@ -153,7 +198,7 @@ Fatal (never returns to ready in this process):
   "input_freshness": { "age_ms": null, "stale": false },
   "queue_pressure": { "depth": 0, "capacity": 0, "ratio": null, "overloaded": false },
   "fatal": { "code": "checkpoint_invalid", "detail": "blank weights" },
-  "counters": { "ticks": 0, "accepted_batches": 0, "rejected_batches": 0, "receive_errors": 0, "emit_errors": 0, "dropped_spikes": 0, "diagnostic_emissions": 0, "suppressed_diagnostics": 0 },
+  "counters": { "ticks": 0, "ticks_skipped": 0, "accepted_batches": 0, "rejected_batches": 0, "receive_errors": 0, "emit_errors": 0, "dropped_spikes": 0, "diagnostic_emissions": 0, "suppressed_diagnostics": 0 },
   "observed_at_ms": 0
 }
 ```

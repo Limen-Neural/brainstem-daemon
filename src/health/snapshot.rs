@@ -122,6 +122,12 @@ pub struct QueuePressure {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeCounters {
     pub ticks: u64,
+    /// Scheduler slots dropped by `MissedTickBehavior::Skip` after a late
+    /// tick. Zero when the daemon keeps up; a Tokio catch-up burst inside its
+    /// lateness tolerance is not counted. `serde(default)` keeps snapshots
+    /// serialized before this field existed deserializable as zero.
+    #[serde(default)]
+    pub ticks_skipped: u64,
     pub accepted_batches: u64,
     pub rejected_batches: u64,
     pub receive_errors: u64,
@@ -136,6 +142,7 @@ impl RuntimeCounters {
     pub fn merged_monotonic(self, next: RuntimeCounters) -> RuntimeCounters {
         RuntimeCounters {
             ticks: self.ticks.max(next.ticks),
+            ticks_skipped: self.ticks_skipped.max(next.ticks_skipped),
             accepted_batches: self.accepted_batches.max(next.accepted_batches),
             rejected_batches: self.rejected_batches.max(next.rejected_batches),
             receive_errors: self.receive_errors.max(next.receive_errors),
@@ -147,12 +154,17 @@ impl RuntimeCounters {
     }
 
     /// `(metric name, help, value)` for each counter. Names are stable.
-    fn metrics(&self) -> [(&'static str, &'static str, u64); 8] {
+    fn metrics(&self) -> [(&'static str, &'static str, u64); 9] {
         [
             (
                 "brainstem_ticks_total",
                 "Ticks that stepped the network.",
                 self.ticks,
+            ),
+            (
+                "brainstem_ticks_skipped_total",
+                "Scheduler slots dropped by MissedTickBehavior::Skip after a late tick.",
+                self.ticks_skipped,
             ),
             (
                 "brainstem_accepted_batches_total",

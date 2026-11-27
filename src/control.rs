@@ -355,6 +355,7 @@ mod tests {
         machine.apply(HealthEvent::ProcessStarted);
         machine.apply(HealthEvent::CountersPublished(RuntimeCounters {
             ticks: 11,
+            ticks_skipped: 7,
             accepted_batches: 10,
             rejected_batches: 3,
             receive_errors: 2,
@@ -376,6 +377,7 @@ mod tests {
             json["counters"],
             serde_json::json!({
                 "ticks": 11,
+                "ticks_skipped": 7,
                 "accepted_batches": 10,
                 "rejected_batches": 3,
                 "receive_errors": 2,
@@ -396,6 +398,7 @@ mod tests {
         .unwrap();
         for line in [
             "brainstem_ticks_total 11",
+            "brainstem_ticks_skipped_total 7",
             "brainstem_accepted_batches_total 10",
             "brainstem_rejected_batches_total 3",
             "brainstem_receive_errors_total 2",

@@ -42,6 +42,14 @@ pub const LEGACY_SPIKENAUT_READOUT_ENV: &str = "SPIKENAUT_ZMQ_READOUT_IPC";
 #[non_exhaustive]
 pub struct RuntimeStats {
     pub ticks: u64,
+    /// Scheduler slots dropped by `MissedTickBehavior::Skip` after a late tick.
+    ///
+    /// `ticks` counts successful network steps; `ticks_skipped` counts
+    /// scheduler periods that never ran. The two are not complements: a
+    /// consumed tick still steps the network (on queued or zero-filled input),
+    /// so `ticks` can keep rising while `ticks_skipped` grows. `run_for_ticks`
+    /// / `drive_ticks` have no scheduler interval, so they always report 0.
+    pub ticks_skipped: u64,
     pub accepted_batches: u64,
     pub rejected_batches: u64,
     /// Total backend receive failures, including rate-limited repeats.
@@ -63,6 +71,7 @@ impl From<&RuntimeStats> for RuntimeCounters {
     fn from(stats: &RuntimeStats) -> Self {
         Self {
             ticks: stats.ticks,
+            ticks_skipped: stats.ticks_skipped,
             accepted_batches: stats.accepted_batches,
             rejected_batches: stats.rejected_batches,
             receive_errors: stats.receive_errors,
@@ -215,6 +224,7 @@ impl BrainstemDaemon {
         let tick_duration = Duration::from_nanos(1_000_000_000 / u64::from(cfg.tick_rate_hz));
         let mut ticker = time::interval(tick_duration);
         ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+        let mut skip_tracker = SkipTracker::new(tick_duration);
 
         let mut stimuli = vec![0.0; cfg.channels];
         let mut spike_buf: Vec<LocalSpikeEvent> = Vec::with_capacity(128);
@@ -230,7 +240,8 @@ impl BrainstemDaemon {
 
         loop {
             tokio::select! {
-                _ = ticker.tick() => {
+                scheduled = ticker.tick() => {
+                    observe_and_record_skips(scheduled, &mut skip_tracker, &mut stats, &mut diagnostics);
                     run_tick_published(
                         &mut *backend.source,
                         &mut network,
@@ -245,19 +256,7 @@ impl BrainstemDaemon {
                         },
                     );
                 }
-                _ = heartbeat.tick() => {
-                    info!(
-                        ticks = stats.ticks,
-                        accepted_batches = stats.accepted_batches,
-                        rejected_batches = stats.rejected_batches,
-                        receive_errors = stats.receive_errors,
-                        emit_errors = stats.emit_errors,
-                        dropped_spikes = stats.dropped_spikes,
-                        diagnostic_emissions = stats.diagnostic_emissions,
-                        suppressed_diagnostics = stats.suppressed_diagnostics,
-                        "runtime heartbeat and shed summary"
-                    );
-                }
+                _ = heartbeat.tick() => log_heartbeat(&stats),
                 _ = &mut shutdown => {
                     info!("Termination signal received, shutting down");
                     health.apply(HealthEvent::BeginDrain);
@@ -277,7 +276,9 @@ impl BrainstemDaemon {
     /// Used by the CPU-only Thalamic → corpus-ipc → Brainstem smoke harness.
     /// Calls [`StimulusSource::initialize`] (same as [`Self::run`]) so a ZMQ
     /// source is connected once. Source shutdown always runs, even when sink
-    /// flush fails. Does not bind `control_bind`.
+    /// flush fails. Does not bind `control_bind`. The returned
+    /// [`RuntimeStats::ticks_skipped`] is always 0: bounded runs drive ticks
+    /// directly and have no scheduler interval that could drop slots.
     pub fn run_for_ticks(self, ticks: u64) -> Result<RuntimeStats> {
         let cfg = self.config;
         let mut backend = self.backend;
@@ -649,6 +650,55 @@ fn validate_restored_pair(
 
 // Trait-based tick loop (works with or without corpus-ipc feature)
 
+/// Counts scheduler slots that `MissedTickBehavior::Skip` drops.
+///
+/// `Interval::tick()` returns the *scheduled* instant of the slot it fires,
+/// and with `Skip` consecutive returned instants are always whole periods
+/// apart. The slots dropped between two consumed ticks are therefore
+/// `(scheduled_n - scheduled_{n-1}) / period - 1`. A catch-up burst (lateness
+/// within Tokio's ~5 ms tolerance) produces one-period gaps and counts 0, so
+/// only slots Tokio really dropped are counted — this does not reproduce
+/// Tokio's tolerance and never counts a skipped slot that did not happen.
+/// Nothing is replayed; cadence stays aligned to the original schedule.
+struct SkipTracker {
+    period: Duration,
+    last_scheduled: Option<time::Instant>,
+}
+
+impl SkipTracker {
+    fn new(period: Duration) -> Self {
+        Self {
+            period,
+            last_scheduled: None,
+        }
+    }
+
+    /// Observe the scheduled instant of one consumed tick and return the
+    /// number of scheduler slots dropped since the previous consumed tick.
+    /// Returns 0 on the first observation, on non-monotonic input, and when
+    /// `period` is zero.
+    fn observe(&mut self, scheduled: time::Instant) -> u64 {
+        let Some(previous) = self.last_scheduled.replace(scheduled) else {
+            return 0;
+        };
+        skipped_slots(scheduled.saturating_duration_since(previous), self.period)
+    }
+}
+
+/// Slots dropped between two consecutive consumed scheduled instants: the
+/// whole periods elapsed in `gap` minus the one slot that did run.
+/// Saturates rather than overflowing or wrapping.
+fn skipped_slots(gap: Duration, period: Duration) -> u64 {
+    let period_nanos = period.as_nanos();
+    if period_nanos == 0 {
+        return 0;
+    }
+    // Subtract the consumed slot before clamping so extreme gaps saturate to
+    // u64::MAX rather than u64::MAX - 1.
+    let periods = (gap.as_nanos() / period_nanos).saturating_sub(1);
+    u64::try_from(periods).unwrap_or(u64::MAX)
+}
+
 /// Health reporter plus smoke counters updated together on every tick.
 struct TickReport<'a> {
     health: &'a HealthHandle,
@@ -666,6 +716,13 @@ const DIAGNOSTIC_MIN_GAP: Duration = Duration::from_secs(1);
 /// a source that alternates NaN between indices bypass the count interval and
 /// the one-second minimum gap.
 const NON_FINITE_DIAGNOSTIC_CATEGORY: &str = "rejected non-finite ingress";
+/// Stable limiter identity for scheduler-skip warnings.
+///
+/// Must not include the varying skip count, lateness, or message text:
+/// [`OccurrenceLimiter::record`] resets counters on a key change, so a
+/// per-wakeup key would bypass the count interval and the one-second minimum
+/// gap.
+const SCHEDULER_SKIP_DIAGNOSTIC_CATEGORY: &str = "scheduler skipped ticks";
 
 #[derive(Debug)]
 struct OccurrenceLimiter {
@@ -770,6 +827,71 @@ fn record_non_finite_rejection(
     }
 }
 
+/// Record scheduler slots dropped since the previous consumed tick.
+///
+/// Saturating-adds `skipped` into `stats.ticks_skipped` and emits (or counts
+/// suppression of) a rate-limited warning through the `scheduler_skip`
+/// limiter. Called only when `skipped > 0`, so on-time ticks and Tokio
+/// catch-up bursts take no extra work and no health lock. Every dropped slot
+/// is counted whether the diagnostic is emitted or suppressed.
+fn record_scheduler_skips(
+    skipped: u64,
+    stats: &mut RuntimeStats,
+    diagnostics: &mut TickDiagnostics,
+) {
+    stats.ticks_skipped = stats.ticks_skipped.saturating_add(skipped);
+    let now = time::Instant::now();
+    match diagnostics
+        .scheduler_skip
+        .record(diagnostic_key(SCHEDULER_SKIP_DIAGNOSTIC_CATEGORY), now)
+    {
+        Some(suppressed) => {
+            stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
+            warn!(
+                skipped_this_wakeup = skipped,
+                ticks_skipped = stats.ticks_skipped,
+                suppressed,
+                "scheduler skipped ticks (MissedTickBehavior::Skip dropped late slots)"
+            );
+        }
+        None => {
+            stats.suppressed_diagnostics = stats.suppressed_diagnostics.saturating_add(1);
+        }
+    }
+}
+
+/// Count scheduler slots dropped since the previous consumed tick, if any.
+///
+/// The cheap path for on-time ticks and Tokio catch-up bursts: no stats
+/// update, no diagnostic occurrence, no extra work in the select arm.
+fn observe_and_record_skips(
+    scheduled: time::Instant,
+    tracker: &mut SkipTracker,
+    stats: &mut RuntimeStats,
+    diagnostics: &mut TickDiagnostics,
+) {
+    let skipped = tracker.observe(scheduled);
+    if skipped > 0 {
+        record_scheduler_skips(skipped, stats, diagnostics);
+    }
+}
+
+/// Periodic `info!` summary of the runtime counters.
+fn log_heartbeat(stats: &RuntimeStats) {
+    info!(
+        ticks = stats.ticks,
+        ticks_skipped = stats.ticks_skipped,
+        accepted_batches = stats.accepted_batches,
+        rejected_batches = stats.rejected_batches,
+        receive_errors = stats.receive_errors,
+        emit_errors = stats.emit_errors,
+        dropped_spikes = stats.dropped_spikes,
+        diagnostic_emissions = stats.diagnostic_emissions,
+        suppressed_diagnostics = stats.suppressed_diagnostics,
+        "runtime heartbeat and shed summary"
+    );
+}
+
 /// Count accepted/rejected batches and admit onto class queues.
 ///
 /// Already-rejected packets with a non-finite payload are counted once here
@@ -801,6 +923,7 @@ struct TickDiagnostics {
     emit: OccurrenceLimiter,
     dropped: OccurrenceLimiter,
     non_finite: OccurrenceLimiter,
+    scheduler_skip: OccurrenceLimiter,
 }
 
 impl TickDiagnostics {
@@ -812,6 +935,7 @@ impl TickDiagnostics {
             emit: OccurrenceLimiter::new(interval, Duration::ZERO),
             dropped: OccurrenceLimiter::new(interval, Duration::ZERO),
             non_finite: OccurrenceLimiter::new(interval, Duration::ZERO),
+            scheduler_skip: OccurrenceLimiter::new(interval, Duration::ZERO),
         }
     }
 
@@ -821,6 +945,7 @@ impl TickDiagnostics {
             + self.emit.suppressed()
             + self.dropped.suppressed()
             + self.non_finite.suppressed()
+            + self.scheduler_skip.suppressed()
     }
 }
 
@@ -831,6 +956,7 @@ impl Default for TickDiagnostics {
             emit: OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL, DIAGNOSTIC_MIN_GAP),
             dropped: OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL, DIAGNOSTIC_MIN_GAP),
             non_finite: OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL, DIAGNOSTIC_MIN_GAP),
+            scheduler_skip: OccurrenceLimiter::new(DIAGNOSTIC_INTERVAL, DIAGNOSTIC_MIN_GAP),
         }
     }
 }
@@ -1161,6 +1287,16 @@ mod tests {
             modulators: None,
             ..Default::default()
         }
+    }
+
+    /// Shared expectation after 25 same-key diagnostic occurrences at limiter
+    /// interval 10: emitted at occurrences 1, 11, and 21, so 3 emissions and
+    /// 22 suppressions; `suppressed()` reports only occurrences since the last
+    /// emission (25 - 21 = 4).
+    fn assert_interval_10_emission_pattern(stats: &RuntimeStats, diagnostics: &TickDiagnostics) {
+        assert_eq!(stats.diagnostic_emissions, 3);
+        assert_eq!(stats.suppressed_diagnostics, 22);
+        assert_eq!(diagnostics.suppressed_total(), 4);
     }
 
     fn write_config_toml(stem: &str, body: &str) -> PathBuf {
@@ -1551,9 +1687,7 @@ mod tests {
 
         assert_eq!(stats.receive_errors, 25);
         assert_eq!(stats.rejected_batches, 25);
-        assert_eq!(stats.diagnostic_emissions, 3);
-        assert_eq!(stats.suppressed_diagnostics, 22);
-        assert_eq!(diagnostics.suppressed_total(), 4);
+        assert_interval_10_emission_pattern(&stats, &diagnostics);
     }
 
     #[test]
@@ -2089,9 +2223,7 @@ mod tests {
         assert_eq!(stats.rejected_batches, 25);
         assert_eq!(stats.accepted_batches, 0);
         // Same cadence as a fixed-index source (emit at 1, 11, 21).
-        assert_eq!(stats.diagnostic_emissions, 3);
-        assert_eq!(stats.suppressed_diagnostics, 22);
-        assert_eq!(diagnostics.suppressed_total(), 4);
+        assert_interval_10_emission_pattern(&stats, &diagnostics);
         assert!(health.snapshot().live);
     }
 
@@ -2557,6 +2689,186 @@ block_timeout_ms = 0
         assert_eq!(stimuli, vec![0.3, 0.4]);
         assert_eq!(ingress.metrics().sensory.depth, 0);
         assert_eq!(sink.emitted.len(), 1);
+    }
+
+    // ── Scheduler-skip accounting (issue #71) ────────────────────────────────
+
+    #[test]
+    fn skipped_slots_counts_dropped_periods_between_consumed_ticks() {
+        let period = Duration::from_millis(10);
+        // First consumed tick / identical instants: no gap, nothing dropped.
+        assert_eq!(skipped_slots(Duration::ZERO, period), 0);
+        // On-time cadence and Tokio's in-tolerance catch-up bursts produce
+        // one-period gaps: the consumed slot ran, nothing was dropped.
+        assert_eq!(skipped_slots(period, period), 0);
+        // A k-period gap means k - 1 slots were dropped (the last one ran).
+        assert_eq!(skipped_slots(period * 4, period), 3);
+        // Fractional gaps floor to whole dropped periods.
+        assert_eq!(
+            skipped_slots(period * 3 + Duration::from_millis(5), period),
+            2
+        );
+        // A zero-length period cannot define slots and must not divide by zero.
+        assert_eq!(skipped_slots(period, Duration::ZERO), 0);
+    }
+
+    #[test]
+    fn skipped_slots_saturates_instead_of_wrapping() {
+        // gap / period can exceed u64::MAX for extreme gaps; the count must
+        // saturate, never overflow-panic or wrap to a small number.
+        assert_eq!(
+            skipped_slots(Duration::MAX, Duration::from_nanos(1)),
+            u64::MAX
+        );
+    }
+
+    #[test]
+    fn skip_tracker_counts_gap_between_scheduled_instants() {
+        let period = Duration::from_millis(10);
+        let start = time::Instant::now();
+        let mut tracker = SkipTracker::new(period);
+        // First observation has no predecessor.
+        assert_eq!(tracker.observe(start), 0);
+        // On-time cadence: consecutive one-period gaps count nothing.
+        assert_eq!(tracker.observe(start + period), 0);
+        assert_eq!(tracker.observe(start + period * 2), 0);
+        // A stall jumping four periods dropped three scheduler slots.
+        assert_eq!(tracker.observe(start + period * 6), 3);
+        // Recovery is immediate; there is no catch-up debt to burn off.
+        assert_eq!(tracker.observe(start + period * 7), 0);
+        // Non-monotonic input counts nothing (defensive; Instant is monotonic).
+        assert_eq!(tracker.observe(start), 0);
+    }
+
+    #[tokio::test]
+    async fn interval_scheduled_instants_stay_on_the_period_grid() {
+        // Interval::tick() returns the scheduled instant of the slot it
+        // fires; under Skip the returned instants always sit on the
+        // first-tick + k*period grid. This is the invariant SkipTracker
+        // relies on, whether Tokio burst through a slot or dropped it.
+        let period = Duration::from_millis(5);
+        let mut ticker = time::interval(period);
+        ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+        let mut tracker = SkipTracker::new(period);
+
+        let mut previous = ticker.tick().await;
+        assert_eq!(tracker.observe(previous), 0);
+        for _ in 0..3 {
+            let scheduled = ticker.tick().await;
+            assert!(scheduled > previous);
+            assert_eq!(
+                (scheduled - previous).as_nanos() % period.as_nanos(),
+                0,
+                "scheduled instants must stay on the period grid"
+            );
+            let gap = scheduled.duration_since(previous);
+            assert_eq!(tracker.observe(scheduled), skipped_slots(gap, period));
+            previous = scheduled;
+        }
+    }
+
+    #[tokio::test]
+    async fn real_interval_reports_dropped_slots_after_late_wakeup() {
+        // A sleep longer than one period plus Tokio's ~5 ms tolerance forces
+        // MissedTickBehavior::Skip to drop slots. poll_tick returns the
+        // completed sleep's deadline, so the first post-stall tick still
+        // consumes the stale slot one period later; the dropped slots become
+        // visible on the next tick, whose deadline is realigned onto the
+        // original grid.
+        let period = Duration::from_millis(20);
+        let mut ticker = time::interval(period);
+        ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+        let mut tracker = SkipTracker::new(period);
+
+        let first = ticker.tick().await;
+        assert_eq!(tracker.observe(first), 0);
+        time::sleep(period * 4).await;
+
+        let overdue = ticker.tick().await;
+        assert!(overdue > first);
+        assert_eq!(
+            (overdue - first).as_nanos() % period.as_nanos(),
+            0,
+            "the tick after a stall consumes the stale pending deadline"
+        );
+        let skipped_overdue = tracker.observe(overdue);
+
+        let realigned = ticker.tick().await;
+        assert!(realigned > overdue);
+        assert_eq!(
+            (realigned - first).as_nanos() % period.as_nanos(),
+            0,
+            "Skip realigns the next deadline onto the original period grid"
+        );
+        let skipped_realigned = tracker.observe(realigned);
+        // The stalls dropped at least one slot; attribution lands on the
+        // overdue tick and/or the realigned one depending on when each poll
+        // ran, so assert on the combined count.
+        assert!(
+            skipped_overdue + skipped_realigned >= 1,
+            "a wakeup more than one period + tolerance late must count dropped slots"
+        );
+
+        // Cadence continues on the grid; missed slots are never replayed.
+        // The exact count is not asserted: a heavily loaded CI could
+        // legitimately drop further slots.
+        let next = ticker.tick().await;
+        assert!(next > realigned);
+        assert_eq!((next - first).as_nanos() % period.as_nanos(), 0);
+    }
+
+    #[test]
+    fn scheduler_skip_recording_counts_every_drop_and_rate_limits() {
+        let health = HealthHandle::started(HealthLimits::default());
+        let mut stats = RuntimeStats::default();
+        let mut diagnostics = TickDiagnostics::new(10);
+
+        // Varying skip sizes share the constant category key, so the limiter
+        // counts occurrences instead of resetting on each wakeup.
+        for skipped in [3, 1, 4] {
+            record_scheduler_skips(skipped, &mut stats, &mut diagnostics);
+        }
+        assert_eq!(stats.ticks_skipped, 8);
+        assert_eq!(stats.diagnostic_emissions, 1);
+        assert_eq!(stats.suppressed_diagnostics, 2);
+
+        // Interval 10 emits at occurrences 1, 11, 21; suppressed occurrences
+        // still count their dropped slots.
+        for _ in 0..22 {
+            record_scheduler_skips(1, &mut stats, &mut diagnostics);
+        }
+        assert_eq!(stats.ticks_skipped, 30);
+        assert_interval_10_emission_pattern(&stats, &diagnostics);
+
+        // Unrelated counters are untouched.
+        assert_eq!(stats.ticks, 0);
+        assert_eq!(stats.rejected_batches, 0);
+        assert_eq!(stats.receive_errors, 0);
+        assert_eq!(stats.emit_errors, 0);
+        assert_eq!(stats.dropped_spikes, 0);
+
+        // The published snapshot carries the same cumulative count; skips are
+        // observability only, not a readiness/phase transition.
+        health.apply(HealthEvent::CountersPublished(RuntimeCounters::from(
+            &stats,
+        )));
+        let snap = health.snapshot();
+        assert_eq!(snap.counters.ticks_skipped, 30);
+        assert_eq!(snap.counters, RuntimeCounters::from(&stats));
+        assert!(snap.live);
+        assert!(snap.fatal.is_none());
+    }
+
+    #[test]
+    fn run_for_ticks_reports_zero_skips_without_a_scheduler() {
+        let stats = BrainstemDaemon::new(sample_config())
+            .run_for_ticks(3)
+            .expect("bounded run");
+        assert_eq!(stats.ticks, 3);
+        assert_eq!(
+            stats.ticks_skipped, 0,
+            "bounded runs drive ticks directly and have no scheduler interval"
+        );
     }
 
     // Sends a real SIGTERM to this test process, so it's `#[ignore]`d by default:
