@@ -69,7 +69,7 @@ If you need ZeroMQ networking, enable the `corpus-ipc` feature.
 - The `corpus-ipc` crate does not vendor ZeroMQ as a git submodule.
 - Stub and `corpus-ipc` builds use this crate's MSRV **1.99.0**; crates.io `corpus-ipc` 0.2.1 declares Rust 1.85.
 
-Prefer the README [Backends (temporary)](README.md#backends-temporary) section as the user-facing truth table, unless a newer code change supersedes it.
+Prefer the README [Backends](README.md#backends) section as the user-facing truth table, unless a newer code change supersedes it.
 That table maps Cargo flags to the backend and to which config keys and env vars apply.
 `BrainstemDaemon::new()` uses the stub even when the feature is enabled.
 The `brainstem-daemon` binary is what wires ZeroMQ.

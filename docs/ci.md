@@ -78,7 +78,9 @@ The driver runs these gates without `--allow-dirty`, `--no-verify`, or
    in each mode, using the normal release profile. Verify `--help`, matching
    `--version`, simulation readiness (`/readyz`), successful bounded SIGINT
    and SIGTERM shutdown, and nonzero checkpoint-specific failures for missing
-   and corrupt live checkpoints. No external IPC publisher is required.
+   and corrupt live checkpoints. Also start a live instance from the packaged
+   synthetic fixture, wait for `/readyz`, and require a graceful SIGTERM
+   exit. No external IPC publisher or checkpoint download is required.
    A daemon that exits before readiness fails the gate, unless that attempt's
    log shows it lost a race for a freshly allocated loopback port; then up to
    three startup attempts are made in total, each with its own config file.
@@ -97,3 +99,10 @@ records the exact SHA, archive checksum, and qualification status; only
 before it expires, and rerun qualification if the candidate SHA changes. Logs
 and temporary binaries are not committed; build/install/consumer directories
 are cleaned automatically.
+
+
+Before actual publication, rerun the gate on the selected commit and retain
+its evidence. Confirm registry ownership and version availability with the
+maintainer. The dry-run does not publish. After an authorized upload, verify
+both version-pinned registry installs, a registry-only library consumer, the
+docs.rs result, and the release notes/tag against that same commit.

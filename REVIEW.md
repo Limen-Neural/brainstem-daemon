@@ -41,7 +41,7 @@ pin is **Rust 1.99.0**. crates.io `corpus-ipc` 0.2.1 declares Rust 1.85,
 which this toolchain satisfies, so these commands do not need
 `--ignore-rust-version`.
 
-See README [Backends (temporary)](README.md#backends-temporary) for the
+See README [Backends](README.md#backends) for the
 feature → backend → config-key truth table (including env vars that are
 no-ops under stub).
 
