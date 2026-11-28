@@ -124,5 +124,33 @@ cargo +1.99.0 install --locked --version 0.3.0 --root "$ipc_root" \
 ```
 
 The flags are for the POSIX native build; do not pass them on Windows.
-Check the binaries in both roots, a registry-only library consumer, the docs.rs
-result, and the release notes/tag against the same commit.
+
+Run `--help` and `--version` on each installed binary by its full path and
+check for version `0.3.0`. Use the [README configuration](../README.md#configuration)
+with an enabled loopback `control_bind`. For each binary, start it in
+simulation, then with the bundled live fixture. Require HTTP 200 from
+`/readyz` and exit 0 after SIGTERM on both runs; a missing live checkpoint
+must exit nonzero with a checkpoint error.
+
+For Linux `corpus-ipc`, also exercise the native queues with actual input
+and output. Run the existing transport driver from the release checkout
+with its configured loopback ports (5755, 5756, 9755) free. Point it at the
+**registry-installed** binary, not a binary under `target/`:
+
+```bash
+smoke_dir="$(mktemp -d)"
+cargo +1.99.0 run --locked --features corpus-ipc --example usefulness_transport -- \
+  --daemon "$ipc_root/bin/brainstem-daemon" \
+  experiments/usefulness/config/transport-live.toml \
+  experiments/usefulness/fixtures/workload.json \
+  "$smoke_dir/frames.jsonl" "$smoke_dir/summary.json"
+```
+
+The driver waits for readiness and subscriber frames, sends typed stimuli,
+and stops the daemon with SIGTERM. Require at least one matching nonempty
+spike response (`matched > 0`) and a clean shutdown (`exit_code = 0`,
+`termination_logged = true`) in `summary.json`. An install or readiness
+probe alone does not exercise the ZeroMQ queues.
+
+Finally, verify a registry-only library consumer, the docs.rs result, and
+the release notes/tag against the same commit.

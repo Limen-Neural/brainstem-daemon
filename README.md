@@ -338,7 +338,9 @@ The supported format is a nonblank LIF-only Distill JSON sidecar
 key. `neuromod` 0.7.0 has no Distill readout matrix, so a sidecar that
 contains that key is rejected rather than losing its readout. The previously
 documented Hugging Face `dataset/merged_v2/snn_model.json` export contained
-that key; this quickstart needs no external download.
+that key and cannot restore. No externally published checkpoint is currently
+verified to restore with 0.3.0. Use the repository fixture below to demonstrate
+the live workflow; it is synthetic and is not a published production checkpoint.
 
 To start the bundled live fixture, change `runtime_mode` to `"live"` in
 [`daemon.toml` above](#configuration), leave the 16 × 16 dimensions and
