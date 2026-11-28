@@ -154,3 +154,6 @@ probe alone does not exercise the ZeroMQ queues.
 
 Finally, verify a registry-only library consumer, the docs.rs result, and
 the release notes/tag against the same commit.
+Retain the runtime logs and transport summary with the release evidence
+before removing the temporary `stub_root`, `ipc_root`, and `smoke_dir`
+directories. Keep those roots until all of the installed-binary checks finish.
