@@ -78,7 +78,9 @@ The driver runs these gates without `--allow-dirty`, `--no-verify`, or
    in each mode, using the normal release profile. Verify `--help`, matching
    `--version`, simulation readiness (`/readyz`), successful bounded SIGINT
    and SIGTERM shutdown, and nonzero checkpoint-specific failures for missing
-   and corrupt live checkpoints. No external IPC publisher is required.
+   and corrupt live checkpoints. Also start a live instance from the packaged
+   synthetic fixture, wait for `/readyz`, and require a graceful SIGTERM
+   exit. No external IPC publisher or checkpoint download is required.
    A daemon that exits before readiness fails the gate, unless that attempt's
    log shows it lost a race for a freshly allocated loopback port; then up to
    three startup attempts are made in total, each with its own config file.
@@ -97,3 +99,61 @@ records the exact SHA, archive checksum, and qualification status; only
 before it expires, and rerun qualification if the candidate SHA changes. Logs
 and temporary binaries are not committed; build/install/consumer directories
 are cleaned automatically.
+
+### Registry qualification
+
+Before actual publication, rerun the gate on the selected commit and retain
+its evidence. Confirm registry ownership and version availability with the
+maintainer. The dry-run does not publish.
+
+After an authorized upload, verify both version-pinned registry installs
+in separate install roots. A registry install does not read the crate's
+`.cargo/config.toml` like the extracted `--path` install does. The archive
+driver also injects the POSIX ZeroMQ flags itself. For the Linux registry
+`corpus-ipc` smoke, append the same flags explicitly:
+
+```bash
+stub_root="$(mktemp -d)"
+ipc_root="$(mktemp -d)"
+cargo +1.99.0 install --locked --version 0.3.0 --root "$stub_root" brainstem-daemon
+
+CFLAGS="${CFLAGS:+$CFLAGS }-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64" \
+CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64" \
+cargo +1.99.0 install --locked --version 0.3.0 --root "$ipc_root" \
+  --features corpus-ipc brainstem-daemon
+```
+
+The flags are for the POSIX native build; do not pass them on Windows.
+
+Run `--help` and `--version` on each installed binary by its full path and
+check for version `0.3.0`. Use the [README configuration](../README.md#configuration)
+with an enabled loopback `control_bind`. For each binary, start it in
+simulation, then with the bundled live fixture. Require HTTP 200 from
+`/readyz` and exit 0 after SIGTERM on both runs; a missing live checkpoint
+must exit nonzero with a checkpoint error.
+
+For Linux `corpus-ipc`, also exercise the native queues with actual input
+and output. Run the existing transport driver from the release checkout
+with its configured loopback ports (5755, 5756, 9755) free. Point it at the
+**registry-installed** binary, not a binary under `target/`:
+
+```bash
+smoke_dir="$(mktemp -d)"
+cargo +1.99.0 run --locked --features corpus-ipc --example usefulness_transport -- \
+  --daemon "$ipc_root/bin/brainstem-daemon" \
+  experiments/usefulness/config/transport-live.toml \
+  experiments/usefulness/fixtures/workload.json \
+  "$smoke_dir/frames.jsonl" "$smoke_dir/summary.json"
+```
+
+The driver waits for readiness and subscriber frames, sends typed stimuli,
+and stops the daemon with SIGTERM. Require at least one matching nonempty
+spike response (`matched > 0`) and a clean shutdown (`exit_code = 0`,
+`termination_logged = true`) in `summary.json`. An install or readiness
+probe alone does not exercise the ZeroMQ queues.
+
+Finally, verify a registry-only library consumer, the docs.rs result, and
+the release notes/tag against the same commit.
+Retain the runtime logs and transport summary with the release evidence
+before removing the temporary `stub_root`, `ipc_root`, and `smoke_dir`
+directories. Keep those roots until all of the installed-binary checks finish.

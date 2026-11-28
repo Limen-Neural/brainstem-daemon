@@ -5,13 +5,10 @@
 [![Codacy](https://app.codacy.com/gh/Limen-Neural/brainstem-daemon/badge.svg)](https://app.codacy.com/gh/Limen-Neural/brainstem-daemon/dashboard)
 [![Maintainability](https://qlty.sh/gh/Limen-Neural/projects/brainstem-daemon/maintainability.svg)](https://qlty.sh/gh/Limen-Neural/projects/brainstem-daemon)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![Crates.io](https://img.shields.io/crates/v/brainstem-daemon.svg)](https://crates.io/crates/brainstem-daemon)
-[![docs.rs](https://docs.rs/brainstem-daemon/badge.svg)](https://docs.rs/brainstem-daemon)
 
 Headless spiking neural-network runtime written in Rust.
 
-> **Note**  
-> Training / weight-optimization lives in the separate `plasticity-lab` project; `brainstem-daemon` is *inference-only*.
+The daemon runs inference. It does not train models or optimize weights.
 
 ---
 
@@ -27,91 +24,76 @@ Headless spiking neural-network runtime written in Rust.
 
 ## Responsibility and failure domains
 
-`brainstem-daemon`, `thalamic-relay`, and `corpus-ipc` stay **separate repositories and separate failure domains**. This process is the single canonical owner of the software `SpikingNetwork` tick loop. Thalamic owns sensory collection and deterministic hardware safety. `corpus-ipc` owns the published wire schema. Stopping or restarting one process does not move those responsibilities into another.
+The daemon owns the CPU `SpikingNetwork` tick loop, checkpoint validation,
+and runtime health. A stimulus producer supplies inputs and retains any
+hardware-safety responsibilities; a spike consumer decides what to do with the
+outputs. With the optional ZeroMQ backend, the registry `corpus-ipc` dependency
+defines the wire schema. Neither a separate producer nor a consumer is needed
+for the default stub quickstart.
 
 ```text
-thalamic-relay ──► corpus-ipc ──► brainstem-daemon ──► spikes/readout
- sensory/safety     wire/schema      SNN runtime
+stimulus producer --> brainstem-daemon --> spike consumer
+                      checkpoint restore, inference ticks, health
 ```
 
-```text
-┌──────────────────────────┐     ┌─────────────────────┐     ┌──────────────────────────────────┐
-│ thalamic-relay           │     │ corpus-ipc          │     │ brainstem-daemon                 │
-│ (sensory + safety)       │     │ (wire / schema)     │     │ (canonical SNN runtime)          │
-│                          │     │                     │     │                                  │
-│ NVML/GPU + CPU telemetry │     │ crates.io types:    │     │ checkpoint lifecycle/validation  │
-│ thermal/power thresholds │     │  StimulusBatch,     │     │ neuromod::SpikingNetwork restore │
-│ GPU power-limit actuate  │     │  IpcMessage, …      │     │ fixed-rate tick + plasticity     │
-│                          │     │                     │     │ stimulus / modulator ingress     │
-│ Safety stays here when   │     │ No SpikingNetwork   │     │ spike/readout egress             │
-│ this process or          │     │ No hardware safety  │     │ runtime health, identity         │
-│ Brainstem restarts       │     │                     │     │                                  │
-└──────────────────────────┘     └─────────────────────┘     └──────────────────────────────────┘
-         │                                │                              │
-         │  independent stop/restart      │  semver contract             │  independent stop/restart
-         └────────────────────────────────┴──────────────────────────────┘
- Brainstem does not own NVML/GPU collection, thermal/power hard thresholds,
- FPGA GPIO, training/distillation, or mining/game/HFT adapters.
-```
-
-Thalamic can be stopped and started again without Brainstem taking over hardware safety. Brainstem can be stopped without Thalamic losing its local protection loop. Evidence: `tests/thalamic_brainstem_smoke.rs` (`thalamic_stays_healthy_when_brainstem_unavailable`, `thalamic_restart_keeps_hardware_safety_out_of_brainstem`). Detail tables: [Role and boundary matrix](#role-and-boundary-matrix).
+The repository's [CPU-only integration fixture](#local-zeromq-integration-smoke)
+exercises this boundary without checking out a separate producer.
 
 ---
 
 ## Install
 
-**0.3.0 is prepared in-tree but is not on crates.io yet.** `cargo publish` has
-not run; the last published crate is **0.1.2**. Until publication,
-`brainstem-daemon = "0.3.0"` does not resolve from the registry (use a git or
-path dependency for development). After 0.3.0 is published:
-
-From crates.io (binary) — pick **one**:
+**0.3.0 is a release candidate.** Until crates.io publication is verified,
+build or install from this checkout. No earlier crates.io release under the
+`brainstem-daemon` name is documented.
 
 ```bash
-cargo install brainstem-daemon
+git clone --depth 1 https://github.com/Limen-Neural/brainstem-daemon.git
+cd brainstem-daemon
+
+# Run from source after saving the configuration below.
+cargo run --locked -- --config daemon.toml
+
+# Or install the binary from the checkout (choose one backend).
+cargo install --locked --path .
+# Optional: build the ZeroMQ backend instead (requires a C/C++ toolchain).
+cargo install --locked --path . --features corpus-ipc
 ```
 
-```bash
-# Optional ZeroMQ / corpus-ipc backend (needs a C/C++ toolchain; system libzmq is optional):
-cargo install brainstem-daemon --features corpus-ipc
-```
-
-A checkout or `cargo install` of this package applies the libzmq alignment defines in `.cargo/config.toml` on the Unix triples listed there. See [Backends (temporary)](#backends-temporary) for an external crate that depends on this package.
-
-As a library dependency (crates.io, not a git pin) — pick **one** table; do not
-paste both keys into the same `Cargo.toml`:
-
-Default stub backend (no ZeroMQ):
+For a separate Rust project with this repository checked out beside it, add
+one of these lines under `[dependencies]`:
 
 ```toml
-brainstem-daemon = "0.3.0"
+brainstem-daemon = { path = "../brainstem-daemon" }
+# Optional instead: brainstem-daemon = { path = "../brainstem-daemon", features = ["corpus-ipc"] }
 ```
 
-Optional ZeroMQ / `corpus-ipc` backend:
+A checkout build or `cargo install --path .` uses the package's
+[.cargo/config.toml](.cargo/config.toml) on the listed Unix targets. A Linux
+or macOS external library consumer or registry install using `corpus-ipc`
+must supply the ZeroMQ compiler flags described under [Backends](#backends).
+Do not use those POSIX flags on Windows. The default stub needs no ZeroMQ.
 
-```toml
-brainstem-daemon = { version = "0.3.0", features = ["corpus-ipc"] }
-```
-
-The optional `corpus-ipc` feature depends on the published `corpus-ipc` crate (`0.2.1`, `features = ["zmq"]`). The default path uses the in-memory stub backend and does not need ZeroMQ.
+For maintainers, the [release qualification procedure](https://github.com/Limen-Neural/brainstem-daemon/blob/main/docs/ci.md#cargo-archive-release-qualification)
+shows how to check the candidate archive before any publication.
 
 ## Building
 
-Requires **Rust 1.99.0 only**. That version is the single source of truth
+Use the pinned **Rust 1.99.0** toolchain. The minimum version is synchronized
 across `rust-toolchain.toml` `channel`, `Cargo.toml` `rust-version`,
 `.github/workflows/ci.yml` `toolchain:`, and `Dockerfile` `FROM rust:`
-(see [REVIEW.md](REVIEW.md) "MSRV pin rule"). Do not use other toolchains.
+(see the [MSRV pin rule](https://github.com/Limen-Neural/brainstem-daemon/blob/main/REVIEW.md#msrv-pin-rule)).
 crates.io `corpus-ipc` 0.2.1 declares Rust 1.85, which this compiler accepts.
 
 ```bash
 # Release build, default stub backend (no libzmq)
-cargo build --release --bin brainstem-daemon
+cargo build --locked --release --bin brainstem-daemon
 
 # Optional ZeroMQ / corpus-ipc backend
-cargo build --release --bin brainstem-daemon --features corpus-ipc
+cargo build --locked --release --bin brainstem-daemon --features corpus-ipc
 ```
 
-The binary will be located at `target/release/brainstem-daemon`. Feature flag vs backend vs which config keys apply is in [Backends (temporary)](#backends-temporary).
+The binary will be located at `target/release/brainstem-daemon`. Feature flag vs backend vs which config keys apply is in [Backends](#backends).
 
 ### Cargo profiles
 
@@ -137,17 +119,21 @@ cargo bench                              # profile.bench (when benches exist)
 ---
 
 ## Configuration
-`brainstem-daemon` expects a **TOML** file; default path: `~/.config/soma/daemon.toml` (override with `--config`).
+`brainstem-daemon` expects a **TOML** file. The default is
+`soma/daemon.toml` under the platform's config directory (usually
+`~/.config/soma/daemon.toml` on Linux). Save the example as `daemon.toml` in
+the repository root and pass `--config daemon.toml`. The default stub
+runs without a producer; the simulation config below uses a blank network.
 
 ```toml
-# ~/.config/soma/daemon.toml
+# daemon.toml
 
 # Engine
 lif_count      = 16        # must match the checkpoint LIF count in live mode
-izh_count      = 0         # live Spikenaut sidecars are LIF-only
-channels       = 16        # must match checkpoint input width (ingress contract)
-model_path     = "/var/lib/soma/snn_model.json"  # Distill sidecar JSON; `~` is not expanded
-runtime_mode   = "live"    # default when omitted; "simulation" is the only blank-network path
+izh_count      = 0         # live sidecars are LIF-only
+channels       = 16        # must match checkpoint input width in live mode
+model_path     = "tests/fixtures/live/snn_model.json"  # used only for restore in live mode; no ~ expansion
+runtime_mode   = "simulation"  # choose explicitly; omitted means live
 
 # Runtime
 tick_rate_hz   = 1000      # loop frequency, inclusive range 1..=1_000_000 Hz
@@ -165,16 +151,6 @@ spine_pub_port = 5556      # spikes out
 # spine_pub_sndhwm           = 1000         # explicit finite send high-water mark
 # spine_pub_linger_ms        = 0            # finite LINGER: drop pending on close (bounded teardown)
 # spine_pub_send_empty_batches = true       # send a frame every tick even with zero spikes
-
-# Service registry (optional; empty by default)
-# Trading/mining-specific adapters are intentionally excluded from defaults.
-[[services]]
-name = "telemetry"
-enabled = true
-
-[[services]]
-name = "critic-ipc"
-enabled = true
 
 # Bounded ingress (optional; defaults shown). Each class has its own
 # capacity and overflow policy so bulk telemetry cannot starve control.
@@ -217,7 +193,8 @@ The supported dimensions are:
   dense model, not just a single packet; it is not a byte-size limit.
 - `control_bind`, when set: numeric IPv4 `IP:port` or IPv6 `[address]:port`.
   PUB bind hosts accept IP literals (IPv6 with or without brackets), DNS
-  hostnames, or `*`; no URL scheme or port. Syntax is checked without DNS or
+  hostnames, or `*`; no URL scheme or port. Numeric-only names that are not
+  valid IPs (such as `5555`) are rejected. Syntax is checked without DNS or
   socket I/O; address availability and hostname resolution can still fail at
   bind time. PUB option syntax and bounded-lifecycle settings are validated
   even under stub, but remain no-ops there and do not require libzmq.
@@ -237,11 +214,25 @@ use normal `tracing_subscriber` filter syntax (for example,
 `brainstem_daemon=debug,info`). If `RUST_LOG` is invalid, startup prints one
 diagnostic to stderr and safely falls back to the validated TOML level.
 
-### Backends (temporary)
+### Backends
 
 Default Cargo features are empty (`default = []` in `Cargo.toml`). That path uses the in-memory **stub** backend (`StubStimulusSource` + `NoopSpikeSink`) and does **not** need ZeroMQ. The optional `corpus-ipc` feature (same as `--all-features` today) pulls `corpus-ipc` **from crates.io** (`0.2.1`, `features = ["zmq"]`) plus this crate's optional `zmq` dependency. Published `corpus-ipc` compiles libzmq via `zmq-sys` / `zeromq-src` (a C++ compiler is required; a system `libzmq` package is not). It does not vendor ZeroMQ as a git submodule.
 
-`zeromq-src` 0.2.6 allocates libzmq queue chunks with `malloc` unless `HAVE_POSIX_MEMALIGN` is set. On x86-64-v3 GCC (Ubuntu 26.04) that misaligned `command_t` slot SIGSEGVs. When this package is the Cargo root, `.cargo/config.toml` passes `-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64` as `CFLAGS_<triple>` and `CXXFLAGS_<triple>` for x86_64 and aarch64 Linux gnu, Linux musl, and macOS. Any other target, including other Unix targets, does not get those defines; set `CFLAGS` and `CXXFLAGS` yourself there. The `cc` crate appends the listed keys to any `CFLAGS` / `CXXFLAGS` already set. A global `CFLAGS` entry is not used, because it would also apply on Windows, whose CRT has no `posix_memalign`. An external crate that depends on `brainstem-daemon` does not load this file, and this crate cannot pass the defines into `zeromq-src` (that native library is compiled first). Set the same defines in `CFLAGS` and `CXXFLAGS`, or in the matching `CFLAGS_<triple>` / `CXXFLAGS_<triple>` variables (hyphens written as underscores), before building `--features corpus-ipc`.
+`zeromq-src` 0.2.6 allocates libzmq queue chunks with `malloc` unless
+`HAVE_POSIX_MEMALIGN` is set. With x86-64-v3 GCC (Ubuntu 26.04), a misaligned
+`command_t` slot can cause a segmentation fault. For checkout and path
+installs, `.cargo/config.toml` supplies the alignment flags on x86_64 and
+aarch64 Linux (gnu and musl) and macOS.
+
+On those POSIX targets, an external Cargo root using `corpus-ipc` must
+append `-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64` to both `CFLAGS` and
+`CXXFLAGS` (or use the target-specific `CFLAGS_<triple>` and
+`CXXFLAGS_<triple>`, with underscores in place of hyphens). A registry
+`cargo install` also needs the caller-supplied flags: [Cargo only uses the
+local config for path installs](https://doc.rust-lang.org/cargo/commands/cargo-install.html#configuration-discovery).
+For other targets that provide `posix_memalign`, the config does not set
+the flags automatically. Do not pass these flags on Windows, where the CRT
+has no `posix_memalign`; Windows CI qualifies only the stub build.
 
 `DaemonConfig` deserialization is **not** feature-gated: `spine_sub_port`, `spine_pub_port`, and `model_path` are still required in TOML even on the stub path (`services`, `runtime_mode`, `ingress`, and `control_bind` are optional; `runtime_mode` defaults to `live`; `ingress` defaults to the bounded-queue table below; `control_bind` unset = no extra socket). Effect at runtime depends on which backend is **wired** and on `runtime_mode`.
 
@@ -257,7 +248,7 @@ Enabling the feature does **not** change `BrainstemDaemon::new()` or `try_new()`
 
 Library users who want live ZMQ must build that pair themselves under `#[cfg(feature = "corpus-ipc")]` and pass it to `with_backend` / `try_with_backend`. `BrainstemDaemon::run` / `run_with_restored_network` / `run_for_ticks` call `StimulusSource::initialize` (the binary no longer initializes first, so the pinned ZMQ backend is not reconnected). A failing `initialize` marks health **fatal** and never becomes ready.
 
-Health snapshots, probe paths, and the transition table live in [`docs/health.md`](docs/health.md).
+Health snapshots, probe paths, and the transition table live in [`docs/health.md`](https://github.com/Limen-Neural/brainstem-daemon/blob/main/docs/health.md).
 
 #### Config keys and env vars
 
@@ -342,9 +333,30 @@ ONLY THEN start live ticks
 
 Live mode never falls back to `with_dimensions()` after a failed load. A successful live start logs `schema_id`, `model_id`, source path, SHA-256, encoder, source, and lineage.
 
-The allowed software artifact is the Distill sidecar JSON published as Hugging Face [`rmems/Spikenaut-SNN`](https://huggingface.co/rmems/Spikenaut-SNN) (`dataset/merged_v2/snn_model.json`, plus optional hub `config.json`). That is the same document `Spikenaut-SNN` loads; this crate adapts it into crates.io `neuromod` **0.7.0** rather than inventing a new format or forking `stdp_config` / `eligibility`. The merged_v2 bank is 16 LIF × 16 input channels and has no Izhikevich cells, so live config must use `izh_count = 0`.
+The supported format is a nonblank LIF-only Distill JSON sidecar
+(`source = "spikenaut_julia"`, `izh_count = 0`) with no `output_weights`
+key. `neuromod` 0.7.0 has no Distill readout matrix, so a sidecar that
+contains that key is rejected rather than losing its readout. The previously
+documented Hugging Face `dataset/merged_v2/snn_model.json` export contained
+that key and cannot restore. No externally published checkpoint is currently
+verified to restore with 0.3.0. Use the repository fixture below to demonstrate
+the live workflow; it is synthetic and is not a published production checkpoint.
 
-`neuromod` 0.7.0 has no Distill readout matrix, so live restore **rejects** any present `output_weights` key rather than silently dropping trained readout weights. Legacy sidecars that omit the field still load. The currently published Hugging Face `dataset/merged_v2/snn_model.json` includes `output_weights` and fails closed. The supported live checkpoint is the committed synthetic fixture [`tests/fixtures/live/snn_model.json`](tests/fixtures/live/snn_model.json) (16 LIF x 16 channels, SHA-256 `f97771291000a3d805375d410b46a7232b54b003aaa3f1d9662ea5f9b09af848`, provenance in [`MANIFEST.md`](tests/fixtures/live/MANIFEST.md)). It is not a trained model. From a fresh clone, set `lif_count = 16`, `izh_count = 0`, `channels = 16`, and `model_path` to that file; `cargo test --locked --test live_fixture` exercises start, input, tick, spike output, and shutdown; the packaged-release gate checks live start, `/readyz`, and graceful shutdown on it.
+To start the bundled live fixture, change `runtime_mode` to `"live"` in
+[`daemon.toml` above](#configuration), leave the 16 × 16 dimensions and
+fixture path unchanged, and run from the repository root:
+
+```bash
+cargo run --locked -- --config daemon.toml
+```
+
+A relative `model_path` is resolved from the process working directory.
+Stop with Ctrl-C. The [synthetic fixture](tests/fixtures/live/snn_model.json)
+is versioned and untrained (SHA-256 and origin: [fixture manifest](tests/fixtures/live/MANIFEST.md)).
+Run `cargo test --locked --test live_fixture` to exercise live start, input,
+tick, spike output, and shutdown through the library. The packaged CLI gate
+separately checks live start, `/readyz`, and graceful exit. The default CLI's
+stub backend supplies no external input and discards spike output.
 
 Live restore copies LIF weights, membrane, `last_spike`, `decay_rate`, and `threshold` (also seeding `base_threshold`) and sets `RmStdpConfig.reward_lr = 0` so dopamine-gated R-STDP cannot retrain the Distill matrix. `neuromod` 0.7.0 `SpikingNetwork::step` still assigns `decay_rate` from acetylcholine, blends `threshold` toward `0.05..=0.50`, and L1-renormalizes rows whose weights already sum above `1e-6`. Those are engine contracts; this crate does not fork `step`.
 
@@ -364,7 +376,7 @@ through the real binary over ZeroMQ, and reaches the same decision. Run it
 from a clean checkout with `experiments/usefulness-secondary/run.sh` (Linux,
 needs `libzmq`).
 
-### Thalamic → corpus-ipc → Brainstem smoke
+### Local ZeroMQ integration smoke
 
 CPU-only integration coverage (no GPU) lives in `tests/thalamic_brainstem_smoke.rs` and is gated on `--features corpus-ipc` so default stub tests never need `libzmq`.
 
@@ -402,22 +414,25 @@ Each lost or coalesced event increments exactly one of `rejected`, `dropped`, or
 
 **Non-finite values (`NaN`, `±Inf`)** in stimuli or modulators are rejected before `network.step` on every path (typed `corpus-ipc`, custom `StimulusSource`, and direct `enqueue` / `try_enqueue`). The daemon finite gates bump `rejected_batches` and emit rate-limited diagnostics with a stable key. Typed `corpus-ipc` parse and modulator rejects also warn from the source (`next_ingress` / `hold_or_reject`); those source warnings are not passed through the tick-loop limiter. A non-finite payload does not refresh `input_freshness`. A rejected frame that still carries previously held finite modulators can refresh freshness, because observation follows the finite payload rather than the `rejected` flag. Modulators are validated before any cached/hold state is updated; masked-out stimulus slots and short modulator vectors are still scanned fail-closed. A finite packet on the next tick is accepted normally. **Two tick outcomes:** a non-finite **backend** packet is dropped before enqueue. The tick then drains anything already queued and uses those stimuli, zero-padding a short vector; with no drained sensory input the stimulus buffer stays all zeros. A non-finite packet that surfaces only on the **drained** path (typical for direct enqueue) skips `network.step` and spike emission for that tick while the process stays live.
 
-The stub backend is always safe for core library builds, tests, and simulation. Example (feature-independent):
+### Library quickstart
+
+Load the same TOML configuration through the fallible API. From the process
+working directory containing `daemon.toml`, a one-tick smoke run is:
 
 ```rust
-use brainstem_daemon::{BrainstemDaemon, DaemonConfig, BackendPair};
+use std::path::Path;
+use brainstem_daemon::{BrainstemDaemon, DaemonConfig};
 
-let cfg: DaemonConfig = /* ... */;
-let daemon = BrainstemDaemon::with_backend(cfg, BackendPair::stub());
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = DaemonConfig::load(Path::new("daemon.toml"))?;
+    let stats = BrainstemDaemon::try_new(config)?.run_for_ticks(1)?;
+    assert_eq!(stats.ticks, 1);
+    Ok(())
+}
 ```
 
-> **Note (temporary):** `neuromod` is still a hard dependency for PR A.
-> It will be made optional in a subsequent PR (see tracking issues #15-19).
-> `corpus-ipc`/`zmq` are intentionally off-by-default during the decoupling phase
-> (core builds and tests do not require libzmq).
->
-> `neuromod` will be made optional later (see #15-19). This is tracked separately
-> from the `corpus-ipc` temporary split.
+`try_new` always selects the stub. Use `try_with_backend` with a custom
+`BackendPair` when you need real inputs or to collect output.
 
 ### Docker (optional)
 
@@ -513,17 +528,19 @@ restorecon -Rv ~/.config/soma
 |---|---|---|
 | Purpose | Run `neuromod::SpikingNetwork` in a headless loop; ingest stimuli and publish spikes via a pluggable `BackendPair` (stub by default; `corpus-ipc` / ZeroMQ when that feature is enabled) | Training/weight optimization; hardware I/O; business logic (trading/mining) |
 | Configuration | Load `DaemonConfig` from TOML; maintain a config-driven `ServiceRegistry`; restore a validated Spikenaut sidecar (or an explicit simulation blank network) before ticks | Hardcoded service names; upstream `soma-engine` service names; silent fallback to a blank `with_dimensions()` network in live mode |
-| Networking | Optional ZeroMQ PUB/SUB when built with `--features corpus-ipc`; `tokio` async runtime. Default stub opens no sockets | Direct exchange adapters; market-data feeds |
+| Networking | Optional ZeroMQ PUB/SUB when built with `--features corpus-ipc`; `tokio` async runtime. Default stub opens no sockets unless `control_bind` is configured | Direct exchange adapters; market-data feeds |
 | Dependencies | `neuromod`, `tokio`, `serde`, `tracing`, `clap`; optional `corpus-ipc` + `zmq` behind the `corpus-ipc` feature (off by default) | Exchange/Mining-specific adapters; GPU drivers; weight-training frameworks |
 
-### Relationship to other projects
+### Integration contracts
 
 - **`neuromod`** — crates.io **0.7.0** (`neuromod = "0.7.0"`; Cargo's pre-1.0 range stays on 0.7.z). Live mode restores Distill sidecar LIF weights/state into this crate's `SpikingNetwork` (no in-tree fork of `stdp_config` / per-LIF `eligibility`) and then drives `SpikingNetwork::step` on every tick (`step` remains the thread-local RNG wrapper; `step_with_rng` is unused here). Simulation mode constructs a blank network from configured dimensions. The optional 4-float ingress tail is dopamine, serotonin, acetylcholine, norepinephrine (`cortisol` / `tempo` / `aux_dopamine` are gone).
-- **`Spikenaut-SNN` / Hugging Face `rmems/Spikenaut-SNN`** — canonical Distill sidecar (`snn_model.json`). Brainstem loads that artifact into `neuromod` 0.7.0; it does not own training or FPGA export.
-- **`limbic-critic`** — expected to send neuromodulator / critic signals over the `corpus-ipc` ingress channel when that feature is enabled. The daemon applies them but does not generate them. The default stub path does not open an ingress socket.
-- **`silicon-bridge`** — consumes the daemon's outbound spike stream (ZeroMQ PUB) when the `corpus-ipc` feature is enabled. The daemon does not know what silicon-bridge does with the spikes. The default stub sink is a no-op.
-- **`Spikenaut-Hardware`** — physical hardware coordination is out of scope; the daemon publishes logical spike events only.
-- **`plasticity-lab`** — weight training and plasticity experiments live here, not in the daemon.
+- **Checkpoints:** the daemon restores supported Distill sidecars. Model
+  training and FPGA export are outside this crate.
+- **I/O:** with the optional ZeroMQ backend, external producers send
+  stimuli or modulator frames and consumers receive the spike stream.
+  See [Config keys and env vars](#config-keys-and-env-vars) and
+  [PUB lifecycle, bind default, and loss semantics](#pub-lifecycle-bind-default-and-loss-semantics).
+  Consumers own any downstream hardware interaction.
 
 ### Allowed dependencies
 

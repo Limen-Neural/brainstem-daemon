@@ -5,7 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] (pending publication)
+
+The in-tree library and binary candidate is **0.3.0**. The registry audit
+found no `brainstem-daemon` entry; the historical versions below describe
+repository changes, not crates.io releases. Add a release date only after
+publication is verified. See the [archive qualification procedure](https://github.com/Limen-Neural/brainstem-daemon/blob/main/docs/ci.md#cargo-archive-release-qualification).
 
 ### Added
 
@@ -34,50 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#68). Strengthened socket tests cover finite-linger teardown, failed-send
   accounting and exact empty/nonempty `corpus-ipc` wire compatibility.
 
-### Changed
-
-- Bump the optional `corpus-ipc` dependency from crates.io **0.1.0** to
-  **0.2.1** (`features = ["zmq"]`). Wire version stays 1, so stimulus/spike
-  frames remain compatible; `BackendError` gains a `Protocol` variant that
-  this crate does not match exhaustively, and upstream `thiserror` moves to
-  2.x. No tick-path logic or cadence changes (LIM-1563, #106).
-- Align MSRV and toolchain pins to **Rust 1.99.0** (`Cargo.toml`,
-  `rust-toolchain.toml`, CI, package qualification, `Dockerfile`,
-  `AGENTS.md`, `README.md`, `.devin/blueprint.yaml`) so the daemon matches
-  the Limen-Neural stack pin on axon-encoder, synaptic-wiring, and
-  corpus-ipc main. Building this crate, including from crates.io, requires
-  Rust 1.99.0; a 1.98.x toolchain is rejected. crates.io `corpus-ipc` 0.1.0
-  declared Rust 1.98.1 (#98). The usefulness runner and its reproduction steps use the same
-  pin. Committed result files stay on the Rust 1.98.1 run that produced
-  them. Static libzmq from `zeromq-src` 0.2.6 is built with
-  `HAVE_POSIX_MEMALIGN` and a 64-byte cache line so `command_t` copies stay
-  aligned under x86-64-v3 GCC (Ubuntu 26.04); without that, `vmovdqa`
-  SIGSEGVs in the queue. `.cargo/config.toml` passes those defines, appended
-  to any existing `CFLAGS` / `CXXFLAGS`, only when this package is the Cargo
-  root (a checkout, an extracted crate, or `cargo install`) and only for the
-  Unix triples named there. Windows is not included. An external crate that
-  depends on this package must set the same flags itself; this crate's build
-  script runs after `zeromq-src` and cannot inject them.
-- Bump `neuromod` from crates.io **0.6.0** to **0.7.0** (pre-1.0 range
-  `>=0.7.0, <0.8.0`). `SpikingNetwork::step` keeps the same
-  `(stimuli, modulators)` signature; 0.7 adds `StepError` variants the daemon
-  does not match exhaustively. Modulator decay (`0.15 - 0.05 * ACh`) and the
-  0.6 self-describing checkpoint shape still hold (LIM-1509).
-- Built-in PUB defaults to loopback (`127.0.0.1`); remote subscribers require
-  explicit `spine_pub_bind_host` configuration. Explicit positive SNDHWM and
-  nonnegative finite LINGER bound buffering/teardown; empty batches remain
-  enabled by default. Application attempted/suppressed/failed counters do not
-  claim subscriber delivery or measure silent PUB loss (#74, qualified by #68).
-
-## [0.3.0] - 2026-09-18
-
-Pending crates.io publication for GitHub milestone **v0.3.0 — Spikenaut SNN runtime**.
-In-tree package version is **0.3.0**; `cargo publish` has not run. Last published
-crate remains **0.1.2** (April 2026, `neuromod` 0.4.0). There is no 0.2.0
-crates.io line; that GitHub milestone was stub-quality work.
-
-### Added
-
 - README responsibility / failure-domain diagram: `thalamic-relay` (sensory +
   hardware safety), `corpus-ipc` (published wire/schema), and
   `brainstem-daemon` (canonical `SpikingNetwork` tick loop) remain separate
@@ -94,32 +55,40 @@ crates.io line; that GitHub milestone was stub-quality work.
   (`src/health/`) with a fake-clock state-machine test for every transition and
   recovery path. Optional `control_bind` listener serves `/livez`, `/readyz`,
   `/health`, and `/metrics` (the repository's first control surface; none existed
-  before). Contract, transition table, and example snapshots: [`docs/health.md`](docs/health.md).
+  before). Contract, transition table, and example snapshots: [`docs/health.md`](https://github.com/Limen-Neural/brainstem-daemon/blob/main/docs/health.md).
 - Deterministic fake-clock / fake-core fault-injection harness (`src/runtime`)
   that injects failures at initialization, checkpoint validation, ingress,
   tick execution, metric publication, and shutdown. Restart preserves
   checkpoint identity and durable session/tick/ingress identifiers; replayed
   inputs are not counted as fresh work (LIM-1218).
-- Live-mode startup gate that loads and validates a Distill sidecar
-  `snn_model.json` (Hugging Face `rmems/Spikenaut-SNN`) before the tick loop.
+- Live-mode startup gate that loads and validates a LIF-only Distill sidecar
+  `snn_model.json` before the tick loop.
   Provenance (path, SHA-256, schema id, encoder, lineage) is logged. Startup
   fails closed on missing, corrupt, dimension-mismatched, non-finite, or
-  blank checkpoints, and on sidecars that carry `output_weights`. FPGA Q8.8
-  `.mem` dumps are rejected.
+  blank checkpoints, and on sidecars that carry `output_weights` (including
+  `null`). FPGA Q8.8 `.mem` dumps are rejected.
+- Versioned synthetic live fixture (16 LIF × 16 channels, no trained weights
+  or external download), exercised through input, tick, output, and shutdown
+  in the public API and through CLI readiness and shutdown in the packaged
+  release gate (#82, #105).
 - Explicit `runtime_mode = "simulation"` for blank `with_dimensions()`
   networks; it cannot masquerade as a loaded Spikenaut checkpoint.
 - crates.io package metadata: `readme`, `homepage`, `documentation`,
   `keywords`, `categories`, docs.rs config, and `exclude` for repo-only
   files (CI, agent docs, Docker). Dual MIT/Apache-2.0 license files stay
   in the package.
-- Tick-loop regression tests for `neuromod` 0.6 modulator snapshots, default
-  ingress fallback, and the 0.6.0 `SpikingNetwork` serde contract
-  (`stdp_config` / `eligibility`) used by checkpoint loading (#41).
+- Tick-loop regression tests for modulator snapshots, default ingress
+  fallback, and the `SpikingNetwork` serde contract (`stdp_config` /
+  `eligibility`) used by the current `neuromod` 0.7 engine.
 - GitHub Actions CI matrix: stub build/test/clippy on Linux, macOS, and
   Windows; rustfmt and optional `corpus-ipc` / libzmq jobs on Linux only
   (`docs/ci.md`).
 - Stub vs `corpus-ipc` backend feature truth table in `README.md`: which Cargo flags wire which backend, which TOML keys apply, and which env vars are no-ops under stub. Documents that `model_path` is passed literally (no `~` expansion) but currently ignored by published `ZmqIpcBackend`, that `SPIKENAUT_ZMQ_READOUT_IPC` is binary-set compatibility only, and that `log_level` is binary tracing-init only.
-- GitHub Actions CI workflow for formatting, clippy, build, and test validation.
+- A clean Cargo archive qualification gate: archive listing and VCS identity,
+  extracted builds and tests, strict rustdoc, isolated CLI installs and
+  startup/shutdown checks, external library consumers, and publish dry-run.
+  Both stub and Linux `corpus-ipc` modes are exercised; the dry-run does
+  not upload the crate (#69, #79).
 - Config-driven `ServiceRegistry` and `BrainstemDaemon` in the library.
 - `DaemonConfig.services` field for registering named, enabled services.
 - `## Role and boundary matrix` documentation in `README.md`.
@@ -152,47 +121,53 @@ crates.io line; that GitHub milestone was stub-quality work.
 
 ### Changed
 
-- Switch optional `corpus-ipc` from a git pin to crates.io `0.1.0`
-  (`features = ["zmq"]`). ZMQ SUB ingress decodes unversioned JSON
-  `IpcMessage` (`Stimuli` / `Neuromodulators`) with crates.io types; egress
-  publishes unversioned `IpcMessage::Spikes` JSON. The binary sets
-  `CORPUS_IPC_ZMQ_READOUT_IPC` and still sets `SPIKENAUT_ZMQ_READOUT_IPC` for
+- Use optional registry `corpus-ipc` **0.2.1** (`features = ["zmq"]`) instead
+  of a git dependency. Wire version stays 1, so stimulus/spike
+  frames remain compatible; `BackendError` gains a `Protocol` variant that
+  this crate does not match exhaustively, and upstream `thiserror` moves to
+  2.x. No tick-path logic or cadence changes (LIM-1563, #106).
+- Pin Rust **1.99.0** across the manifest, toolchain, and CI (#98, #104).
+  The checkout applies alignment flags for the static ZeroMQ build on
+  documented Unix targets. External Cargo roots must supply those flags
+  themselves when building the optional backend; see the
+  [backend feature table](https://github.com/Limen-Neural/brainstem-daemon#backends).
+- Use registry `neuromod` **0.7.0** (Cargo range `>=0.7.0, <0.8.0`; locked
+  to 0.7.0). The `SpikingNetwork::step` signature is unchanged, errors
+  are handled without matching individual variants, and the self-describing
+  `stdp_config` / `eligibility` checkpoint shape remains supported
+  (#95, LIM-1509, LIM-1538).
+- Built-in PUB defaults to loopback (`127.0.0.1`); remote subscribers require
+  explicit `spine_pub_bind_host` configuration. Explicit positive SNDHWM and
+  nonnegative finite LINGER bound buffering/teardown; empty batches remain
+  enabled by default. Application attempted/suppressed/failed counters do not
+  claim subscriber delivery or measure silent PUB loss (#74, qualified by #68).
+
+- Built-in ZeroMQ decodes unversioned, externally tagged `IpcMessage`
+  JSON and emits `IpcMessage::Spikes` using registry types. The binary sets
+  `CORPUS_IPC_ZMQ_READOUT_IPC` and also sets `SPIKENAUT_ZMQ_READOUT_IPC` for
   older tooling.
-- Upgrade `neuromod` from 0.4.0 to crates.io **0.6.0** (pre-1.0 range
-  `>=0.6.0, <0.7.0`). Ingress modulators map to dopamine / serotonin /
-  acetylcholine / norepinephrine; `cortisol`, `tempo`, and `aux_dopamine`
-  were removed upstream. The tick loop still calls `SpikingNetwork::step`
-  (0.6 thread-local wrapper around `step_with_rng`). Checkpoints now carry
-  engine-wired R-STDP (`stdp_config` / per-LIF `eligibility`).
-- Align MSRV and toolchain pins to **Rust 1.98.1** (`Cargo.toml`,
-  `rust-toolchain.toml`, CI, `Dockerfile`, `AGENTS.md`, `README.md`,
-  `.devin/blueprint.yaml`) so stub and optional `corpus-ipc` 0.1 builds
-  share one pin (no `--ignore-rust-version`).
 - Relicense from GPL-3.0 to dual MIT/Apache-2.0.
 - `model_path` in live mode is a real checkpoint path (Distill sidecar JSON), not backend-initialization trivia. Simulation mode is the only remaining blank-network path.
 - Add SPDX license identifiers to all source files.
 - Refactor `soma-daemon` binary into a thin wrapper over `BrainstemDaemon`.
 - Renamed the legacy `soma-daemon` binary to `brainstem-daemon` (matches the crate/repo name).
-- Made `corpus-ipc` + `zmq` **optional** behind the `corpus-ipc` Cargo feature (temporarily off by default).
+- Made `corpus-ipc` + `zmq` **optional** behind the `corpus-ipc` Cargo feature (off by default).
 - `BrainstemDaemon` now drives the tick loop via the local traits instead of hard-coding `ZmqBrainBackend`.
 - Binary now logs the active backend mode (`🔌 stub` / `📡 ZMQ corpus-ipc`).
 - `decode_inputs` now accepts `&IngressPacket` (with explicit `None` modulator fallback).
 - All direct `corpus_ipc` / `zmq` usage is now feature-gated (except the compatibility `CORPUS_IPC_READOUT_ENV` const).
-- Package version **0.3.0** (`Cargo.toml` / `Cargo.lock`). README install and
-  dependency snippets are **post-publication** (`brainstem-daemon = "0.3.0"`
-  once the crate is on crates.io). Default vs `corpus-ipc` examples are
-  separate tables so they cannot be pasted as a duplicate TOML key. This
-  changelog section is pending registry publication; `cargo publish`, a Git
-  tag, and a GitHub Release remain maintainer steps.
-
 ### Removed
 
 - Qodana Cloud workflow (`.github/workflows/qodana_code_quality.yml`) and
   `qodana.yaml`; local Qodana notes in `REVIEW.md`. Qodana Cloud membership
   expired.
 
-### Fixed / Cleaned
+### Fixed
 
+- Reject invalid runtime settings before allocating a network or starting
+  the runtime/backend: tick rate and dimension limits, checked dimension
+  addition/multiplication with operands in overflow errors, and malformed
+  numeric-only PUB hosts as well as invalid schemes/ports (#67, #78).
 - Fail-closed non-finite ingress (`NaN`, `±Inf`) on every runtime entry path
   before `SpikingNetwork::step`: typed `corpus-ipc` validation, custom
   `StimulusSource` packets, direct `BoundedIngress` enqueue, and the drained
@@ -213,18 +188,14 @@ crates.io line; that GitHub milestone was stub-quality work.
   non-finite packet that surfaces only on the **drained** path (for example
   public `enqueue` / `try_enqueue`) skips `network.step` and spike emission
   for that tick while the daemon stays live.
-- Live restore rejects Distill sidecars that carry `output_weights` (including
-  explicit `null`) instead of validating then silently dropping the readout
-  row. neuromod 0.6.0 has no Distill readout matrix; legacy sidecars that omit
-  the field still load.
-- Live restore rejects Distill values that are finite as `f64` but overflow `f32`, and requires Distill `source = "spikenaut_julia"`. The binary restores once before sockets and reuses that network for the tick loop. Live mode sets `RmStdpConfig.reward_lr = 0` so dopamine-gated R-STDP cannot retrain Distill weights; `neuromod` 0.6.0 `step` still owns decay/threshold/L1-renorm as engine contracts.
+- Live restore rejects Distill values that are finite as `f64` but overflow `f32`, and requires Distill `source = "spikenaut_julia"`. The binary restores once before sockets and reuses that network for the tick loop. Live mode sets `RmStdpConfig.reward_lr = 0` so dopamine-gated R-STDP cannot retrain Distill weights; `neuromod` 0.7.0 `step` still owns decay/threshold/L1-renorm as engine contracts.
 - Removed unconditional dependency on `corpus-ipc` git crate and system `libzmq` for core builds and tests.
 
-## [0.1.2] - 2026-04-22
+## [0.1.2] - 2026-04-22 (repository history)
 
 - Migrated daemon to `corpus-ipc` and `neuromod` v0.4.0.
 
-## [0.1.1] - 2026-04-08
+## [0.1.1] - 2026-04-08 (repository history)
 
 - Initial `soma-daemon` binary with TOML configuration, ZeroMQ PUB/SUB, and
   `neuromod::SpikingNetwork` integration.
