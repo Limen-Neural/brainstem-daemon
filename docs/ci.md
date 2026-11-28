@@ -100,9 +100,29 @@ before it expires, and rerun qualification if the candidate SHA changes. Logs
 and temporary binaries are not committed; build/install/consumer directories
 are cleaned automatically.
 
+### Registry qualification
 
 Before actual publication, rerun the gate on the selected commit and retain
 its evidence. Confirm registry ownership and version availability with the
-maintainer. The dry-run does not publish. After an authorized upload, verify
-both version-pinned registry installs, a registry-only library consumer, the
-docs.rs result, and the release notes/tag against that same commit.
+maintainer. The dry-run does not publish.
+
+After an authorized upload, verify both version-pinned registry installs
+in separate install roots. A registry install does not read the crate's
+`.cargo/config.toml` like the extracted `--path` install does. The archive
+driver also injects the POSIX ZeroMQ flags itself. For the Linux registry
+`corpus-ipc` smoke, append the same flags explicitly:
+
+```bash
+stub_root="$(mktemp -d)"
+ipc_root="$(mktemp -d)"
+cargo +1.99.0 install --locked --version 0.3.0 --root "$stub_root" brainstem-daemon
+
+CFLAGS="${CFLAGS:+$CFLAGS }-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64" \
+CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64" \
+cargo +1.99.0 install --locked --version 0.3.0 --root "$ipc_root" \
+  --features corpus-ipc brainstem-daemon
+```
+
+The flags are for the POSIX native build; do not pass them on Windows.
+Check the binaries in both roots, a registry-only library consumer, the docs.rs
+result, and the release notes/tag against the same commit.

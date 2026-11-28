@@ -68,10 +68,11 @@ brainstem-daemon = { path = "../brainstem-daemon" }
 # Optional instead: brainstem-daemon = { path = "../brainstem-daemon", features = ["corpus-ipc"] }
 ```
 
-The package's [.cargo/config.toml](.cargo/config.toml) is used when this package
-is the Cargo root. An external library consumer must configure the native
-ZeroMQ compiler flags described under [Backends](#backends). The default stub
-needs no ZeroMQ.
+A checkout build or `cargo install --path .` uses the package's
+[.cargo/config.toml](.cargo/config.toml) on the listed Unix targets. A Linux
+or macOS external library consumer or registry install using `corpus-ipc`
+must supply the ZeroMQ compiler flags described under [Backends](#backends).
+Do not use those POSIX flags on Windows. The default stub needs no ZeroMQ.
 
 For maintainers, the [release qualification procedure](https://github.com/Limen-Neural/brainstem-daemon/blob/main/docs/ci.md#cargo-archive-release-qualification)
 shows how to check the candidate archive before any publication.
@@ -217,7 +218,21 @@ diagnostic to stderr and safely falls back to the validated TOML level.
 
 Default Cargo features are empty (`default = []` in `Cargo.toml`). That path uses the in-memory **stub** backend (`StubStimulusSource` + `NoopSpikeSink`) and does **not** need ZeroMQ. The optional `corpus-ipc` feature (same as `--all-features` today) pulls `corpus-ipc` **from crates.io** (`0.2.1`, `features = ["zmq"]`) plus this crate's optional `zmq` dependency. Published `corpus-ipc` compiles libzmq via `zmq-sys` / `zeromq-src` (a C++ compiler is required; a system `libzmq` package is not). It does not vendor ZeroMQ as a git submodule.
 
-`zeromq-src` 0.2.6 allocates libzmq queue chunks with `malloc` unless `HAVE_POSIX_MEMALIGN` is set. On x86-64-v3 GCC (Ubuntu 26.04) that misaligned `command_t` slot SIGSEGVs. When this package is the Cargo root, `.cargo/config.toml` passes `-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64` as `CFLAGS_<triple>` and `CXXFLAGS_<triple>` for x86_64 and aarch64 Linux gnu, Linux musl, and macOS. Any other target, including other Unix targets, does not get those defines; set `CFLAGS` and `CXXFLAGS` yourself there. The `cc` crate appends the listed keys to any `CFLAGS` / `CXXFLAGS` already set. A global `CFLAGS` entry is not used, because it would also apply on Windows, whose CRT has no `posix_memalign`. An external crate that depends on `brainstem-daemon` does not load this file, and this crate cannot pass the defines into `zeromq-src` (that native library is compiled first). Set the same defines in `CFLAGS` and `CXXFLAGS`, or in the matching `CFLAGS_<triple>` / `CXXFLAGS_<triple>` variables (hyphens written as underscores), before building `--features corpus-ipc`.
+`zeromq-src` 0.2.6 allocates libzmq queue chunks with `malloc` unless
+`HAVE_POSIX_MEMALIGN` is set. With x86-64-v3 GCC (Ubuntu 26.04), a misaligned
+`command_t` slot can cause a segmentation fault. For checkout and path
+installs, `.cargo/config.toml` supplies the alignment flags on x86_64 and
+aarch64 Linux (gnu and musl) and macOS.
+
+On those POSIX targets, an external Cargo root using `corpus-ipc` must
+append `-DHAVE_POSIX_MEMALIGN -DZMQ_CACHELINE_SIZE=64` to both `CFLAGS` and
+`CXXFLAGS` (or use the target-specific `CFLAGS_<triple>` and
+`CXXFLAGS_<triple>`, with underscores in place of hyphens). A registry
+`cargo install` also needs the caller-supplied flags: [Cargo only uses the
+local config for path installs](https://doc.rust-lang.org/cargo/commands/cargo-install.html#configuration-discovery).
+For other targets that provide `posix_memalign`, the config does not set
+the flags automatically. Do not pass these flags on Windows, where the CRT
+has no `posix_memalign`; Windows CI qualifies only the stub build.
 
 `DaemonConfig` deserialization is **not** feature-gated: `spine_sub_port`, `spine_pub_port`, and `model_path` are still required in TOML even on the stub path (`services`, `runtime_mode`, `ingress`, and `control_bind` are optional; `runtime_mode` defaults to `live`; `ingress` defaults to the bounded-queue table below; `control_bind` unset = no extra socket). Effect at runtime depends on which backend is **wired** and on `runtime_mode`.
 
