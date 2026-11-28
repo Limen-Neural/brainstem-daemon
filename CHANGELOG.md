@@ -164,6 +164,9 @@ publication is verified. See the [archive qualification procedure](https://githu
 
 ### Fixed
 
+- Distinguish changed backend errors by their full diagnostic text, so
+  different messages cannot share rate-limit state by hash collision.
+  Repeated messages still use the same count and time limits (#65, LIM-1449).
 - Reject invalid runtime settings before allocating a network or starting
   the runtime/backend: tick rate and dimension limits, checked dimension
   addition/multiplication with operands in overflow errors, and malformed

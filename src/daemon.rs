@@ -712,7 +712,7 @@ const DIAGNOSTIC_MIN_GAP: Duration = Duration::from_secs(1);
 /// Stable limiter identity for non-finite ingress warnings.
 ///
 /// Must not include the offending vector index: [`OccurrenceLimiter::record`]
-/// resets counters on a key change, so hashing the formatted message would let
+/// resets counters on a key change, so keying by the formatted message would let
 /// a source that alternates NaN between indices bypass the count interval and
 /// the one-second minimum gap.
 const NON_FINITE_DIAGNOSTIC_CATEGORY: &str = "rejected non-finite ingress";
@@ -730,7 +730,7 @@ struct OccurrenceLimiter {
     min_gap: Duration,
     occurrences: u64,
     emitted: u64,
-    last_key: Option<u64>,
+    last_key: Option<String>,
     last_emitted_at: Option<time::Instant>,
 }
 
@@ -748,15 +748,14 @@ impl OccurrenceLimiter {
 
     /// Return the number suppressed since the preceding emission.
     ///
-    /// `key` identifies the diagnostic payload (e.g. hashed error text). A key
-    /// change resets suppression so a new failure is not hidden behind the
-    /// previous one's interval. Re-emission also requires `min_gap` so a high
-    /// `tick_rate_hz` cannot turn the occurrence interval into a log flood.
-    fn record(&mut self, key: u64, now: time::Instant) -> Option<u64> {
-        if self.last_key != Some(key) {
+    /// The key is a stable category or the exact error text. A new identity
+    /// resets suppression immediately; repeat emissions still require both
+    /// the count interval and `min_gap`. Retain only the most recent key.
+    fn record(&mut self, key: &str, now: time::Instant) -> Option<u64> {
+        if self.last_key.as_deref() != Some(key) {
             self.occurrences = 0;
             self.emitted = 0;
-            self.last_key = Some(key);
+            key.clone_into(self.last_key.get_or_insert_with(String::new));
             self.last_emitted_at = None;
         }
         self.occurrences = self.occurrences.saturating_add(1);
@@ -780,12 +779,6 @@ impl OccurrenceLimiter {
     fn suppressed(&self) -> u64 {
         self.occurrences.saturating_sub(self.emitted)
     }
-}
-
-fn diagnostic_key(message: &str) -> u64 {
-    message.bytes().fold(0u64, |hash, byte| {
-        hash.wrapping_mul(31).wrapping_add(u64::from(byte))
-    })
 }
 
 /// Non-finite offender in a live backend packet, or `None` when the packet is
@@ -815,7 +808,7 @@ fn record_non_finite_rejection(
     let now = time::Instant::now();
     match diagnostics
         .non_finite
-        .record(diagnostic_key(NON_FINITE_DIAGNOSTIC_CATEGORY), now)
+        .record(NON_FINITE_DIAGNOSTIC_CATEGORY, now)
     {
         Some(suppressed) => {
             stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
@@ -843,7 +836,7 @@ fn record_scheduler_skips(
     let now = time::Instant::now();
     match diagnostics
         .scheduler_skip
-        .record(diagnostic_key(SCHEDULER_SKIP_DIAGNOSTIC_CATEGORY), now)
+        .record(SCHEDULER_SKIP_DIAGNOSTIC_CATEGORY, now)
     {
         Some(suppressed) => {
             stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
@@ -1003,7 +996,7 @@ fn run_tick(
             stats.rejected_batches += 1;
             let msg = format!("{e}");
             let now = time::Instant::now();
-            match diagnostics.receive.record(diagnostic_key(&msg), now) {
+            match diagnostics.receive.record(&msg, now) {
                 Some(suppressed) => {
                     stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
                     warn!(
@@ -1118,7 +1111,7 @@ fn run_tick(
         stats.dropped_spikes = stats.dropped_spikes.saturating_add(dropped as u64);
         let msg = "dropped spikes with out-of-range IDs";
         let now = time::Instant::now();
-        match diagnostics.dropped.record(diagnostic_key(msg), now) {
+        match diagnostics.dropped.record(msg, now) {
             Some(suppressed) => {
                 stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
                 warn!(
@@ -1150,7 +1143,7 @@ fn run_tick(
         stats.emit_errors = stats.emit_errors.saturating_add(1);
         let msg = format!("{e}");
         let now_diag = time::Instant::now();
-        match diagnostics.emit.record(diagnostic_key(&msg), now_diag) {
+        match diagnostics.emit.record(&msg, now_diag) {
             Some(suppressed) => {
                 stats.diagnostic_emissions = stats.diagnostic_emissions.saturating_add(1);
                 error!(
@@ -1691,17 +1684,18 @@ mod tests {
     }
 
     #[test]
-    fn receive_limiter_emits_immediately_when_error_identity_changes() {
+    fn receive_limiter_emits_immediately_for_distinct_errors_even_if_old_hash_collided() {
         struct SequenceSource {
             n: usize,
         }
         impl StimulusSource for SequenceSource {
             fn next_ingress(&mut self) -> Result<Option<IngressPacket>> {
                 self.n += 1;
+                // "Aa" and "BB" collided under the old diagnostic hash.
                 if self.n <= 5 {
-                    bail!("transient failure")
+                    bail!("backend error Aa")
                 } else {
-                    bail!("connection lost")
+                    bail!("backend error BB")
                 }
             }
 
@@ -1710,31 +1704,15 @@ mod tests {
             }
         }
 
-        let ingress = BoundedIngress::new(IngressConfig::default()).unwrap();
-        let health = HealthHandle::started(HealthLimits::default());
-        let mut source = SequenceSource { n: 0 };
-        let mut sink = CollectingSpikeSink::new();
-        let mut network = SpikingNetwork::with_dimensions(1, 0, 1);
-        let mut stimuli = [0.0];
-        let mut spike_buf = Vec::new();
-        let mut stats = RuntimeStats::default();
-        let mut diagnostics = TickDiagnostics::new(1_000);
-
-        for _ in 0..6 {
-            run_tick(
-                &mut source,
-                &mut network,
-                &mut sink,
-                &mut stimuli,
-                &mut spike_buf,
-                &ingress,
-                &mut TickReport {
-                    health: &health,
-                    stats: &mut stats,
-                    diagnostics: &mut diagnostics,
-                },
-            );
-        }
+        let daemon = BrainstemDaemon::try_with_backend(
+            sample_config(),
+            BackendPair {
+                source: Box::new(SequenceSource { n: 0 }),
+                sink: Box::new(CollectingSpikeSink::new()),
+            },
+        )
+        .expect("valid simulation config");
+        let stats = daemon.run_for_ticks(6).expect("bounded run");
 
         assert_eq!(stats.receive_errors, 6);
         // First identity emits once; four repeats are suppressed; the new
